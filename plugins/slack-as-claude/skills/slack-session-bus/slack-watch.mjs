@@ -211,6 +211,12 @@ function parseMessage(msg) {
 
 const PRESENCE_TYPE = 'x-presence';
 const STALE_AFTER = 2.5; // missed beats before a session is considered gone
+// ⚠ An ABSOLUTE FLOOR, because a threshold proportional to the claimant's own declared
+// rate is inverted: at every=5 a session went STALE in 12.5s while one declaring 60s got
+// 150s. THE SESSION PROVING ITSELF TWELVE TIMES MORE OFTEN GOT TWELVE TIMES LESS
+// TOLERANCE - a fast heartbeat is MORE evidence of life and was punished for it, and one
+// scheduler hiccup would kill it. Declaring an aggressive rate must not make you fragile.
+const STALE_FLOOR_SEC = 90;
 
 async function slackPost(method, body) {
   return fetch(`https://slack.com/api/${method}`, {
@@ -321,7 +327,7 @@ async function roster() {
     // "43.18815088272095s ago" - false precision on a number whose whole purpose is a
     // coarse alive/dead call.
     const age = Math.max(0, Math.floor(now - p.beat));
-    const limit = (p.every || 60) * STALE_AFTER;
+    const limit = Math.max((p.every || 60) * STALE_AFTER, STALE_FLOOR_SEC);
     const state = age > limit ? 'STALE' : 'alive';
     console.log(`${state.padEnd(5)} ${label.padEnd(16)} last beat ${age}s ago (every ${p.every}s)`);
   }

@@ -1,7 +1,7 @@
 {
   "name": "slack-as-claude",
   "description": "Post into Slack from a Claude session under a per-session identity instead of as yourself. Sets up the read-as-human / post-as-app split that Slack's user-token-only MCP server forces, and labels each message with its OS, machine, user, project and session.",
-  "version": "2.5.0",
+  "version": "2.5.1",
   "author": {
     "name": "Joshua Daugherty"
   }

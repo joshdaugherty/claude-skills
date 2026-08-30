@@ -33,6 +33,9 @@ const REPLIES = 'https://slack.com/api/conversations.replies';
 const POST = 'https://slack.com/api/chat.postMessage';
 const HISTORY = 'https://slack.com/api/conversations.history';
 const STALE_AFTER = 2.5; // missed beats before a claimant counts as gone
+// Absolute floor - see the note in slack-watch.mjs. A threshold proportional to the
+// claimant's own declared rate punishes fast heartbeats, which are more evidence of life.
+const STALE_FLOOR_SEC = 90;
 
 function botToken() {
   if (process.env.SLACK_BOT_TOKEN) return process.env.SLACK_BOT_TOKEN;
@@ -174,7 +177,7 @@ async function livenessOf(session) {
   }
   if (!best) return null;
   const age = Math.max(0, Math.floor(Date.now() / 1000 - best.beat));
-  return { age, every: best.every, alive: age <= (best.every || 60) * STALE_AFTER };
+  return { age, every: best.every, alive: age <= Math.max((best.every || 60) * STALE_AFTER, STALE_FLOOR_SEC) };
 }
 
 // --- decide -----------------------------------------------------------------
@@ -190,6 +193,11 @@ if (done.length) {
 const before = await threadClaims();
 const holder = before.slice().sort((x, y) => Number(x.ts) - Number(y.ts))[0] ?? null;
 
+// Set when we decide a stale holder is abandoned. Its claim must then be excluded from
+// the final ranking - otherwise the takeover is announced and immediately undone, because
+// the abandoned claim still has the lowest ts and still wins.
+let supersede = null;
+
 if (holder && holder.session !== label) {
   const live = await livenessOf(holder.session);
   const state = !live ? 'no presence published' : live.alive ? `alive, last beat ${live.age}s ago` : `STALE, last beat ${live.age}s ago`;
@@ -199,6 +207,7 @@ if (holder && holder.session !== label) {
     console.log('Stand down.');
     process.exit(1);
   }
+  supersede = holder.session;
   console.log(`${holder.session} holds claim ${holder.ts} but is ${state}.`);
   console.log('Taking it over. This is a JUDGEMENT from a timeout, not proof that session is dead:');
   console.log('a wedged session behind a running watcher reads alive, and a live session whose');
@@ -215,6 +224,20 @@ const elements = [
   { type: 'mrkdwn', text: 'type: `claim`' },
   { type: 'mrkdwn', text: `session: \`${label}\`` },
 ];
+
+// ⚠ A TAKEOVER MUST BE ANNOUNCED, because it is the point where readers can legitimately
+// DISAGREE. Sorting by ts is deterministic; staleness is a clock-dependent predicate
+// evaluated locally, so a reader checking before the timeout computes the old holder and
+// one checking after computes the new one - same thread, same messages, different winner,
+// no disagreement about any fact. Naming the superseded claim makes that divergence
+// visible instead of silent.
+//
+// It stays `type: claim` deliberately: a distinct type would be excluded from the claim
+// ranking and the takeover would not compete at all.
+if (supersede) {
+  const s = before.find((c) => c.session === supersede);
+  elements.push({ type: 'mrkdwn', text: `supersedes: \`${s?.ts ?? supersede}\`` });
+}
 const plugin = ownPlugin();
 if (plugin) elements.push({ type: 'mrkdwn', text: `plugin: \`${plugin}\`` });
 
@@ -241,7 +264,18 @@ const posted = await fetch(POST, {
     text: `claim: ${label}`,
     blocks: [
       { type: 'context', elements },
-      { type: 'section', text: { type: 'mrkdwn', text: `Claiming this task.${note}` } },
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: supersede
+            ? `Claiming this task, superseding *${supersede}* whose heartbeat has gone stale. ` +
+              'That is a judgement from a timeout, not proof it is dead - a reader evaluating ' +
+              'before the timeout would still compute the earlier claim as the winner.' +
+              note
+            : `Claiming this task.${note}`,
+        },
+      },
     ],
   }),
 }).then((r) => r.json());
@@ -259,11 +293,18 @@ const settle = Math.max(0, Number(a.settle) || 0);
 if (settle) await new Promise((r) => setTimeout(r, settle * 1000));
 
 const after = await threadClaims();
-const ranked = after.slice().sort((x, y) => Number(x.ts) - Number(y.ts) || (x.session < y.session ? -1 : 1));
+// A superseded claim is shown but does not compete. Without this the takeover branch
+// announces itself and then loses to the very claim it just declared abandoned.
+const ranked = after
+  .filter((c) => c.session !== supersede)
+  .sort((x, y) => Number(x.ts) - Number(y.ts) || (x.session < y.session ? -1 : 1));
 const winner = ranked[0];
 
-console.log(`Claims in thread (${ranked.length}):`);
-for (const c of ranked) console.log(`  ${c.ts}  ${c.session}${c.session === label ? '  <- you' : ''}`);
+console.log(`Claims in thread (${after.length}):`);
+for (const c of after.slice().sort((x, y) => Number(x.ts) - Number(y.ts))) {
+  const mark = c.session === supersede ? '  <- superseded, stale' : c.session === label ? '  <- you' : '';
+  console.log(`  ${c.ts}  ${c.session}${mark}`);
+}
 
 if (!winner) {
   console.error('\nNo claims visible after posting - the read is incomplete. Do NOT proceed.');

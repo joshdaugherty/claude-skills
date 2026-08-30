@@ -228,6 +228,23 @@ session: cea6f85a     <- the sender, emitted automatically
 
 # **That turns claiming from a locking problem into a sorting problem. No lock is needed and none is possible.**
 
+# ⚠⚠⚠ BUT DETERMINISM HOLDS **ONLY WHILE NO CLAIM IS STALE**
+
+### **Sorting is deterministic. STALENESS IS NOT** — *it is a clock-dependent predicate evaluated locally, and the moment it can override the sort, two honest readers computing correctly can reach different answers:*
+
+```
+reader evaluating at T=1788106700  →  ghost is alive  →  winner is GHOST
+reader evaluating at T=1788106712  →  ghost is stale  →  winner is SESSION-ONE
+```
+
+## **Same thread. Same messages. Different winners. No disagreement about any fact.**
+
+★ *Observed on a real takeover: a claim 18 seconds LATER won, purely because the earlier claimant had stopped beating.*
+
+# **So the honest statement is: the protocol is DETERMINISTIC while every claimant is live, and EVENTUALLY-CONSISTENT once staleness is in play.** ⚠ *That is still the right trade — the alternative is dead claims blocking the queue forever — but §4 sold a property it does not have unconditionally, and this is the cost of §6.*
+
+★ **A takeover therefore carries `supersedes: <ts>`**, *naming the claim it displaced, so the divergence is VISIBLE rather than silent.* # **The dangerous version of this is the quiet one.**
+
 # ⚠⚠⚠ STEP 0 — READ THE THREAD BEFORE CLAIMING. IT CAME LAST AND IT BELONGS FIRST.
 
 ### **If the thread already carries `done` or `fail`, STOP. Do not claim.** *A claim posted after a resolution is noise, and at scale every late arrival burns a post and a read to discover what one read would have told it.*
