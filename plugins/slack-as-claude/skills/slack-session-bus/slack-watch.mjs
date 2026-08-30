@@ -245,6 +245,11 @@ function presenceBlocks(label, every) {
           { type: 'mrkdwn', text: `type: \`${PRESENCE_TYPE}\`` },
           { type: 'mrkdwn', text: `session: \`${label}\`` },
           { type: 'mrkdwn', text: `every: \`${every}\`` },
+          // Carry the version on the heartbeat too. A live session's presence message is
+          // its most reliable recent word - a peer might not have POSTED in an hour, but
+          // if it is alive it is beating. Without this, a session that is up to date and
+          // simply quiet reads as "not announcing a version - necessarily older".
+          ...(OWN_PLUGIN ? [{ type: 'mrkdwn', text: `plugin: \`${OWN_PLUGIN}\`` }] : []),
         ],
       },
       {
@@ -306,7 +311,10 @@ async function roster() {
       console.log(`${'?'.padEnd(5)} ${label.padEnd(16)} malformed presence message - no beat field`);
       continue;
     }
-    const age = now - p.beat;
+    // Floor it: a Slack ts carries microseconds, so a raw subtraction renders as
+    // "43.18815088272095s ago" - false precision on a number whose whole purpose is a
+    // coarse alive/dead call.
+    const age = Math.max(0, Math.floor(now - p.beat));
     const limit = (p.every || 60) * STALE_AFTER;
     const state = age > limit ? 'STALE' : 'alive';
     console.log(`${state.padEnd(5)} ${label.padEnd(16)} last beat ${age}s ago (every ${p.every}s)`);
@@ -528,15 +536,22 @@ if (a.doctor) {
   console.log(`AVAILABLE  ${available ? `${available.version}   (marketplace: ${available.marketplace})` : 'unknown - marketplace clone not found'}`);
 
   // Peers, from the wire.
+  // Count peers by SESSION, not by message. Messages arrive newest-first, so the first
+  // sighting of a session is its most recent word: take that and ignore its history.
+  // (An earlier version incremented a silent counter per MESSAGE, so one quiet peer
+  // reported as "+18 not announcing" - a number that looks like a fleet.)
   const peers = new Map();
-  let silent = 0;
   for (const m of await recentMessages()) {
     const { meta } = parseMessage(m);
-    if (!meta.session || meta.session === selfLabel) continue;
-    if (meta.plugin) peers.set(meta.session, meta.plugin);
-    else if (!peers.has(meta.session)) silent++;
+    if (!meta.session || meta.session === selfLabel || peers.has(meta.session)) continue;
+    peers.set(meta.session, meta.plugin ?? null);
   }
-  console.log(`PEERS      ${peers.size ? [...peers].map(([s, v]) => `${s}=${v}`).join(', ') : 'none announcing'}${silent ? ` (+${silent} not announcing a version - necessarily older)` : ''}`);
+  const announcing = [...peers].filter(([, v]) => v);
+  const silent = [...peers].filter(([, v]) => !v).map(([s]) => s);
+  console.log(
+    `PEERS      ${announcing.length ? announcing.map(([s, v]) => `${s}=${v}`).join(', ') : 'none announcing'}` +
+      `${silent.length ? ` | not announcing (necessarily older): ${silent.join(', ')}` : ''}`,
+  );
 
   // Verdict, by BYTES not by version number.
   console.log('');
