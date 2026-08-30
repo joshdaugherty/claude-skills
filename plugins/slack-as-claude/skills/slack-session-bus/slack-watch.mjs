@@ -656,8 +656,43 @@ if (a.audit) {
     console.error(`Could not read the thread: ${rep.error}`);
     process.exit(2);
   }
-  const timeline = new Set((await recentMessages(200)).map((m) => m.ts));
   const replies = (rep.messages ?? []).filter((m) => m.ts !== a.audit);
+
+  // ⚠ BOUND THE WINDOW BY THE THREAD'S OWN SPAN, NEVER BY A MESSAGE COUNT.
+  //
+  // A count-based window makes the VERDICT A FUNCTION OF CHANNEL VOLUME rather than of
+  // the messages: a thread that audits correctly today reports its broadcast replies as
+  // INVISIBLE once enough unrelated traffic pushes them out of the window. Same thread,
+  // same facts, opposite answer, because the channel moved on - an instrument whose
+  // output changes without its subject changing.
+  //
+  // Bounded by [parent ts, newest reply], the window is exactly the thread's lifetime and
+  // the answer is STABLE FOREVER: audited today or next year, "was this reply in the
+  // timeline" has one fixed answer. That REMOVES the caveat instead of documenting it,
+  // which matters for a diagnostic - a tool whose disclaimer says "this may be wrong for
+  // reasons unrelated to what you asked" stops being trusted exactly when it is needed.
+  const newest = replies.reduce((mx, m) => (Number(m.ts) > Number(mx) ? m.ts : mx), a.audit);
+  const timeline = new Set();
+  let cur = null;
+  let pages = 0;
+  do {
+    const u = new URL(HISTORY);
+    u.searchParams.set('channel', a.channel);
+    u.searchParams.set('oldest', a.audit);
+    u.searchParams.set('latest', newest);
+    u.searchParams.set('inclusive', 'true');
+    u.searchParams.set('limit', '200');
+    if (cur) u.searchParams.set('cursor', cur);
+    const page = await fetch(u, { headers: { Authorization: `Bearer ${token}` } }).then((r) => r.json());
+    if (!page.ok) {
+      console.error(`Could not read the channel timeline: ${page.error}`);
+      process.exit(2);
+    }
+    for (const m of page.messages ?? []) timeline.add(m.ts);
+    cur = page.has_more ? page.response_metadata?.next_cursor : null;
+    pages++;
+  } while (cur && pages < 25);
+
   const invisible = replies.filter((m) => !timeline.has(m.ts));
 
   console.log(`Thread ${a.audit}: ${replies.length} repl(ies).`);
@@ -675,8 +710,8 @@ if (a.audit) {
     console.log('');
     console.log('All replies are in the timeline: every watcher could have seen them.');
   }
-  console.log(`(Timeline compared over the last ${timeline.size} channel messages - a reply older`);
-  console.log(' than that window reads as INVISIBLE whether or not it was broadcast.)');
+  console.log(`(Compared over the thread's own span, ${a.audit} to ${newest}, across ${pages} page(s).`);
+  console.log(' Bounded by the thread, not by channel volume, so this verdict does not change.)');
   process.exit(invisible.length ? 1 : 0);
 }
 
