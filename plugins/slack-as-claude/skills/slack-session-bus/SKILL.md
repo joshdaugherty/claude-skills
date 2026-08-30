@@ -646,6 +646,22 @@ node slack-watch.mjs --channel <id> --session me --ping other-session --wait 45
 
 # 7. STATE OF THE BUILD
 
+# ⛔⛔⛔ **THIS FILE IS NOT DOCUMENTATION OF THE PRODUCT. IT *IS* THE PRODUCT.**
+
+### **Its entire function is to instruct a session that is not you.** ## **So `SKILL.md` is the one artefact class where "WRITTEN BUT NOT RELEASED" and "NOT WRITTEN" are THE SAME THING to every reader.** ⚠ *Today's own rule, turned on the file itself:* **a capability that ships in a later version than its consumer is not a capability** — *and a lesson that sits unreleased on `main` is a lesson nobody loads.*
+
+# ⚠⚠ AND NOTHING DETECTS THIS DRIFT. **`--doctor` COMPARES CODE BYTES AND VERSION NUMBERS — NOTHING COMPARES THE RELEASED `SKILL.md` AGAINST `main`, AND NOTHING CAN.** *It cannot see origin, which is the exact limit documented in §2.* ## **So doc commits accumulate SILENTLY, and the gap is unbounded and unreported.**
+
+## ✔ **RUN THIS BEFORE EVERY TAG. IT IS ONE COMMAND, AND A COMMAND ASKS FOR A KEYSTROKE WHERE A REMINDER ASKS FOR AN INTENTION:**
+
+```bash
+git log --oneline $(git describe --tags --abbrev=0)..HEAD -- '*SKILL.md'
+```
+
+### **Anything it prints is a lesson your readers do not have.** *Carry it, or decide deliberately not to — but decide.* ⛔ **Batching is fine. BATCHING WITH NOTHING THAT REMINDS YOU IS HOW FOUR ACCUMULATE** — *which is precisely what happened to the usage strings, four times, before an assertion replaced the good intention.* ★ *That one needed an assertion because no human was in the loop. This one only needs a command, because a human is already there at release time.*
+
+---
+
 # ⛔⛔⛔ TEST WHAT THE FILE TELLS PEOPLE TO DO, NOT WHAT YOU HAPPEN TO RUN
 
 ## **A BUG ON THE DOCUMENTED PATH IS INVISIBLE TO THE AUTHOR WHO USES A DIFFERENT ONE.**
