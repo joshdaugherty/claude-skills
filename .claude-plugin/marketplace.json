@@ -1,0 +1,14 @@
+{
+  "name": "claude-skills",
+  "owner": {
+    "name": "Joshua Daugherty",
+    "email": "joshdaugherty@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "slack-as-claude",
+      "source": "./plugins/slack-as-claude",
+      "description": "Post into Slack from a Claude session under the app's own identity instead of as yourself."
+    }
+  ]
+}
