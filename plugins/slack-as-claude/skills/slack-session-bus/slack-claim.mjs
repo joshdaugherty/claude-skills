@@ -29,6 +29,30 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
+/**
+ * ⛔⛔ EXIT 1 IS A VERDICT. AN ERROR MUST NEVER USE IT.
+ *
+ * This tool's whole contract is "the exit code is the answer": 0 = you hold the claim,
+ * 1 = stand down. An uncaught exception ALSO exits 1 - so a crash was indistinguishable
+ * from a legitimate loss, and a caller doing `slack-claim ... || stand_down` would stand
+ * down on a crash and never learn there had been one.
+ *
+ * ★ And it failed in the WRONG DIRECTION. The case that crashed was the RETIREMENT
+ * fast-path - precisely when the claim IS free and the correct action is TAKE IT. The
+ * crash converted "take it" into "stand down", silently, in the one branch where
+ * standing down is wrong. A tool that fails safe would have exited 2.
+ */
+process.on('uncaughtException', (e) => {
+  console.error(`ERROR (not a verdict): ${e?.stack ?? e}`);
+  console.error('Exit 2 = something broke. Exit 1 would have meant "you lost the claim", which');
+  console.error('is a different statement and would have been a lie.');
+  process.exit(2);
+});
+process.on('unhandledRejection', (e) => {
+  console.error(`ERROR (not a verdict): ${e?.stack ?? e}`);
+  process.exit(2);
+});
+
 const REPLIES = 'https://slack.com/api/conversations.replies';
 const POST = 'https://slack.com/api/chat.postMessage';
 const HISTORY = 'https://slack.com/api/conversations.history';
@@ -90,6 +114,79 @@ function meta(msg) {
   return out;
 }
 
+// --- ranking ----------------------------------------------------------------
+// THE ONE PLACE THE WINNER IS DECIDED. Three sites used to sort inline and two of
+// them omitted the tiebreak, so "who holds it" and "who is DISPLAYED as holding
+// it" were computed by different rules. They are one rule now.
+//
+// ⚠ ts IS COMPARED AS A STRING, DELIBERATELY. Do not "fix" this to Number().
+// A Slack ts is fixed-width - 10 integer digits and 6 zero-padded decimals - so
+// lexical order IS numeric order, exactly, with no float anywhere in the path.
+// Number() happens to work today with 4.19x headroom - an IEEE double's ULP at
+// 1.79e9 is 2.384e-7 against a 1e-6 tick - and the headroom halves at each binade
+// boundary as the epoch grows:
+//
+//     today  1.79e9   ULP 2.384e-7   headroom 4.19x
+//     2106   4.29e9   ULP 4.768e-7   headroom 2.10x
+//     2242   8.59e9   ULP 1.907e-6   headroom 0.52x   <- ordering ACTUALLY BREAKS
+//
+// So Number() is not close to failing; it fails in 2242, not 2106. Kept as string
+// comparison anyway, because the argument was never "it is about to break" - it is
+// that a fixed-width decimal string compares EXACTLY, for free, with no binade to
+// reason about at all. Same class as the unquoted --thread-ts a shell rounds to a
+// float: a ts is an IDENTIFIER that looks like a number, and every conversion to a
+// number is a chance to lose the low digits that are the only thing making it
+// unique. Do not "fix" this back to Number().
+function rankClaims(claims, { exclude = null } = {}) {
+  return claims
+    .filter((c) => c.session !== exclude)
+    .slice()
+    .sort((x, y) =>
+      x.ts < y.ts ? -1 : x.ts > y.ts ? 1 : x.session < y.session ? -1 : x.session > y.session ? 1 : 0,
+    );
+}
+
+// Equal ts is UNREACHABLE THROUGH SLACK: the server assigns a distinct ts per
+// channel message, which is the entire reason this protocol is a sort and not a
+// lock. So the tiebreak never executes in production - and a branch that never
+// runs is indistinguishable from a broken one. This feeds rankClaims() the input
+// the transport cannot produce, so the branch is exercised on demand instead of
+// being carried untested forever or dropped and silently becoming arbitrary.
+function selfTest() {
+  let failed = 0;
+  const check = (name, got, want) => {
+    const ok = JSON.stringify(got) === JSON.stringify(want);
+    if (!ok) failed += 1;
+    console.log(`  ${ok ? 'pass' : 'FAIL'}  ${name}`);
+    if (!ok) console.log(`        got  ${JSON.stringify(got)}\n        want ${JSON.stringify(want)}`);
+  };
+  const s = (ts, session) => ({ ts, session });
+  const names = (r) => r.map((c) => c.session);
+
+  check('earlier ts wins',
+    names(rankClaims([s('1788113122.246560', 'aaa'), s('1788113122.246559', 'zzz')])), ['zzz', 'aaa']);
+  check('EQUAL ts -> lexical session decides (the branch Slack cannot reach)',
+    names(rankClaims([s('1788113122.246559', 'zebra'), s('1788113122.246559', 'alpha')])), ['alpha', 'zebra']);
+  check('ts outranks the name - a low name does not win from a later ts',
+    names(rankClaims([s('1788113122.246559', 'zzz'), s('1788113122.999999', 'aaa')])), ['zzz', 'aaa']);
+  check('exclude drops a superseded claim out of the ranking',
+    names(rankClaims([s('1788113122.000001', 'gone'), s('1788113122.000002', 'live')], { exclude: 'gone' })), ['live']);
+  check('adjacent-microsecond ts stay ordered (float has 4.19x headroom here)',
+    names(rankClaims([s('1788113122.246560', 'later'), s('1788113122.246559', 'earlier')])), ['earlier', 'later']);
+  check('ts past double precision still orders (2242-era: float headroom 0.52x)',
+    names(rankClaims([s('9999999999.999999', 'later'), s('9999999999.999998', 'earlier')])), ['earlier', 'later']);
+  check('total order - every permutation of one set yields one winner',
+    [...new Set([
+      [s('3.000000', 'c'), s('1.000000', 'a'), s('2.000000', 'b')],
+      [s('1.000000', 'a'), s('2.000000', 'b'), s('3.000000', 'c')],
+      [s('2.000000', 'b'), s('3.000000', 'c'), s('1.000000', 'a')],
+    ].map((p) => rankClaims(p)[0].session))], ['a']);
+  check('empty set ranks to nothing rather than throwing', rankClaims([]), []);
+
+  console.log(failed ? `\n${failed} FAILED` : '\nall pass');
+  process.exit(failed ? 1 : 0);
+}
+
 const { values: a } = parseArgs({
   options: {
     channel: { type: 'string' },
@@ -98,10 +195,18 @@ const { values: a } = parseArgs({
     note: { type: 'string' },
     settle: { type: 'string', default: '2' },
     'ignore-stale': { type: 'boolean', default: false },
+    // ⚠ WAS BRANCHED ON BUT NEVER DECLARED. parseArgs then threw "Unknown option
+    // --takeover" when it was passed, while `!a.takeover` stayed true when it was
+    // not - so the stale-takeover path could neither be reached nor refused
+    // correctly. An undeclared flag fails in BOTH directions at once.
+    takeover: { type: 'boolean', default: false },
+    'self-test': { type: 'boolean', default: false },
     'dry-run': { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h', default: false },
   },
 });
+
+if (a['self-test']) selfTest();
 
 const label = a.session || process.env.CLAUDE_SESSION_NAME || (process.env.CLAUDE_CODE_SESSION_ID ?? '').slice(0, 8);
 
@@ -115,6 +220,13 @@ if (a.help || !a.channel || !a.task || !label) {
       '  --settle       seconds to wait before re-reading, covering read-after-write lag.\n' +
       '                 It is NOT a lock and does not make the claim exclusive.\n' +
       '  --ignore-stale treat a dead claimant as still holding the task.\n' +
+      '  --takeover     required to take a task from a claimant judged STALE. Refused by\n' +
+      '                 default: staleness is an inference from silence, and a quiet\n' +
+      '                 session is not a dead one. --ping it first. A claimant that\n' +
+      '                 ANNOUNCED its retirement is taken over without this - that is\n' +
+      '                 positive evidence rather than an absence of it.\n' +
+      '  --self-test    check the ranking rule, including the equal-ts tiebreak that this\n' +
+      '                 transport cannot produce. Exits 0 all-pass, 1 on any failure.\n' +
       '\n' +
       '  QUOTE THE --task TIMESTAMP. A Slack ts has 16 significant digits; a shell that\n' +
       '  parses the bare token as a float rounds it, and Slack silently ignores it.',
@@ -210,12 +322,18 @@ if (done.length) {
 }
 
 const before = await threadClaims();
-const holder = before.slice().sort((x, y) => Number(x.ts) - Number(y.ts))[0] ?? null;
+const holder = rankClaims(before)[0] ?? null;
 
 // Set when we decide a stale holder is abandoned. Its claim must then be excluded from
 // the final ranking - otherwise the takeover is announced and immediately undone, because
 // the abandoned claim still has the lowest ts and still wins.
 let supersede = null;
+// WHY the takeover happened, carried onto the claim so the thread records the grounds and
+// not just the fact. §6's winner depends on a time-varying predicate, so the thread is the
+// only durable evidence that the predicate was ever true - without it a wrong takeover is
+// indistinguishable from a right one the moment the roster moves on.
+let takeoverReason = null;
+let takeoverEvidence = null;
 
 if (holder && holder.session !== label) {
   // Retirement first: it is positive evidence, so it does not need a timeout. Only fall
@@ -238,9 +356,28 @@ if (holder && holder.session !== label) {
     console.log('Stand down.');
     process.exit(1);
   }
-  supersede = holder.session;
-  console.log(`${holder.session} holds claim ${holder.ts} but is ${state}.`);
-  console.log('Taking it over. This is a JUDGEMENT from a timeout, not proof that session is dead:');
+  // ⛔ A STALE TAKEOVER IS OPT-IN. §6 is a liveness SIGNAL, not a LEASE: a wedged
+    // session behind a running watcher reads alive, and a live session whose watcher
+    // died reads stale. Automating that means silently deciding a peer is dead and
+    // proceeding - the one operation you cannot afford to get wrong where
+    // double-execution is destructive. A RETIREMENT is positive evidence and stays
+    // automatic; an INFERENCE FROM SILENCE now requires someone to say so.
+    if (!a.takeover) {
+      console.log(`${holder.session} holds claim ${holder.ts} but is ${state}.`);
+      console.log('NOT taking it over: that would be a judgement from a timeout, not proof.');
+      console.log('');
+      console.log(`  Ask it directly:   slack-watch.mjs --channel ${a.channel} --ping ${holder.session}`);
+      console.log('  Then, accepting the risk:  --takeover');
+      console.log('');
+      console.log('⛔ If double-execution would be destructive - a deploy, a migration, a');
+      console.log('   payment - do not pass --takeover. This is a signal, not a lease.');
+      process.exit(1);
+    }
+    supersede = holder.session;
+    takeoverReason = 'stale';
+    takeoverEvidence = live ? `last-beat-${live.age}s` : 'no-presence';
+    console.log(`${holder.session} holds claim ${holder.ts} but is ${state}.`);
+    console.log('Taking it over on --takeover. A JUDGEMENT from a timeout, not proof:');
     console.log('a wedged session behind a running watcher reads alive, and a live session whose');
     console.log('watcher died reads stale. Do not do this where double-execution is destructive.');
   }
@@ -267,8 +404,10 @@ const elements = [
 // It stays `type: claim` deliberately: a distinct type would be excluded from the claim
 // ranking and the takeover would not compete at all.
 if (supersede) {
-  const s = before.find((c) => c.session === supersede);
-  elements.push({ type: 'mrkdwn', text: `supersedes: \`${s?.ts ?? supersede}\`` });
+  const sc = before.find((c) => c.session === supersede);
+  elements.push({ type: 'mrkdwn', text: `supersedes: \`${sc?.ts ?? supersede}\`` });
+  if (takeoverReason) elements.push({ type: 'mrkdwn', text: `reason: \`${takeoverReason}\`` });
+  if (takeoverEvidence) elements.push({ type: 'mrkdwn', text: `evidence: \`${takeoverEvidence}\`` });
 }
 const plugin = ownPlugin();
 if (plugin) elements.push({ type: 'mrkdwn', text: `plugin: \`${plugin}\`` });
@@ -301,7 +440,10 @@ const posted = await fetch(POST, {
         text: {
           type: 'mrkdwn',
           text: supersede
-            ? `Claiming this task, superseding *${supersede}* whose heartbeat has gone stale. ` +
+            ? takeoverReason === 'retired'
+              ? `Claiming this task, superseding *${supersede}*, which ANNOUNCED ITS RETIREMENT at ${takeoverEvidence}. ` +
+                'That is positive evidence of departure, not a timeout: no staleness window was waited out.'
+              : `Claiming this task, superseding *${supersede}* whose heartbeat has gone stale (${takeoverEvidence}). ` +
               'That is a judgement from a timeout, not proof it is dead - a reader evaluating ' +
               'before the timeout would still compute the earlier claim as the winner.' +
               note
@@ -327,14 +469,12 @@ if (settle) await new Promise((r) => setTimeout(r, settle * 1000));
 const after = await threadClaims();
 // A superseded claim is shown but does not compete. Without this the takeover branch
 // announces itself and then loses to the very claim it just declared abandoned.
-const ranked = after
-  .filter((c) => c.session !== supersede)
-  .sort((x, y) => Number(x.ts) - Number(y.ts) || (x.session < y.session ? -1 : 1));
+const ranked = rankClaims(after, { exclude: supersede });
 const winner = ranked[0];
 
 console.log(`Claims in thread (${after.length}):`);
-for (const c of after.slice().sort((x, y) => Number(x.ts) - Number(y.ts))) {
-  const mark = c.session === supersede ? '  <- superseded, stale' : c.session === label ? '  <- you' : '';
+for (const c of rankClaims(after)) {
+  const mark = c.session === supersede ? `  <- superseded, ${takeoverReason ?? 'stale'}` : c.session === label ? '  <- you' : '';
   console.log(`  ${c.ts}  ${c.session}${mark}`);
 }
 

@@ -208,7 +208,7 @@ node "<this skill's dir>/slack-post.mjs" --channel <channel id> --text "..."
 **`--thread-ts <ts>`** replies in a thread — *get the `ts` from `mcp__slack__slack_read_channel`.* # ⚠ **QUOTE IT** *(→ §THREADING below)*
 **`--dry-run`** prints the composed identity and sends nothing. **Use it before the first real post, and for every experiment.**
 
-**Success:** `Posted to C01234ABCDE as the app [project: `myrepo`  session: `cea6f85a`  user: Josh  machine: josh-pc  os: windows] - ts 1788096941.956549`
+**Success:** `Posted to C01234ABCDE as the app [project: `myrepo`  session: `cea6f85a`  user: Your Name  machine: your-pc  os: windows] - ts 1788096941.956549`
 
 ★ **Full switch and override reference is in §PER-SESSION IDENTITY below.**
 
@@ -220,8 +220,8 @@ node "<this skill's dir>/slack-post.mjs" --channel <channel id> --text "..."
 
 ```
 Claude Code MCP                                          APP     <- the app's own name
-project: daugherty-ydna   session: cea6f85a   user: Josh
-      machine: DESKTOP-HBNGBFQ   os: windows                     <- context block, 5 elements
+project: your-repo   session: cea6f85a   user: Your Name
+      machine: YOUR-MACHINE   os: windows                     <- context block, 5 elements
 The actual message.
 ```
 
@@ -257,7 +257,7 @@ node slack-post.mjs --channel C01234ABCDE --text "..." \
 | Variable | Sets | Example |
 | :-- | --- | --- |
 | `CLAUDE_SESSION_NAME` | **session** — a human label instead of the raw id | `hart-audit` |
-| `CLAUDE_SLACK_MACHINE` | **machine** — friendlier than a Windows default | `josh-pc` |
+| `CLAUDE_SLACK_MACHINE` | **machine** — friendlier than a Windows default | `my-laptop` |
 | `CLAUDE_SLACK_USER_EMAIL` | **user** — include the address (`1`/`true`/`yes`) | `1` |
 
 *Windows* `setx NAME "value"` · *macOS/Linux* `export NAME="value"` *in the shell profile.*

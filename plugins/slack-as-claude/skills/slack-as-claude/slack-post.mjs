@@ -166,6 +166,7 @@ const { values: a } = parseArgs({
   options: {
     channel: { type: 'string' },
     text: { type: 'string' },
+    'text-file': { type: 'string' },
     'thread-ts': { type: 'string' },
     broadcast: { type: 'boolean', default: false },
     'no-broadcast': { type: 'boolean', default: false },
@@ -180,6 +181,7 @@ const { values: a } = parseArgs({
     'icon-emoji': { type: 'string' },
     'user-email': { type: 'boolean', default: false },
     'no-context': { type: 'boolean', default: false },
+    'unsafe-claim': { type: 'boolean', default: false },
     'as-app': { type: 'boolean', default: false },
     'dry-run': { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h', default: false },
@@ -187,12 +189,50 @@ const { values: a } = parseArgs({
   allowPositionals: false,
 });
 
+/**
+ * Resolve the message body WITHOUT letting a shell touch it.
+ *
+ * ⛔⛔ --text ON A COMMAND LINE IS THE ONE CHANNEL GUARANTEED TO CORRUPT THE CONTENT THIS
+ * BUS EXISTS TO CARRY. Backticks inside a double-quoted shell string are
+ * command-substituted and VANISH; so do $, and quoting nests badly. The messages worth
+ * sending here are the long ones with evidence in them - a code fragment, a ts, a diff -
+ * and evidence is exactly the part that contains backticks.
+ *
+ * ★ So the failure PREFERENTIALLY DESTROYS PROOF AND LEAVES PROSE. A message that lost
+ * its assertions still reads fluently, which is why it goes unnoticed. Observed: a
+ * message arguing that an artefact contradicted its behaviour lost both of its evidence
+ * passages and nothing else.
+ *
+ * ⚠ AND NO SURFACE HERE CAN CATCH IT. The substitution happens before node sees the
+ * string, so no validation inside this script can detect it - and --dry-run prints the
+ * ALREADY-MANGLED text, which looks correct because the missing part is missing from the
+ * preview too. Four surfaces were built to tell the truth about a message; this
+ * corruption is upstream of all of them.
+ *
+ * The only defence is not to hand the body to a shell at all.
+ */
+function resolveText() {
+  if (a['text-file'] !== undefined) {
+    if (a.text !== undefined) die('Pass --text OR --text-file, not both.', 2);
+    if (a['text-file'] === '-') {
+      try {
+        return readFileSync(0, 'utf8');
+      } catch {
+        die('--text-file - was given but stdin was empty or unreadable.', 2);
+      }
+    }
+    if (!existsSync(a['text-file'])) die(`--text-file: no such file: ${a['text-file']}`, 2);
+    return readFileSync(a['text-file'], 'utf8');
+  }
+  return a.text;
+}
+
 function die(msg, code = 1) {
   console.error(msg);
   process.exit(code);
 }
 
-if (a.help || !a.channel || a.text === undefined) {
+if (a.help || !a.channel || (a.text === undefined && a['text-file'] === undefined)) {
   console.error(
     'usage: node slack-post.mjs --channel <id> --text "..." [--thread-ts <ts>]\n' +
       '       [--to X] [--type X] [--project X] [--session X] [--user X] [--machine X]\n' +
@@ -215,6 +255,9 @@ if (a.help || !a.channel || a.text === undefined) {
   );
   process.exit(a.help ? 0 : 1);
 }
+
+// Resolved once, here, so every downstream use is the real body.
+const TEXT = resolveText();
 
 const token = botToken();
 if (!token) {
@@ -277,6 +320,43 @@ function sectionBlocks(text) {
  */
 const KNOWN_TYPES = ['request', 'reply', 'claim', 'done', 'fail', 'status'];
 
+/**
+ * ⛔⛔ POSTING A CLAIM IS NOT WINNING A CLAIM - AND THIS IS THE TOOL THAT MAKES IT
+ * LOOK LIKE IT IS.
+ *
+ * The protocol is post -> RE-READ the thread -> lowest ts wins -> losers stand
+ * down. All of the safety is in the re-read. This tool does step one, prints a
+ * cheerful success line, and does not do the other three - so it hands back
+ * exactly the confirmation an agent needs to feel entitled to proceed, having
+ * established nothing. Two sessions can both run it, both see "Posted", and both
+ * start work.
+ *
+ * ★ THE PROTOCOL HAS ONLY EVER BEEN FOLLOWED BY SESSIONS THAT WERE TOLD TO FOLLOW
+ * IT. Every test of it so far was run by an agent handed §4 in advance. An agent
+ * that has NOT read §4 does not reach for slack-claim.mjs - it reaches for the
+ * posting tool it already knows, with the type that matches the word it is
+ * thinking. So THAT is the path that has to be safe, because it is the one taken
+ * by default. A written rule binds only a reader; a refusal binds everyone.
+ */
+if (a.type === 'claim' && !a['unsafe-claim']) {
+  die(
+    'Refusing to post --type claim from the plain poster.\n' +
+      '\n' +
+      '  Posting a claim does not win it. The protocol is post -> RE-READ -> lowest\n' +
+      '  ts wins -> losers stand down, and this tool only does the first step. It\n' +
+      '  would print "Posted" and you would have established nothing: another\n' +
+      '  session may hold the task already, with an earlier ts that outranks yours.\n' +
+      '\n' +
+      '  Use the tool that does all four steps and answers in its exit code:\n' +
+      '      node slack-claim.mjs --channel <id> --task <thread-ts> --session <you>\n' +
+      '      exit 0 = you hold it, proceed.  exit 1 = you do not, stand down.\n' +
+      '\n' +
+      '  If you are genuinely not claiming a task - a doc example, a replay, a test -\n' +
+      '  pass --unsafe-claim and this posts verbatim.',
+    2,
+  );
+}
+
 if (a.type && !KNOWN_TYPES.includes(a.type) && !a.type.startsWith('x-')) {
   die(
     `Unknown --type "${a.type}".\n` +
@@ -287,7 +367,7 @@ if (a.type && !KNOWN_TYPES.includes(a.type) && !a.type.startsWith('x-')) {
   );
 }
 
-const payload = { channel: a.channel, text: a.text };
+const payload = { channel: a.channel, text: TEXT };
 
 if (a['thread-ts']) {
   // A Slack ts is 10+ digits, a dot, then exactly 6. Validate it, because the way this
@@ -366,7 +446,7 @@ if (!a['as-app']) {
 
   // 'text' stays the raw message so push notifications and unfurls read correctly.
   if (!a['no-context'] && elements.length) {
-    payload.blocks = [{ type: 'context', elements }, ...sectionBlocks(a.text)];
+    payload.blocks = [{ type: 'context', elements }, ...sectionBlocks(TEXT)];
   }
 }
 
@@ -397,7 +477,7 @@ if (a['dry-run']) {
         : `no  (type "${a.type ?? 'none'}" is not decision-changing; it will be visible only in the thread)`;
     console.log(`  broadcast: ${why}`);
   }
-  console.log(`  text     : ${a.text}`);
+  console.log(`  text     : ${TEXT}`);
   process.exit(0);
 }
 
