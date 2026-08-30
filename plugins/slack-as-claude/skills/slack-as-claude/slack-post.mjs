@@ -124,6 +124,8 @@ const { values: a } = parseArgs({
     channel: { type: 'string' },
     text: { type: 'string' },
     'thread-ts': { type: 'string' },
+    to: { type: 'string' },
+    type: { type: 'string' },
     project: { type: 'string' },
     user: { type: 'string' },
     machine: { type: 'string' },
@@ -147,8 +149,12 @@ function die(msg, code = 1) {
 if (a.help || !a.channel || a.text === undefined) {
   console.error(
     'usage: node slack-post.mjs --channel <id> --text "..." [--thread-ts <ts>]\n' +
-      '       [--project X] [--session X] [--user X] [--machine X] [--user-email]\n' +
-      '       [--username X] [--icon-emoji :x:] [--no-context] [--as-app] [--dry-run]',
+      '       [--to X] [--type X] [--project X] [--session X] [--user X] [--machine X]\n' +
+      '       [--user-email] [--username X] [--icon-emoji :x:]\n' +
+      '       [--no-context] [--as-app] [--dry-run]\n' +
+      '\n' +
+      '  --to / --type  routing for a session bus, emitted as context elements so a\n' +
+      '                 reader can parse them. Putting them in the body does not work.',
   );
   process.exit(a.help ? 0 : 1);
 }
@@ -164,6 +170,65 @@ if (!token) {
 }
 
 // --- payload ----------------------------------------------------------------
+
+/**
+ * Split a body across as many section blocks as it needs.
+ *
+ * ⚠ Slack caps a section's text at 3000 characters. Exceed it and the post fails with
+ * `invalid_blocks` - an error that names blocks and says nothing about length, so the
+ * cause is genuinely hard to guess. Observed on a long message over a session bus,
+ * where the useful messages are exactly the long ones.
+ *
+ * Splitting beats refusing: prefer a paragraph break, then a line break, then a space,
+ * so chunks land on natural boundaries rather than mid-word.
+ */
+const MAX_SECTION = 2900; // headroom under Slack's 3000
+const MAX_BLOCKS = 48; // Slack allows 50; leave room for the context block
+
+function sectionBlocks(text) {
+  const chunks = [];
+  let rest = text ?? '';
+  while (rest.length > MAX_SECTION) {
+    let cut = rest.lastIndexOf('\n\n', MAX_SECTION);
+    if (cut < MAX_SECTION * 0.5) cut = rest.lastIndexOf('\n', MAX_SECTION);
+    if (cut < MAX_SECTION * 0.5) cut = rest.lastIndexOf(' ', MAX_SECTION);
+    if (cut <= 0) cut = MAX_SECTION;
+    chunks.push(rest.slice(0, cut));
+    rest = rest.slice(cut).replace(/^\s+/, '');
+  }
+  if (rest) chunks.push(rest);
+  if (chunks.length > MAX_BLOCKS) {
+    console.error(
+      `Message is too long: it needs ${chunks.length} section blocks and Slack allows ${MAX_BLOCKS}.\n` +
+        'Split it into separate messages, or post a summary and thread the detail.',
+    );
+    process.exit(1);
+  }
+  return chunks.map((c) => ({ type: 'section', text: { type: 'mrkdwn', text: c } }));
+}
+
+/**
+ * The message types the session-bus protocol assigns meaning to.
+ *
+ * ⚠ These are validated rather than free-form because the claim protocol depends on
+ * EXACT matches. A session posting `type: claims` has posted something no reader counts
+ * as a claim - it sends fine, returns ok, and the session proceeds believing it claimed.
+ * That is a correctness failure with a race behind it, and it is invisible.
+ *
+ * `x-` prefixed values pass unchecked, so extending the vocabulary stays possible and
+ * a custom type is VISIBLY custom rather than indistinguishable from a typo.
+ */
+const KNOWN_TYPES = ['request', 'reply', 'claim', 'done', 'fail', 'status'];
+
+if (a.type && !KNOWN_TYPES.includes(a.type) && !a.type.startsWith('x-')) {
+  die(
+    `Unknown --type "${a.type}".\n` +
+      `  Known: ${KNOWN_TYPES.join(', ')}\n` +
+      '  Use an x- prefix for a custom type (e.g. x-heartbeat).\n' +
+      '  These are validated because the claim protocol matches on them exactly:\n' +
+      '  a misspelled type posts successfully and is counted by nobody.',
+  );
+}
 
 const payload = { channel: a.channel, text: a.text };
 
@@ -200,6 +265,12 @@ if (!a['as-app']) {
   // One element per facet, so Slack does the spacing rather than a separator
   // character. Identifiers are code-formatted; the human bits stay plain.
   const elements = [];
+  // Routing first: a reader wants to know "is this for me, and what is it" before
+  // it cares who sent it. These MUST be elements, not prose in the body - a parser
+  // reads elements, and an earlier version that scanned the body happily lifted
+  // "to:" out of an English sentence that merely discussed addressing.
+  if (a.to) elements.push({ type: 'mrkdwn', text: `to: \`${a.to}\`` });
+  if (a.type) elements.push({ type: 'mrkdwn', text: `type: \`${a.type}\`` });
   if (project) elements.push({ type: 'mrkdwn', text: `project: \`${project}\`` });
   if (session) elements.push({ type: 'mrkdwn', text: `session: \`${session}\`` });
   if (user) elements.push({ type: 'mrkdwn', text: `user: ${user}` });
@@ -210,10 +281,7 @@ if (!a['as-app']) {
 
   // 'text' stays the raw message so push notifications and unfurls read correctly.
   if (!a['no-context'] && elements.length) {
-    payload.blocks = [
-      { type: 'context', elements },
-      { type: 'section', text: { type: 'mrkdwn', text: a.text } },
-    ];
+    payload.blocks = [{ type: 'context', elements }, ...sectionBlocks(a.text)];
   }
 }
 

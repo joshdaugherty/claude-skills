@@ -23,6 +23,11 @@ import { parseArgs } from 'node:util';
 
 const HISTORY = 'https://slack.com/api/conversations.history';
 
+// Kept in step with slack-post.mjs. A type outside this set is either a deliberate
+// custom one (x- prefixed) or a TYPO - and a typo'd claim is counted by nobody while
+// the sender believes it claimed. Flag it loudly rather than letting it pass as noise.
+const KNOWN_TYPES = ['request', 'reply', 'claim', 'done', 'fail', 'status'];
+
 function botToken() {
   if (process.env.SLACK_BOT_TOKEN) return process.env.SLACK_BOT_TOKEN;
   if (process.platform === 'win32') {
@@ -60,7 +65,12 @@ if (a.help || !a.channel) {
       '\n' +
       '  By default the first poll primes the cursor silently and emits only NEW messages.\n' +
       '  --replay  emit the existing backlog too (it can contain closed work).\n' +
-      '  --once    poll once and exit; always emits what it finds.',
+      '  --once    poll once and exit; always emits what it finds.\n' +
+      '\n' +
+      '  COLD START: bare is right - you do not want a backlog of closed work.\n' +
+      '  RE-ARM:     pass --since <last ts you saw>. Priming would silently swallow\n' +
+      '              anything posted between stopping the old watcher and starting this\n' +
+      '              one, and the two cases look identical from inside the script.',
   );
   process.exit(a.help ? 0 : 1);
 }
@@ -181,9 +191,24 @@ async function poll() {
 
   if (priming) {
     // Advance the cursor past everything already in the channel, emitting nothing.
-    for (const m of fresh) if (m.ts) cursor = m.ts;
+    let skipped = 0;
+    for (const m of fresh) {
+      if (m.ts) cursor = m.ts;
+      if (m.subtype !== 'channel_join' && m.subtype !== 'channel_leave') skipped++;
+    }
     priming = false;
-    console.error(`[watch] primed at ts=${cursor ?? 'none'} - watching for new messages only (--replay for history)`);
+
+    // ⚠ Report the COUNT, not just the cursor. Priming is right for a COLD start and
+    // wrong for a HANDOVER - re-arm bare after stopping a watcher and anything posted
+    // in between is swallowed silently. The two are indistinguishable from in here:
+    // both are "starting with no cursor". Naming the number at least makes the hole
+    // visible at the exact moment someone is being careful about coverage.
+    console.error(
+      `[watch] primed at ts=${cursor ?? 'none'} - skipped ${skipped} existing message(s), watching for new only.` +
+        (skipped > 0
+          ? '\n[watch] If this was a RE-ARM rather than a cold start, those were dropped: restart with --since <last ts you saw>.'
+          : ''),
+    );
     return true;
   }
 
@@ -196,7 +221,13 @@ async function poll() {
     if (ignored.has(from)) continue;
 
     const to = meta.to ? ` to=${meta.to}` : '';
-    const type = meta.type ? ` type=${meta.type}` : '';
+    let type = '';
+    if (meta.type) {
+      const known = KNOWN_TYPES.includes(meta.type) || meta.type.startsWith('x-');
+      // An unrecognised type is surfaced, not swallowed: silently unmatched is exactly
+      // how a peer's typo turns into two sessions doing the same work.
+      type = known ? ` type=${meta.type}` : ` type=${meta.type}!UNKNOWN`;
+    }
     const thread = m.thread_ts && m.thread_ts !== m.ts ? ` thread=${m.thread_ts}` : '';
     // One line per message: each becomes a single Monitor event.
     console.log(`[bus] ts=${m.ts} from=${from}${to}${type}${thread} :: ${body.replace(/\s+/g, ' ')}`);
