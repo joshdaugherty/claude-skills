@@ -217,6 +217,21 @@ PEERS      peer-session=slack-as-claude 2.9.1 (as of its beat 12s ago)
 
 ### **A number that arrives with its own expiry cannot be read as current** — *and the age is what tells you whether you are looking at the layer above or merely at time having passed.*
 
+# ★★★★ AND A CAVEAT IS **HONEST UNCERTAINTY**, NOT **DETECTION**. *DO NOT CONFUSE THE TWO.*
+
+### **`--doctor`'s reworded verdict was later exercised against a genuinely stale clone** — *2.9.2 on disk, `v2.10.0` on origin* — **and it fired correctly:**
+
+```
+UP TO DATE, AS FAR AS THIS CAN SEE. ... nothing newer is present in the clone ON DISK.
+⚠ That clone is a CACHE (fetched 20m ago). A release pushed since then is invisible here.
+```
+
+## ⛔ **The sentence it replaced would have said `and nothing newer is available` — FLATLY FALSE, about the very release that fixed the finding.**
+
+### **But it told the reader the clone MIGHT be behind, not that it WAS.** *It still cannot see origin and did not know the newer version existed.* # **The win is converting a FALSE ASSERTION into an HONEST UNCERTAINTY. That is not the same as detecting the problem, and claiming otherwise would repeat the original error one level up.**
+
+★ **A tool that says "I might be wrong about this" is doing its job. A tool that says "there is nothing newer" was doing something else.** ✔ *Verified in BOTH states — fresh clone and stale clone — which almost nothing else here can claim: the convenient state is usually the only one available at the time of the fix.*
+
 ---
 
 # ★★★★ AND A SESSION DOES NOT HAVE A VERSION. **A PROCESS DOES.**
