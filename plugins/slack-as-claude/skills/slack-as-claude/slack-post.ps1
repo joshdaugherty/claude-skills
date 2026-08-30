@@ -44,8 +44,18 @@
     directory's name.
 
 .PARAMETER User
-    OS user label. Default: $env:USERNAME (Windows) or $env:USER (Unix). Rendered as
-    <user>@<machine>.
+    Who is behind the session. Default: the Claude account's display name, read from the
+    oauthAccount block of ~/.claude.json, falling back to the OS user.
+
+    Note this is the CLAUDE account, not the OS login and not the Slack user - three
+    identities that usually coincide on a personal machine and diverge on a shared or
+    remote one.
+
+.PARAMETER UserEmail
+    Include the account's email address alongside the name: "Display Name (email)".
+    Opt-in, because every message is visible to the whole channel and the default should
+    not disclose an address in someone else's workspace. Can also be turned on for good
+    with CLAUDE_SLACK_USER_EMAIL=1.
 
 .PARAMETER Machine
     Machine label. Default: $env:CLAUDE_SLACK_MACHINE, else the computer name.
@@ -53,16 +63,15 @@
     DESKTOP-HBNGBFQ.
 
 .PARAMETER Session
-    Human-meaningful session label. Default: $env:CLAUDE_SESSION_NAME, else the current
-    git branch. Rendered as <session>#<id>.
+    Session label. Default: $env:CLAUDE_SESSION_NAME, else the first 8 characters of
+    $env:CLAUDE_CODE_SESSION_ID.
 
     Claude Code does not expose a session *title* - it writes conversation summaries
-    only on compaction, so there is nothing to read at post time. Branch is the most
-    meaningful thing available automatically; set CLAUDE_SESSION_NAME for anything better.
+    only on compaction, so there is nothing to read at post time. The session id is the
+    only per-session handle that exists; set CLAUDE_SESSION_NAME for a human label.
 
-.PARAMETER NoSessionId
-    Omit the short session id. It is appended by default because a branch is NOT unique -
-    two concurrent sessions on the same branch would otherwise render identically.
+    Deliberately NOT the git branch: a branch is shared by every session working on it,
+    so it cannot distinguish one session from another.
 
 .PARAMETER Username
     Overrides the whole composed display name.
@@ -93,7 +102,7 @@ param(
     [string]$Session,
     [string]$Username,
     [string]$IconEmoji,
-    [switch]$NoSessionId,
+    [switch]$UserEmail,
     [switch]$NoContext,
     [switch]$AsApp,
     [switch]$DryRun
@@ -119,13 +128,66 @@ function Get-ProjectLabel {
 }
 
 function Get-SessionLabel {
+    # A human label if one was set, otherwise the session's own id. Not the git
+    # branch: a branch is shared by every session on it, so it cannot identify one.
     if ($env:CLAUDE_SESSION_NAME) { return $env:CLAUDE_SESSION_NAME }
+    return Get-SessionId
+}
+
+function Get-ClaudeUser {
+    param([bool]$IncludeEmail)
+
+    # The Claude account behind the session, read from the oauthAccount block of
+    # ~/.claude.json. Falls back to the OS user.
+    #
+    # The email address is OPT-IN. Every message this script sends is visible to
+    # everyone in the channel, so the default must not stamp an address into a
+    # shared workspace that whoever installed this never thought about.
+    #
+    # Parsed defensively: that file has been seen with keys differing only by case,
+    # which ConvertFrom-Json rejects without -AsHashtable - and -AsHashtable does not
+    # exist on Windows PowerShell 5.1. So try the structured read, then a regex, then
+    # give up gracefully. A label is never worth failing a post over.
+    $osUser = if ($env:USERNAME) { $env:USERNAME } else { $env:USER }
+    $path = Join-Path $HOME '.claude.json'
+    if (-not (Test-Path $path)) { return $osUser }
+
+    $name = $null
+    $email = $null
     try {
-        $branch = git rev-parse --abbrev-ref HEAD 2>$null
-        if ($LASTEXITCODE -eq 0 -and $branch -and $branch -ne 'HEAD') { return $branch }
+        $raw = Get-Content $path -Raw -ErrorAction Stop
+        try {
+            $acct = ($raw | ConvertFrom-Json -AsHashtable -ErrorAction Stop)['oauthAccount']
+            $name = $acct['displayName']
+            $email = $acct['emailAddress']
+        }
+        catch {
+            if ($raw -match '"displayName"\s*:\s*"([^"]*)"') { $name = $Matches[1] }
+            if ($raw -match '"emailAddress"\s*:\s*"([^"]*)"') { $email = $Matches[1] }
+        }
     }
-    catch { }
-    return $null
+    catch { return $osUser }
+
+    if (-not $IncludeEmail) {
+        if ($name) { return $name }
+        # No display name and email withheld - the local part is the most we should
+        # show by default. Better an ambiguous label than an unintended disclosure.
+        if ($email) { return ($email -split '@')[0] }
+        return $osUser
+    }
+
+    if ($name -and $email) { return "$name ($email)" }
+    if ($name) { return $name }
+    if ($email) { return $email }
+    return $osUser
+}
+
+function Get-OsLabel {
+    # $IsMacOS / $IsLinux exist on PowerShell 6+; Windows PowerShell 5.1 is always Windows.
+    if ($PSVersionTable.PSVersion.Major -lt 6) { return 'windows' }
+    if ($IsMacOS) { return 'macos' }
+    if ($IsLinux) { return 'linux' }
+    return 'windows'
 }
 
 function Get-SessionId {
@@ -136,22 +198,14 @@ function Get-SessionId {
     return $null
 }
 
-function Get-OsIcon {
-    # $IsMacOS / $IsLinux exist on PowerShell 6+; Windows PowerShell 5.1 is always Windows.
-    if ($PSVersionTable.PSVersion.Major -lt 6) { return ':desktop_computer:' }
-    if ($IsMacOS) { return ':apple:' }
-    if ($IsLinux) { return ':penguin:' }
-    return ':desktop_computer:'
-}
-
 $payload = @{ channel = $Channel; text = $Text }
 if ($ThreadTs) { $payload['thread_ts'] = $ThreadTs }
 
 if (-not $AsApp) {
     if (-not $Project) { $Project = Get-ProjectLabel }
     if (-not $User) {
-        $User = $env:USERNAME
-        if (-not $User) { $User = $env:USER }
+        $wantEmail = $UserEmail.IsPresent -or ($env:CLAUDE_SLACK_USER_EMAIL -in @('1', 'true', 'yes'))
+        $User = Get-ClaudeUser -IncludeEmail $wantEmail
     }
     if (-not $Machine) {
         $Machine = $env:CLAUDE_SLACK_MACHINE
@@ -160,50 +214,33 @@ if (-not $AsApp) {
     }
     if (-not $Session) { $Session = Get-SessionLabel }
 
-    if (-not $Username) {
-        # who: user@machine, falling back to whichever half we have
-        $who = (@($User, $Machine) | Where-Object { $_ }) -join '@'
 
-        # which: session#id - the id is what actually guarantees uniqueness,
-        # since a branch name is shared by every session on that branch.
-        $id = if ($NoSessionId) { $null } else { Get-SessionId }
-        $which = (@($Session, $id) | Where-Object { $_ }) -join '#'
 
-        # Slack clips the display name at roughly 50 visible characters, so the
-        # name carries only what must always be visible - who and which project.
-        # The precise session identity goes in a context block on the message,
-        # where there is room. Separator is a middle dot, built from its code
-        # point so this file stays pure ASCII and cannot be mangled by encoding.
-        $sep = [char]0x00B7
-        $Username = (@('Claude', $Project) | Where-Object { $_ }) -join $sep
-    }
-    # Slack's hard cap is higher than this, but ~50 chars is all that renders.
-    if ($Username.Length -gt 48) { $Username = $Username.Substring(0, 47) + [char]0x2026 }
+    # The display name is left alone: Slack shows the app's own name and avatar.
+    # ALL the identifying detail lives in the context block instead, because the
+    # display name clips silently at ~50 chars while a context block wraps.
+    # Overriding the name or icon is opt-in via -Username / -IconEmoji, and that
+    # is the ONLY path that needs the chat:write.customize scope.
+    if ($Username) { $payload['username'] = $Username }
+    if ($IconEmoji) { $payload['icon_emoji'] = $IconEmoji }
 
-    # The full identity, for the context line.
-    $sep = [char]0x00B7
-    $ContextLine = (@($which, $who) | Where-Object { $_ }) -join " $sep "
+    # One element per facet, so Slack does the spacing rather than a separator
+    # character. Identifiers are code-formatted; the human bits stay plain.
+    $elements = @()
+    if ($Project) { $elements += @{ type = 'mrkdwn'; text = "project: ``$Project``" } }
+    if ($Session) { $elements += @{ type = 'mrkdwn'; text = "session: ``$Session``" } }
+    if ($User) { $elements += @{ type = 'mrkdwn'; text = "user: $User" } }
+    if ($Machine) { $elements += @{ type = 'mrkdwn'; text = "machine: $Machine" } }
+    $elements += @{ type = 'mrkdwn'; text = "os: $(Get-OsLabel)" }
 
-    if (-not $IconEmoji) { $IconEmoji = Get-OsIcon }
-
-    $payload['username'] = $Username
-    $payload['icon_emoji'] = $IconEmoji
-
-    # A context block renders as small muted text above the message - room for the
-    # full identity without competing with the body. 'text' stays the raw message
-    # so push notifications and unfurls read correctly.
-    if (-not $NoContext -and $ContextLine) {
+    # 'text' stays the raw message so push notifications and unfurls read correctly.
+    if (-not $NoContext -and $elements.Count -gt 0) {
         $payload['blocks'] = @(
-            @{
-                type     = 'context'
-                elements = @( @{ type = 'mrkdwn'; text = "$IconEmoji  $ContextLine" } )
-            },
-            @{
-                type = 'section'
-                text = @{ type = 'mrkdwn'; text = $Text }
-            }
+            @{ type = 'context'; elements = $elements },
+            @{ type = 'section'; text = @{ type = 'mrkdwn'; text = $Text } }
         )
     }
+    $ContextLine = (($elements | ForEach-Object { $_.text }) -join '  ')
 }
 
 # --- post -------------------------------------------------------------------
@@ -215,10 +252,13 @@ if ($DryRun) {
         Write-Host "  identity : (app default)"
     }
     else {
-        Write-Host "  username : $Username  [$($Username.Length) chars]"
-        Write-Host "  icon     : $IconEmoji"
+        if ($Username) { Write-Host "  username : $Username  (override)" }
+        else { Write-Host "  username : (the app's own name)" }
+        if ($IconEmoji) { Write-Host "  icon     : $IconEmoji  (override)" }
+        else { Write-Host "  icon     : (the app's own avatar)" }
         if ($payload.ContainsKey('blocks')) {
-            Write-Host "  context  : $IconEmoji  $ContextLine"
+            Write-Host "  context  : $ContextLine"
+            Write-Host "             [$($elements.Count) elements]"
         }
         else {
             Write-Host "  context  : (none)"
@@ -253,9 +293,6 @@ if (-not $r.ok) {
     exit 1
 }
 
-if ($AsApp) {
-    Write-Host "Posted to $($r.channel) as the app - ts $($r.ts)"
-}
-else {
-    Write-Host "Posted to $($r.channel) as '$Username' $IconEmoji - ts $($r.ts)"
-}
+$as = if ($Username) { "as '$Username'" } else { 'as the app' }
+$ctx = if ($payload.ContainsKey('blocks')) { " [$ContextLine]" } else { '' }
+Write-Host "Posted to $($r.channel) $as$ctx - ts $($r.ts)"

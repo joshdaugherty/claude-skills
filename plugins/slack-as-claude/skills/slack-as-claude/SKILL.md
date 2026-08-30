@@ -153,6 +153,22 @@ claude mcp add --transport http slack https://mcp.slack.com/mcp --scope user --c
 
 **c.** *OAuth & Permissions → **Bot User OAuth Token** (`xoxb-…`)* → user runs `setx SLACK_BOT_TOKEN "<token>"`.
 
+## B5 · Give the app an icon *(optional, but it is the app's face in every channel)*
+
+```
+python make-app-icon.py --emoji "🤖" --bg "#2C2D30" --out app-icon.png
+```
+
+*Upload at* **Basic Information → Display Information → App icon** *→ **Save Changes**.*
+
+★ **Set the icon HERE rather than per message.** *It needs no `chat:write.customize`, and it applies everywhere the app appears — including messages already sent.*
+
+# ⚠⚠ SLACK DOES NOT HONOUR TRANSPARENCY ON APP ICONS. **IT COMPOSITES ONTO WHITE.**
+
+### *A transparent PNG arrives as a glyph on a white square whatever the viewer's theme.* **Paint the background explicitly.** *Full-bleed square — Slack applies its own rounded mask, so baking in a corner radius double-rounds it.*
+
+⚠ **And colour emoji fonts need `embedded_color=True` on an RGBA target.** *Segoe UI Emoji, Apple Color Emoji and Noto Color Emoji are bitmap fonts; without it the glyph renders as a **flat black silhouette** — which looks like a real icon until you see it beside one.* **They also only carry strikes at particular sizes; the bundled script draws at 109pt and downsamples.**
+
 ---
 
 # 2. THE ENV VAR TRAP — READ THE REGISTRY, NOT `$env:`
@@ -184,50 +200,94 @@ claude mcp add --transport http slack https://mcp.slack.com/mcp --scope user --c
 ```
 
 **`-ThreadTs <ts>`** replies in a thread — *get the `ts` from `mcp__slack__slack_read_channel`.*
-**`-DryRun`** prints the composed identity and context line and sends nothing. **Use it before the first real post, and for every experiment** — *an overridden-identity message cannot be deleted afterwards.*
-**`-NoContext`** drops the context line · **`-AsApp`** drops the whole override.
+**`-DryRun`** prints the composed identity and sends nothing. **Use it before the first real post, and for every experiment.**
 
-**Success:** `Posted to C01234ABCDE as 'Claude - josh@josh-pc - myrepo - main#cea6f85a' :desktop_computer: - ts 1788094979.110239`
+**Success:** `Posted to C01234ABCDE as the app [project: `myrepo`  session: `cea6f85a`  user: Josh  machine: josh-pc  os: windows] - ts 1788096941.956549`
+
+★ **Full switch and override reference is in §PER-SESSION IDENTITY below.**
 
 ---
 
 ## ★ PER-SESSION IDENTITY — telling several Claude sessions apart
 
-**Every message is labelled with where it came from**, so a channel several sessions post into stays legible. **The label is SPLIT across two places, because they truncate completely differently:**
+**Every message is labelled with where it came from**, so a channel several sessions post into stays legible. **The display name is left ALONE — Slack shows the app's own name and avatar — and ALL the detail goes in a context block on the message:**
 
 ```
-🖥  Claude·daugherty-ydna              APP        <- display name, ~50 chars, CLIPS
-    🖥  main#cea6f85a · Josh@josh-pc              <- context block, WRAPS, no clip
-    The actual message.
+Claude Code MCP                                          APP     <- the app's own name
+project: daugherty-ydna   session: cea6f85a   user: Josh
+      machine: DESKTOP-HBNGBFQ   os: windows                     <- context block, 5 elements
+The actual message.
 ```
 
-| Part | Where | Detected from | Override |
-| :-- | :-: | --- | --- |
-| **icon** | both | OS — `:desktop_computer:` · `:apple:` · `:penguin:` | `-IconEmoji` |
-| **project** | **name** | git repo root's basename, else cwd | `-Project` |
-| **session** | context | `CLAUDE_SESSION_NAME`, else git branch | `-Session` |
-| **id** | context | first 8 of `CLAUDE_CODE_SESSION_ID` | `-NoSessionId` |
-| **user** | context | `$env:USERNAME` / `$env:USER` | `-User` |
-| **machine** | context | `CLAUDE_SLACK_MACHINE`, else computer name | `-Machine` |
+| Element | Detected from | Override |
+| :-- | --- | --- |
+| **project** | git repo root's basename, else cwd | `-Project` |
+| **session** | `CLAUDE_SESSION_NAME`, else first 8 of `CLAUDE_CODE_SESSION_ID` | `-Session` |
+| **user** | Claude account `displayName` from `~/.claude.json`, else OS user | `-User` |
+| **machine** | `CLAUDE_SLACK_MACHINE`, else computer name | `-Machine` |
+| **os** | `windows` · `macos` · `linux` | — |
 
-# ★★ WHY SPLIT — THE TWO FIELDS TRUNCATE IN OPPOSITE WAYS
+**One element per facet, so SLACK does the spacing** — not a separator character you chose. *Labels are plain, identifiers are code-formatted.*
+
+⚠ **The user's EMAIL is opt-in** — `-UserEmail` or `CLAUDE_SLACK_USER_EMAIL=1` renders `Josh (josh@example.com)`. # **Do not make it the default.** ### *Every message is visible to the whole channel, and a skill installed by someone else must not stamp their address into their workspace because you did not think about it.*
+
+## ★ SETTING THE OVERRIDES — per call, or once and for all
+
+**Two mechanisms. Parameters win over environment variables, which win over detection.**
+
+### Per call — a parameter, for this message only
+
+```powershell
+& slack-post.ps1 -Channel C01234ABCDE -Text "..." `
+    -Project "billing-api" `
+    -Session "nightly-reindex" `
+    -User    "release-bot" `
+    -Machine "ci-runner-3" `
+    -UserEmail
+```
+
+### Persistent — an environment variable, for every message from this machine
+
+| Variable | Sets | Example |
+| :-- | --- | --- |
+| `CLAUDE_SESSION_NAME` | **session** — a human label instead of the raw id | `setx CLAUDE_SESSION_NAME "hart-audit"` |
+| `CLAUDE_SLACK_MACHINE` | **machine** — friendlier than a Windows default | `setx CLAUDE_SLACK_MACHINE "josh-pc"` |
+| `CLAUDE_SLACK_USER_EMAIL` | **user** — include the address (`1`/`true`/`yes`) | `setx CLAUDE_SLACK_USER_EMAIL 1` |
+
+# ⚠⚠ `setx` DOES NOT AFFECT THE RUNNING SESSION.
+
+### **It writes to `HKCU\Environment`, and Claude Code already captured its environment block at launch.** *A `$env:` read returns EMPTY while the variable plainly exists.* **Either restart the session, or pass the value as a parameter for now.** *(The script reads `SLACK_BOT_TOKEN` from the registry for exactly this reason — but the three variables above are read normally, so they do need a restart.)*
+
+⚠ *macOS/Linux: same trap, same cause — export from the profile and restart.*
+
+### Switches
+
+| `-DryRun` | **Compose and print, send nothing.** *Use for every experiment — see the deletion limit below.* |
+| :-- | --- |
+| `-NoContext` | Drop the context line; post a bare message under the app. |
+| `-AsApp` | Drop the whole identity apparatus. |
+| `-Username` · `-IconEmoji` | **Override the DISPLAY NAME and AVATAR.** ⚠ *The only options that need `chat:write.customize`.* |
+
+# ★★ WHY IT ALL LIVES IN THE CONTEXT BLOCK
 
 ### **MEASURED, not read off a doc — Slack documents neither.**
 
-| **Display name** | # **CLIPS at ~50 visible characters.** *Window-width dependent, silent, mid-word.* ★ *A first attempt put `<session>#<id>` last and Slack ate exactly the part that made it unique.* **Put only what must always be visible here.** |
+| **Display name** | # **CLIPS at ~50 visible characters.** *Window-width dependent, silent, mid-word.* ★ *An earlier design composed the identity INTO the name and put the session id last — Slack ate exactly the part that made it unique.* |
 | :-- | --- |
 | **Context block** | # **WRAPS. Does not clip.** ### *A 300-character ruler rendered all 300, flowing onto a second line.* **API cap is 3000 per text object, 10 elements per block — neither is reachable in practice.** ⚠ *Costs vertical space, so one line's worth (~260 chars at a typical width) is the real budget.* |
 
-⚠ **Runs of whitespace COLLAPSE in a context block.** *Padding to align columns does not survive. Use separators.*
+⚠ **Runs of whitespace COLLAPSE in a context block.** *Padding to align columns does not survive. Use separate elements.*
 
-★ **Consequence: the context line is nearly free.** *An ugly `DESKTOP-HBNGBFQ` costs nothing there, so `CLAUDE_SLACK_MACHINE` is cosmetic rather than necessary.* **Add git SHA, worktree, or task label if useful — there is room.**
+★ **Consequence: the context line is nearly free, and the DEFAULT PATH NEEDS NO SPECIAL SCOPE.** *Nothing is overridden, so plain `chat:write` is enough.* **Five elements used, five spare — add a git SHA, worktree or task label if useful.**
 
 ## ⚠ Two implementation traps, both SILENT
 
 - # **`ConvertTo-Json` DEFAULTS TO `-Depth 2`.** ### *Blocks nest four levels deep; at the default, inner objects serialise as .NET type names and Slack rejects or mangles the message.* **Always `-Depth 10`.**
 - # **KEEP `text` POPULATED ALONGSIDE `blocks`.** ### *It is what push notifications and unfurls read.* **Drop it and mobile alerts arrive silent and contentless** — *and nothing in the API response tells you.*
 
-### ⚠ **Requires the `chat:write.customize` BOT scope.** **Adding it is a scope change → reinstall → trap 3 → BOTH tokens rotate.** *`-AsApp` posts under the app's plain identity instead.*
+## ⚠ THE SCOPE NOTE — ONLY FOR `-Username` / `-IconEmoji`
+
+### **The default path overrides NOTHING, so plain `chat:write` covers it.** *Only the display-name and avatar overrides need `chat:write.customize`* — **and adding that scope is a scope change → reinstall → trap 3 → BOTH tokens rotate.** *Do not add it unless someone actually wants a custom display name.*
 
 # ⚠⚠ WITHOUT THE SCOPE SLACK **SILENTLY IGNORES** `username` AND `icon_emoji`
 
@@ -243,13 +303,13 @@ $r.Headers['X-OAuth-Scopes']
 
 # **If `chat:write.customize` is not in that list, the override cannot work — no matter what the post returned.**
 
-# ★ WHY THE SESSION ID IS APPENDED BY DEFAULT
+# ★ THE SESSION ELEMENT — AND WHY IT IS NOT THE GIT BRANCH
 
-## **A branch is NOT unique.** *Two concurrent sessions on `main` in the same repo compose byte-identical names.* **The id is the only thing that actually separates them** — `CLAUDE_CODE_SESSION_ID` is per-session and stable for the session's life.
+## **A branch CANNOT identify a session.** *It is shared by every session working on it, so two sessions on `main` in the same repo would be indistinguishable.* **`CLAUDE_CODE_SESSION_ID` is the only per-session handle that exists** — stable for the session's life, unique across sessions.
 
-⚠ # **Claude Code exposes NO session TITLE.** ### *Conversation summaries are written on compaction, not live — there is nothing to read at post time.* **Do not go looking; the id and the branch are what exist.** *Set `CLAUDE_SESSION_NAME` if a session deserves a human label.*
+⚠ # **Claude Code exposes NO session TITLE.** ### *Conversation summaries are written on compaction, not live — there is nothing to read at post time.* **Do not go looking for one; the id is what exists.** *Set `CLAUDE_SESSION_NAME` when a session deserves a human label — that is the whole point of the override.*
 
-★ *`CLAUDE_SLACK_MACHINE` is worth setting.* **A Windows default like `DESKTOP-HBNGBFQ` eats 15 characters of every name.**
+★ *Three identities are easy to confuse, and they coincide on a personal machine:* **the CLAUDE ACCOUNT** *(`~/.claude.json` → `oauthAccount`, what the `user` element shows)*, **the OS LOGIN** *(`$env:USERNAME`, the fallback)*, and **the SLACK USER** *(the MCP user token's identity).* ⚠ **They diverge on a shared or remote box — say a build agent logged in as `svc-deploy` running under someone's personal Claude account.**
 
 ## ⛔ Two limits of the override, both real
 
@@ -299,7 +359,33 @@ Slack: post progress to #build-notifications (C01234ABCDE) via the slack-as-clau
 
 ---
 
-# 6. WHEN IT BREAKS
+# 6. ⚠ CLOUD SESSIONS — UNVERIFIED, AND PARTLY KNOWN-BROKEN
+
+# **NOBODY HAS RUN THIS IN A CLOUD SESSION. Do not tell a user it works there.**
+
+### *Everything below is reasoning from what the script depends on — NOT from a run.* **If it matters, write the portable version and TEST it; do not extrapolate from the Windows path.**
+
+## What is genuinely portable
+
+**The posting mechanism is just an HTTPS POST to `chat.postMessage` with a bearer token.** *Nothing about the payload, the context-block design or the element structure is machine-bound.* **`project` resolves from the cloned repo; `session` from `CLAUDE_CODE_SESSION_ID`; `user` from `~/.claude.json` in an authenticated session.**
+
+## ⛔ What is known to break
+
+| # **`slack-post.ps1` IS POWERSHELL** | ### **Cloud sandboxes are Linux and will not have `pwsh`.** *This is the hard blocker — the script simply will not run.* **A portable poster (curl + jq, or Python) is the fix, and it does not exist yet.** |
+| :-- | --- |
+| # **`SLACK_BOT_TOKEN` VIA `setx`** | ### *Registry-based, Windows-only, and set on one specific box.* **The token has to reach the cloud environment through ITS OWN secret mechanism.** ⛔ *Never by copying it into a repo, a script, or a prompt.* |
+| # **THE MCP SERVER IS NOT THERE** | ### *`slack` is registered in one machine's `~/.claude.json` at `--scope user`.* **A cloud session starts with its own config and has NO Slack tools** — reads need the whole registration and OAuth round trip again. ★ *Posting needs only the bot token; READING is the expensive half.* |
+
+## ⚠ What silently changes MEANING rather than breaking
+
+- # **`machine` becomes an ephemeral container hostname** — *a different random string every run.* **Noise, not signal.** *Override it to the routine or job name.*
+- # **`os` becomes `linux` for every message** — *a constant, carrying no information.*
+
+★ **So even once a portable poster exists, the ELEMENT SET wants rethinking for cloud.** *`machine` and `os` earn their place on a workstation and stop earning it in a sandbox.*
+
+---
+
+# 7. WHEN IT BREAKS
 
 | **`! Needs authentication` / `token expired`** | `/mcp` → `slack` → authenticate. **If offered "Clear authentication" first, take it** — forces a fresh round trip instead of trusting the cached credential. |
 | :-- | --- |
