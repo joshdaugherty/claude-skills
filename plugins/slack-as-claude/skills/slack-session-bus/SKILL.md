@@ -317,6 +317,24 @@ node slack-post.mjs --thread-ts "<ts>" --broadcast --type done --text "..."
 
 ⛔ **Use it for anything a peer must not miss** — *`done`, `fail`, a decision.* ★ *`slack-claim.mjs` broadcasts every claim automatically.*
 
+# ⚠⚠ BUT DO NOT BROADCAST EVERYTHING — AND HERE IS THE RULE THAT DECIDES IT
+
+## ★★ **PUSH what changes what someone should DO. PULL what only refines a judgement they are already making.**
+
+| **Broadcast** | `claim` · `done` · `fail` — *a peer's next action depends on it* |
+| :-- | --- |
+| **Leave in-thread, and PULL** | `status` · heartbeat · progress — *only matters once you are already looking* |
+
+### **Broadcast everything and the channel BECOMES the thread, so threading buys nothing** — *and a `Monitor` rate-limits on volume, so a chatty broadcast policy kills delivery exactly as a five-second heartbeat would have.*
+
+★ **This rule has two independent derivations today** — *the heartbeat landed on it, and so did broadcast, arriving from opposite directions.* # **That is why it is stated here as the general form rather than twice as a special case.**
+
+## ⛔ AND A TRAP FOR ANY OTHER READER OF THIS BUS
+
+### **A broadcast arrives with `subtype=thread_broadcast`.** *The near-universal Slack idiom* `if (m.subtype) continue` *— "is this a real user message" — **DROPS EVERY BROADCAST ON THE FLOOR**.*
+
+# **Exclude KNOWN subtypes; never include-list.** ⚠ *`slack-watch` survives this only because it was written as an exclusion, and the source now says so at that line — it looks exactly like somewhere a later reader would tidy into the idiom.*
+
 ⚠ **And the deeper answer is the same as the heartbeat's: RESOLUTION IS PULLED AT DECISION TIME.** *Step 0 exists because broadcast is a mitigation, not a guarantee — a session that was not listening when the broadcast went out still has to look.* # **Second time today the answer was pull rather than push.**
 
 ---

@@ -405,6 +405,19 @@ async function poll() {
 
   for (const m of fresh) {
     if (m.ts) cursor = m.ts;
+
+    // ⛔⛔ DO NOT "TIDY" THIS INTO `if (m.subtype) continue`.
+    //
+    // That is the near-universal Slack idiom for "is this a real user message", and it
+    // would drop every broadcast on the floor: a reply posted with reply_broadcast
+    // arrives with subtype=thread_broadcast. Claims and dones would silently vanish and
+    // the symptom would be identical to the bug reply_broadcast exists to fix - tasks
+    // appearing and never resolving.
+    //
+    // This is an EXCLUSION list on purpose. Be liberal in what you accept: the same
+    // principle decides three outcomes in this skill - rendering unknown types as
+    // !UNKNOWN rather than swallowing them, parsing every context element rather than a
+    // whitelist, and excluding known subtypes rather than including known ones.
     if (m.subtype === 'channel_join' || m.subtype === 'channel_leave') continue;
 
     const { meta, body } = parseMessage(m);
