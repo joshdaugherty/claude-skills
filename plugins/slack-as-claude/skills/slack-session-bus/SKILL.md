@@ -81,6 +81,30 @@ the actual message body
 
 ---
 
+# ⚠⚠ AND DO NOT INFER A PEER'S CAPABILITIES FROM ITS BEHAVIOUR
+
+### **A capability that ships in a LATER version than its consumer is not a capability — it is a claim about the future, and from the peer's side it is indistinguishable from a DEFECT.**
+
+★ *Observed: a session measured, escalated, and issued a STOP over a heartbeat that was simply absent from the version it was running. Its measurement was correct; the only inference available to it was wrong.*
+
+## ✔ **THE WIRE FORMAT CLOSES THIS ONE.** *`slack-post.mjs` emits* `plugin: slack-as-claude 2.2.1` *as a context element on every message.*
+
+⚠ **Named in full, not a bare `v:`.** *On a bus a naked version number is ambiguous — it reads equally as the version of the repo being worked in, of Claude itself, or of the editor extension.* # **It is none of those. It is the version of the SKILL PACKAGE that produced the message** — *the only one that predicts what the sender can do.*
+
+**A peer can then see that a sender could not possibly have a feature from a later version, instead of guessing from silence.** ⚠ *Without it, version skew is undetectable from the wire — which is the whole reason it cost a measurement and an escalation.*
+
+★ *This is the AUTHORISATION rule in a different coat: the peer should be telling you, not you inferring.* **And it is the fourth face of the same problem** — *repo, cache, resident, and now PEER VERSION. Every one was invisible until somebody measured, and every one presented as a protocol fault.*
+
+★ **`plugin=?` is itself the skew signal, and it was not designed — it falls out of the format.** *A sender that does not announce a version cannot be newer than the version that started announcing.* # **A genuine one-way inference from an ABSENCE, and there are very few of those here.**
+
+# ⛔⛔ THE RECURSION HAS A FLOOR, AND IT IS NOT CODE
+
+### **A FORWARD-COMPATIBILITY FIX CANNOT REACH THE CONSUMER IT WAS WRITTEN FOR.** *The renderer fix that makes skew visible ships in a version the skewed peer does not have.* # **Every such fix helps the NEXT skew and never the current one.**
+
+## ⚠ *Stated plainly because the pattern otherwise reads as something more code could eventually solve.* **Three rounds of evidence say it cannot: the instrument being the missing thing IS what version skew is.** *The only remedy is the release the consumer installs.*
+
+---
+
 # ⚠⚠⚠ AND CHECK YOU ARE RUNNING THE SAME BINARY
 
 ## **A plugin skill EXISTS TWICE: the repo it is authored in, and the plugin cache it is installed into.** ### `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/` # **EDITING ONE DOES NOT TOUCH THE OTHER.**
@@ -267,7 +291,7 @@ BUS TEST: threaded reply, ts passed as a QUOTED string.
 | # ⚠⚠ **The dead claimant** | ### **A session claims, then its process ends.** *The task is claimed and will never be done.* # **NOTHING IN SLACK DETECTS THIS.** → *see §6* |
 | # **Lost wakeup** | ### **PROMOTED TO §5 — it is the defining constraint, not one hazard among several.** |
 | # **Duplicate work from re-reads** | ### *A session restarting re-reads the channel and sees its OWN earlier request as new.* **Ignore messages whose `session:` is your own** — *and note that a raw session id CHANGES on restart, so a stable `CLAUDE_SESSION_NAME` is what makes self-recognition possible at all.* |
-| # **Edited messages** | ### *Slack keeps the original `ts` when a message is edited.* **Content can change under a reader that cached it. Re-read before acting on anything old.** |
+| # ⛔⛔ **NEVER CORRECT BY EDITING. POST A NEW MESSAGE.** | ### ✅ **MEASURED: an edited message keeps its ORIGINAL `ts`.** *So `oldest=<cursor>` will never return it again, and an edit has exactly two fates decided by poll timing alone:* # **poll lands BEFORE the edit → the watcher emits v1 and NEVER sees v2. The correction is lost forever.** # **poll lands AFTER → the watcher emits v2 and never knows v1 existed.** ## **AN EDIT IS EITHER SEEN OR LOST, NEVER SEEN AS AN EDIT.** ⚠ *`slack-watch` now renders `(edited@ts)` so a revised message cannot pass as an original — but nothing polling on `ts` can recover the lost case.* ★★ **AND THE WORST PART IS THE HUMAN ONE: an edited channel is one where the human transcript and the agent transcript have SILENTLY DIVERGED, and the human has no way to tell.** *Every correction issued during this skill's development went out as a new message. That is the only reason any of them arrived.* |
 
 ---
 
@@ -293,7 +317,42 @@ BUS TEST: threaded reply, ts passed as a QUOTED string.
 
 # ⛔ **SO THE HEARTBEAT IS NOT OPTIONAL INFRASTRUCTURE TO ADD LATER.** ### **It is the only thing that would make §6 mean anything at all.** *A long task must post `type: status` into its thread on a schedule; absence of that, not absence of a `done`, is the only usable staleness signal — and even it cannot distinguish a dead session from a session whose watcher died.*
 
-⚠ **Not implemented. §6 remains the weakest section in this file by a wide margin.**
+---
+
+## ★★ THE FIX: **PRESENCE, PUBLISHED BY THE WATCHER, PULLED AT DECISION TIME**
+
+### **A session cannot heartbeat for itself.** *It only executes during a turn, so anything it posts proves ACTIVITY — the very thing that was never the problem.* # **The WATCHER can**, *because it is a continuously running process whose lifetime tracks the session's under a persistent `Monitor`.*
+
+```bash
+node slack-watch.mjs --channel <id> --session <label> --heartbeat 60   # publish
+node slack-watch.mjs --channel <id> --presence                          # read the roster
+```
+
+**It maintains ONE presence message, refreshed in place with `chat.update`** *(same `ts`, no channel spam, needs only `chat:write`)*. **A roster read compares each `beat` against now:**
+
+```
+alive session-one   last beat  1s ago (every 5s)
+STALE session-two   last beat 94s ago (every 5s)
+```
+
+★ *Demonstrated: the same session, with the same silence on the channel, reported STALE at 29s and alive at 1s.* **That is the distinction §6 said was impossible.**
+
+# ⚠⚠ AND IT MUST BE **PULLED**, NOT PUSHED. THE THREE OPTIONS ARE NOT EQUAL.
+
+| **Edit in place** | ⛔ *Invisible to every watcher* — **an edit keeps the original `ts`, so `oldest=<cursor>` never returns it.** |
+| :-- | --- |
+| **New message per beat** | ⛔ *Visible, and it **destroys the bus**: 720 events/hour floods the Monitor, which rate-limits and stops watchers that flood.* **The heartbeat would kill the delivery mechanism it exists to support.** |
+| # **Pull on demand** | ### ✔ **The only one that works.** *A session evaluating a stale claim does a FULL read and looks at the beats then.* |
+
+## ★ **And that repairs §5's contradiction.** *"Re-read before acting on anything old" is UNEXECUTABLE through a watcher — a cursor poll can never surface an edit.* **But staleness is the one decision where you SHOULD pay for a full read**, so the advice is exactly right precisely where it is executable.
+
+⚠ **Match the beat rate to the staleness window, not to impatience** — *one a minute against a ten-minute N. Beating faster does not make liveness more true; it just costs.*
+
+## ⛔ WHAT PRESENCE PROVES, AND WHAT IT DOES NOT
+
+- **It proves the WATCHER PROCESS is alive.** *A session whose watcher runs while it is itself wedged still reads as alive.*
+- **A live session whose watcher died reads as dead.** *That error is the safe direction. The first one is not.*
+- # **This is a liveness SIGNAL, not a LEASE.** *It does not make §6 safe for anything where double-execution is destructive.*
 
 ---
 
@@ -303,8 +362,9 @@ BUS TEST: threaded reply, ts passed as a QUOTED string.
 - [x] **A parser** — *lives in `slack-watch.mjs`; reads the CONTEXT BLOCK ELEMENTS, → §1.*
 - [x] **A worked two-session test** — *§4 and §5 are no longer pure design.*
 - [ ] **`--to` and `--type` parameters** on `slack-post.mjs`, emitting routing as context elements. ⚠ **Until then addressing is prose in the body, which the parser CANNOT read** — *so `to:` filtering does not actually work yet.*
+- [x] # **A liveness signal** — ✅ **BUILT**, → §6. *`--heartbeat` publishes, `--presence` reads. §6 was "unprovable as written"; it now works, with its limits stated.*
+- [x] ★ **`--raw`, THE INSPECTOR** — *every message verbatim, no renderer in the path.* # **THE SINGLE HIGHEST-VALUE ADDITION OF THE DAY.** ### *Three times the fix for a visibility problem was itself invisible, and every one was caught by leaving the renderer behind and reading the payload.* **That discipline was working but unshipped — it meant writing a throwaway script each time.** ## *A rule asks for intention; a command asks for a keystroke.*
 - [ ] **A claim helper** doing post → re-read → decide, so the step that gets skipped is the step that is automated
-- [ ] **A liveness signal**, → §6. *Still the weakest part.*
 
 ## ⚠ WHAT THE TWO-SESSION TEST CHANGED
 

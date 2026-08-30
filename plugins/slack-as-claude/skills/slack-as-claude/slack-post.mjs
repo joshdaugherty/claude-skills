@@ -20,10 +20,43 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import { homedir, hostname, userInfo } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
 const API = 'https://slack.com/api/chat.postMessage';
+
+/**
+ * Which PLUGIN, at which version, produced this message - read from the plugin manifest
+ * beside this script. Rendered as `plugin: slack-as-claude 2.2.1`.
+ *
+ * ⚠ Named in full rather than a bare `v:`, because on a bus a bare version number is
+ * ambiguous: it could plausibly be the version of the repo being worked in, of Claude
+ * itself, or of the editor extension. It is none of those - it is the version of the
+ * SKILL PACKAGE that produced the message, and that is the only one that predicts what
+ * the sender can and cannot do.
+ *
+ * ⚠ Emitted on every message because VERSION SKEW IS OTHERWISE UNDETECTABLE FROM THE
+ * WIRE. Nothing else in the format says what a sender can do, so a peer meets a missing
+ * capability and can only read it as a defect - which happened: a session measured, and
+ * escalated, a feature that simply had not shipped to it yet.
+ *
+ * This is the same lesson as the authorisation rule in a different coat: DO NOT INFER A
+ * PEER'S CAPABILITIES FROM ITS BEHAVIOUR. The peer should be telling you.
+ */
+function pluginVersion() {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const manifest = join(here, '..', '..', '.claude-plugin', 'plugin.json');
+    if (!existsSync(manifest)) return null;
+    const m = JSON.parse(readFileSync(manifest, 'utf8'));
+    if (!m.version) return null;
+    return `${m.name || 'plugin'} ${m.version}`;
+  } catch {
+    /* a missing version is not worth failing a post over */
+  }
+  return null;
+}
 
 // --- token ------------------------------------------------------------------
 
@@ -276,6 +309,8 @@ if (!a['as-app']) {
   if (user) elements.push({ type: 'mrkdwn', text: `user: ${user}` });
   if (machine) elements.push({ type: 'mrkdwn', text: `machine: ${machine}` });
   elements.push({ type: 'mrkdwn', text: `os: ${osLabel()}` });
+  const plugin = pluginVersion();
+  if (plugin) elements.push({ type: 'mrkdwn', text: `plugin: \`${plugin}\`` });
 
   contextLine = elements.map((e) => e.text).join('  ');
 
