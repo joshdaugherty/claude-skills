@@ -565,18 +565,34 @@ if (a.doctor) {
   // sighting of a session is its most recent word: take that and ignore its history.
   // (An earlier version incremented a silent counter per MESSAGE, so one quiet peer
   // reported as "+18 not announcing" - a number that looks like a fleet.)
+  // ⚠ PEERS AND --presence MUST NOT DISAGREE ABOUT THE SAME DATA. An earlier version
+  // listed every label that had ever spoken, with no staleness filter, while --presence
+  // filtered on it. Harmless with a handful of test fixtures; not harmless later, because
+  // a channel ACCUMULATES DEAD SESSIONS PERMANENTLY - the peer list only ever grows, and
+  // the one line you read to answer "what are my peers running" fills with corpses.
+  // Two views of one dataset that disagree is the exact failure this skill keeps hitting.
+  const msgs = await recentMessages();
+  const now = Math.floor(Date.now() / 1000);
+  const live = new Map();
+  for (const m of msgs) {
+    const p = presenceOf(m);
+    if (p && (!live.has(p.session) || live.get(p.session).beat < p.beat)) live.set(p.session, p);
+  }
   const peers = new Map();
-  for (const m of await recentMessages()) {
+  for (const m of msgs) {
     const { meta } = parseMessage(m);
     if (!meta.session || meta.session === selfLabel || peers.has(meta.session)) continue;
-    peers.set(meta.session, meta.plugin ?? null);
+    const pr = live.get(meta.session);
+    const alive = pr ? now - pr.beat <= Math.max((pr.every || 60) * STALE_AFTER, STALE_FLOOR_SEC) : false;
+    peers.set(meta.session, { plugin: meta.plugin ?? null, alive, seen: !!pr });
   }
-  const announcing = [...peers].filter(([, v]) => v);
-  const silent = [...peers].filter(([, v]) => !v).map(([s]) => s);
-  console.log(
-    `PEERS      ${announcing.length ? announcing.map(([s, v]) => `${s}=${v}`).join(', ') : 'none announcing'}` +
-      `${silent.length ? ` | not announcing (necessarily older): ${silent.join(', ')}` : ''}`,
-  );
+  const fmt = ([s, v]) => `${s}=${v.plugin ?? '?'}`;
+  const alive = [...peers].filter(([, v]) => v.alive);
+  const dead = [...peers].filter(([, v]) => !v.alive);
+  console.log(`PEERS      ${alive.length ? alive.map(fmt).join(', ') : 'none live'}`);
+  if (dead.length) console.log(`           (stale/gone: ${dead.map(([s]) => s).join(', ')})`);
+  const quiet = alive.filter(([, v]) => !v.plugin).map(([s]) => s);
+  if (quiet.length) console.log(`           not announcing a version, necessarily older: ${quiet.join(', ')}`);
 
   // Verdict, by BYTES not by version number.
   console.log('');

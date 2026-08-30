@@ -56,6 +56,22 @@ the actual message body
 
 ---
 
+# ★★★ THE PRINCIPLE THAT KEEPS DECIDING THINGS: **BE LIBERAL IN WHAT YOU ACCEPT**
+
+### **Four separate outcomes in this design turned on it, which is enough to stop calling it a style preference:**
+
+| **Unknown message types** | *Rendered as* `!UNKNOWN` **rather than swallowed** — *so a peer's typo is visible instead of silently uncounted.* |
+| :-- | --- |
+| **Context elements** | *EVERY element parsed, **not a whitelist*** — *so a field added later still reaches a reader written earlier.* |
+| **Message subtypes** | **EXCLUDE known ones; never include-list.** *The idiomatic `if (m.subtype) continue` drops every `thread_broadcast` — and the code survived that only by luck of style.* |
+| **A takeover claim** | *Kept as `type: claim` rather than given its own type* — **a distinct type would be excluded from the claim ranking and would not compete at all.** |
+
+# ⛔ **THE FAILURE IS ALWAYS THE SAME SHAPE: a narrow reader silently discards something it did not expect, and the symptom is indistinguishable from the thing never having been sent.**
+
+★ *Three of those four were caught by measurement, not review. The fourth was avoided deliberately, having learned from the other three.*
+
+---
+
 # 2. WHAT THIS IS AND IS NOT
 
 | ✔ **Good for** | Handoff between long-lived sessions · a shared work queue · "I have taken this, do not duplicate" · progress a human can watch live · **coordination ACROSS MACHINES** |

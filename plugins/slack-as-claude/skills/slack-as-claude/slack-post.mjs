@@ -170,6 +170,7 @@ const { values: a } = parseArgs({
     broadcast: { type: 'boolean', default: false },
     to: { type: 'string' },
     type: { type: 'string' },
+    closes: { type: 'string' },
     project: { type: 'string' },
     user: { type: 'string' },
     machine: { type: 'string' },
@@ -321,6 +322,12 @@ if (!a['as-app']) {
   // "to:" out of an English sentence that merely discussed addressing.
   if (a.to) elements.push({ type: 'mrkdwn', text: `to: \`${a.to}\`` });
   if (a.type) elements.push({ type: 'mrkdwn', text: `type: \`${a.type}\`` });
+  // --closes names the claim a done/fail discharges, mirroring `supersedes:` on a
+  // takeover. Without it the audit trail is asymmetric: you can see what was OVERRIDDEN
+  // but not what was FULFILLED. In an ordinary thread the answer is recoverable - lowest
+  // ts, then done - but in a thread where a takeover happened it is NOT, and that is
+  // precisely the thread where you need to know which claim actually did the work.
+  if (a.closes) elements.push({ type: 'mrkdwn', text: `closes: \`${a.closes}\`` });
   if (project) elements.push({ type: 'mrkdwn', text: `project: \`${project}\`` });
   if (session) elements.push({ type: 'mrkdwn', text: `session: \`${session}\`` });
   if (user) elements.push({ type: 'mrkdwn', text: `user: ${user}` });
