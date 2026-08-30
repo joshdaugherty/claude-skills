@@ -47,7 +47,7 @@ curl -s https://mcp.slack.com/.well-known/oauth-authorization-server
 
 | # **READ as the human** | The 19 `mcp__slack__*` tools, on their user token. **Sees everything they can see.** |
 | :-- | --- |
-| # **POST as the app** | The bundled `slack-post.ps1` → `chat.postMessage` on the **bot** token. **Lands with an `APP` badge, as a different user id.** |
+| # **POST as the app** | The bundled `slack-post.mjs` → `chat.postMessage` on the **bot** token. **Lands with an `APP` badge, as a different user id.** |
 
 - **Route reads through the bot instead** and the agent goes blind to most of the workspace — *a bot only sees channels it was invited to.*
 - **Route posts through the user token instead** and every agent message is **indistinguishable from the human** in Slack's audit trail. *No badge, no "via app" — months later they cannot tell what they wrote from what the agent wrote.*
@@ -78,7 +78,7 @@ claude mcp add --transport http slack https://mcp.slack.com/mcp --scope user --c
 
 **A2.** `/mcp` → `slack` → authenticate. # **Then RESTART the session** *(→ trap 4).*
 
-**A3.** The user stashes the bot token: `setx SLACK_BOT_TOKEN "<the xoxb- token>"` → **§3**.
+**A3.** The user stashes the bot token — *`setx` on Windows, `export` in the profile elsewhere* → **§2**.
 
 # ✔ **Done. No Slack UI needed at all.**
 
@@ -151,7 +151,7 @@ claude mcp add --transport http slack https://mcp.slack.com/mcp --scope user --c
 
 ★ **No listener on the callback port is needed.** *Slack's reinstall completes server-side without bouncing through the redirect URL. A session once stood one up as insurance; it was never hit.*
 
-**c.** *OAuth & Permissions → **Bot User OAuth Token** (`xoxb-…`)* → user runs `setx SLACK_BOT_TOKEN "<token>"`.
+**c.** *OAuth & Permissions → **Bot User OAuth Token** (`xoxb-…`)* → user stashes it as `SLACK_BOT_TOKEN` (→ **§2**).
 
 ## B5 · Give the app an icon *(optional, but it is the app's face in every channel)*
 
@@ -171,15 +171,19 @@ python make-app-icon.py --emoji "🤖" --bg "#2C2D30" --out app-icon.png
 
 ---
 
-# 2. THE ENV VAR TRAP — READ THE REGISTRY, NOT `$env:`
+# 2. THE TOKEN, AND THE ENV VAR TRAP
 
-```powershell
-[Environment]::GetEnvironmentVariable('SLACK_BOT_TOKEN', 'User')
-```
+| **Windows** | `setx SLACK_BOT_TOKEN "xoxb-..."` |
+| :-- | --- |
+| **macOS / Linux** | `export SLACK_BOT_TOKEN="xoxb-..."` *in the shell profile* |
 
-### **`setx` writes to `HKCU\Environment`. A child process inherits its PARENT's environment block, and Claude Code's block was captured before `setx` ran — so `$env:SLACK_BOT_TOKEN` is EMPTY while the variable plainly exists.** *The bundled script already does this correctly.*
+# ⚠⚠ SETTING IT DOES NOT MAKE IT VISIBLE TO THE RUNNING SESSION.
 
-⚠ *macOS/Linux: exporting from a shell profile has the same trap for the same reason — a running process keeps its original block. Restart the session there.*
+### **A process inherits its PARENT's environment block at launch. Claude Code's was captured before you ran that command — so a lookup returns EMPTY while the variable plainly exists.** *This is not Windows-specific; the same is true of `export` on macOS and Linux.*
+
+★ **`slack-post.mjs` works around it on Windows** *by reading `HKCU\Environment` directly when `process.env` comes up empty* — **so a freshly-`setx`'d token works without restarting.** ⚠ *There is no equivalent trick on macOS/Linux: an `export` needs a restarted session, or pass the value inline.*
+
+⚠ **The three IDENTITY variables in §3 get no such workaround** — *they are read from `process.env` normally, so they DO need a restart.*
 
 ---
 
@@ -195,12 +199,14 @@ python make-app-icon.py --emoji "🤖" --bg "#2C2D30" --out app-icon.png
 
 ## Then
 
-```powershell
-& "<this skill's dir>\slack-post.ps1" -Channel <channel id> -Text "..."
+```bash
+node "<this skill's dir>/slack-post.mjs" --channel <channel id> --text "..."
 ```
 
-**`-ThreadTs <ts>`** replies in a thread — *get the `ts` from `mcp__slack__slack_read_channel`.*
-**`-DryRun`** prints the composed identity and sends nothing. **Use it before the first real post, and for every experiment.**
+★ **Node 18+, no dependencies** *(global `fetch`, `node:util` `parseArgs`)*. **Runs anywhere Claude Code does** — *which is the point: Claude Code is a Node program, so Node is present by construction. Python is not.*
+
+**`--thread-ts <ts>`** replies in a thread — *get the `ts` from `mcp__slack__slack_read_channel`.* # ⚠ **QUOTE IT** *(→ §THREADING below)*
+**`--dry-run`** prints the composed identity and sends nothing. **Use it before the first real post, and for every experiment.**
 
 **Success:** `Posted to C01234ABCDE as the app [project: `myrepo`  session: `cea6f85a`  user: Josh  machine: josh-pc  os: windows] - ts 1788096941.956549`
 
@@ -221,15 +227,15 @@ The actual message.
 
 | Element | Detected from | Override |
 | :-- | --- | --- |
-| **project** | git repo root's basename, else cwd | `-Project` |
-| **session** | `CLAUDE_SESSION_NAME`, else first 8 of `CLAUDE_CODE_SESSION_ID` | `-Session` |
-| **user** | Claude account `displayName` from `~/.claude.json`, else OS user | `-User` |
-| **machine** | `CLAUDE_SLACK_MACHINE`, else computer name | `-Machine` |
+| **project** | git repo root's basename, else cwd | `--project` |
+| **session** | `CLAUDE_SESSION_NAME`, else first 8 of `CLAUDE_CODE_SESSION_ID` | `--session` |
+| **user** | Claude account `displayName` from `~/.claude.json`, else OS user | `--user` |
+| **machine** | `CLAUDE_SLACK_MACHINE`, else hostname | `--machine` |
 | **os** | `windows` · `macos` · `linux` | — |
 
 **One element per facet, so SLACK does the spacing** — not a separator character you chose. *Labels are plain, identifiers are code-formatted.*
 
-⚠ **The user's EMAIL is opt-in** — `-UserEmail` or `CLAUDE_SLACK_USER_EMAIL=1` renders `Josh (josh@example.com)`. # **Do not make it the default.** ### *Every message is visible to the whole channel, and a skill installed by someone else must not stamp their address into their workspace because you did not think about it.*
+⚠ **The user's EMAIL is opt-in** — `--user-email` or `CLAUDE_SLACK_USER_EMAIL=1` renders `Josh (josh@example.com)`. # **Do not make it the default.** ### *Every message is visible to the whole channel, and a skill installed by someone else must not stamp their address into their workspace because you did not think about it.*
 
 ## ★ SETTING THE OVERRIDES — per call, or once and for all
 
@@ -237,36 +243,37 @@ The actual message.
 
 ### Per call — a parameter, for this message only
 
-```powershell
-& slack-post.ps1 -Channel C01234ABCDE -Text "..." `
-    -Project "billing-api" `
-    -Session "nightly-reindex" `
-    -User    "release-bot" `
-    -Machine "ci-runner-3" `
-    -UserEmail
+```bash
+node slack-post.mjs --channel C01234ABCDE --text "..." \
+    --project "billing-api" \
+    --session "nightly-reindex" \
+    --user    "release-bot" \
+    --machine "ci-runner-3" \
+    --user-email
 ```
 
 ### Persistent — an environment variable, for every message from this machine
 
 | Variable | Sets | Example |
 | :-- | --- | --- |
-| `CLAUDE_SESSION_NAME` | **session** — a human label instead of the raw id | `setx CLAUDE_SESSION_NAME "hart-audit"` |
-| `CLAUDE_SLACK_MACHINE` | **machine** — friendlier than a Windows default | `setx CLAUDE_SLACK_MACHINE "josh-pc"` |
-| `CLAUDE_SLACK_USER_EMAIL` | **user** — include the address (`1`/`true`/`yes`) | `setx CLAUDE_SLACK_USER_EMAIL 1` |
+| `CLAUDE_SESSION_NAME` | **session** — a human label instead of the raw id | `hart-audit` |
+| `CLAUDE_SLACK_MACHINE` | **machine** — friendlier than a Windows default | `josh-pc` |
+| `CLAUDE_SLACK_USER_EMAIL` | **user** — include the address (`1`/`true`/`yes`) | `1` |
 
-# ⚠⚠ `setx` DOES NOT AFFECT THE RUNNING SESSION.
+*Windows* `setx NAME "value"` · *macOS/Linux* `export NAME="value"` *in the shell profile.*
 
-### **It writes to `HKCU\Environment`, and Claude Code already captured its environment block at launch.** *A `$env:` read returns EMPTY while the variable plainly exists.* **Either restart the session, or pass the value as a parameter for now.** *(The script reads `SLACK_BOT_TOKEN` from the registry for exactly this reason — but the three variables above are read normally, so they do need a restart.)*
+# ⚠⚠ THESE THREE DO NOT AFFECT THE RUNNING SESSION.
 
-⚠ *macOS/Linux: same trap, same cause — export from the profile and restart.*
+### **They are read from `process.env`, which was inherited at launch — so setting one now changes nothing until the session restarts.** **Pass the equivalent flag instead for the current session.** *(`SLACK_BOT_TOKEN` is the exception: on Windows the script falls back to reading the registry, so that one takes effect immediately.)*
 
 ### Switches
 
-| `-DryRun` | **Compose and print, send nothing.** *Use for every experiment — see the deletion limit below.* |
+| `--dry-run` | **Compose and print, send nothing.** *Use for every experiment — see the deletion limit below.* |
 | :-- | --- |
-| `-NoContext` | Drop the context line; post a bare message under the app. |
-| `-AsApp` | Drop the whole identity apparatus. |
-| `-Username` · `-IconEmoji` | **Override the DISPLAY NAME and AVATAR.** ⚠ *The only options that need `chat:write.customize`.* |
+| `--no-context` | Drop the context line; post a bare message under the app. |
+| `--as-app` | Drop the whole identity apparatus. |
+| `--username` · `--icon-emoji` | **Override the DISPLAY NAME and AVATAR.** ⚠ *The only options that need `chat:write.customize`.* |
+| `--thread-ts` | Reply in a thread. ⚠ **Quote the value** *(→ §THREADING).* |
 
 # ★★ WHY IT ALL LIVES IN THE CONTEXT BLOCK
 
@@ -282,10 +289,16 @@ The actual message.
 
 ## ⚠ Two implementation traps, both SILENT
 
-- # **`ConvertTo-Json` DEFAULTS TO `-Depth 2`.** ### *Blocks nest four levels deep; at the default, inner objects serialise as .NET type names and Slack rejects or mangles the message.* **Always `-Depth 10`.**
 - # **KEEP `text` POPULATED ALONGSIDE `blocks`.** ### *It is what push notifications and unfurls read.* **Drop it and mobile alerts arrive silent and contentless** — *and nothing in the API response tells you.*
+- # **CHECK YOUR SERIALISER'S DEPTH LIMIT.** ### *Blocks nest four levels.* **A serialiser that truncates deep structures will mangle them silently** — *PowerShell's `ConvertTo-Json` defaults to depth 2 and emits type names instead of objects, which is why this skill is Node now.* `JSON.stringify` *has no such limit.*
 
-## ⚠ THE SCOPE NOTE — ONLY FOR `-Username` / `-IconEmoji`
+# ⚠⚠ §THREADING — QUOTE THE TIMESTAMP, ALWAYS
+
+### **A Slack `ts` like `1788097923.905509` has 16 significant digits. Any shell or language that coerces it to a float rounds it to** `1788097923.90551`. ## **Slack does not recognise that ts, IGNORES the threading, posts to the CHANNEL instead, and returns `ok: true`.** # **NOTHING REPORTS A PROBLEM.**
+
+★ *`slack-post.mjs` validates the format and refuses a mangled value, so this now fails loudly.* **Any other caller must quote it itself.**
+
+## ⚠ THE SCOPE NOTE — ONLY FOR `--username` / `--icon-emoji`
 
 ### **The default path overrides NOTHING, so plain `chat:write` covers it.** *Only the display-name and avatar overrides need `chat:write.customize`* — **and adding that scope is a scope change → reinstall → trap 3 → BOTH tokens rotate.** *Do not add it unless someone actually wants a custom display name.*
 
@@ -295,10 +308,13 @@ The actual message.
 
 ### ★ **So verify the TOKEN, not the response.** *Any Web API call returns the granted scopes in a response header:*
 
-```powershell
-$t = [Environment]::GetEnvironmentVariable('SLACK_BOT_TOKEN','User')
-$r = Invoke-WebRequest -Uri 'https://slack.com/api/auth.test' -Method Post -Headers @{ Authorization = "Bearer $t" } -UseBasicParsing
-$r.Headers['X-OAuth-Scopes']
+```bash
+curl -s -D - -o /dev/null -X POST https://slack.com/api/auth.test \
+  -H "Authorization: Bearer $SLACK_BOT_TOKEN" | grep -i '^x-oauth-scopes:'
+```
+
+```bash
+node -e 'fetch("https://slack.com/api/auth.test",{method:"POST",headers:{Authorization:"Bearer "+process.env.SLACK_BOT_TOKEN}}).then(r=>console.log(r.headers.get("x-oauth-scopes")))'
 ```
 
 # **If `chat:write.customize` is not in that list, the override cannot work — no matter what the post returned.**
@@ -353,7 +369,7 @@ Slack: post progress to #build-notifications (C01234ABCDE) via the slack-as-clau
 
 ### **The server advertises its full tool set regardless of what the token can do; the scope check happens at CALL time.** *With the B1 manifest, `create_conversation` and the canvas WRITE tools fail — `channels:write` and `canvases:write` are not granted. Widening means a manifest edit and a re-auth (→ trap 3).*
 
-⚠ # **`send_message` EXISTS AND WORKS — AND POSTS AS THE HUMAN.** ### *That is the whole reason `slack-post.ps1` exists. Reach for the script whenever the message is from the agent; reach for `send_message` only when the human is genuinely the author.*
+⚠ # **`send_message` EXISTS AND WORKS — AND POSTS AS THE HUMAN.** ### *That is the whole reason `slack-post.mjs` exists. Reach for the script whenever the message is from the agent; reach for `send_message` only when the human is genuinely the author.*
 
 ★ *`schedule_message` is present but absent from Slack's published tool list — do not assume the docs enumerate the server exhaustively.*
 
@@ -369,12 +385,14 @@ Slack: post progress to #build-notifications (C01234ABCDE) via the slack-as-clau
 
 **The posting mechanism is just an HTTPS POST to `chat.postMessage` with a bearer token.** *Nothing about the payload, the context-block design or the element structure is machine-bound.* **`project` resolves from the cloned repo; `session` from `CLAUDE_CODE_SESSION_ID`; `user` from `~/.claude.json` in an authenticated session.**
 
-## ⛔ What is known to break
+★ **The poster is Node with no dependencies, so the LANGUAGE is no longer a blocker.** *It was PowerShell; a Linux sandbox has no `pwsh`. Node is present wherever Claude Code runs.*
 
-| # **`slack-post.ps1` IS POWERSHELL** | ### **Cloud sandboxes are Linux and will not have `pwsh`.** *This is the hard blocker — the script simply will not run.* **A portable poster (curl + jq, or Python) is the fix, and it does not exist yet.** |
+## ⛔ What is still expected to break
+
+| # **THE TOKEN HAS TO GET THERE** | ### *`SLACK_BOT_TOKEN` is set on one specific workstation.* **A cloud environment needs it injected through ITS OWN secret mechanism.** ⛔ *Never by copying it into a repo, a script, or a prompt.* ⚠ *The Windows registry fallback is irrelevant there — it will be a plain env var or nothing.* |
 | :-- | --- |
-| # **`SLACK_BOT_TOKEN` VIA `setx`** | ### *Registry-based, Windows-only, and set on one specific box.* **The token has to reach the cloud environment through ITS OWN secret mechanism.** ⛔ *Never by copying it into a repo, a script, or a prompt.* |
 | # **THE MCP SERVER IS NOT THERE** | ### *`slack` is registered in one machine's `~/.claude.json` at `--scope user`.* **A cloud session starts with its own config and has NO Slack tools** — reads need the whole registration and OAuth round trip again. ★ *Posting needs only the bot token; READING is the expensive half.* |
+| # **`~/.claude.json` MAY DIFFER** | ### *The `user` element reads `oauthAccount` from it.* **If the shape differs or the file is absent the script falls back to the OS user** — *which in a container is often `root`.* |
 
 ## ⚠ What silently changes MEANING rather than breaking
 
