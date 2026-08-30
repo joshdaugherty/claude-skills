@@ -168,6 +168,7 @@ const { values: a } = parseArgs({
     text: { type: 'string' },
     'thread-ts': { type: 'string' },
     broadcast: { type: 'boolean', default: false },
+    'no-broadcast': { type: 'boolean', default: false },
     to: { type: 'string' },
     type: { type: 'string' },
     closes: { type: 'string' },
@@ -195,11 +196,22 @@ if (a.help || !a.channel || a.text === undefined) {
   console.error(
     'usage: node slack-post.mjs --channel <id> --text "..." [--thread-ts <ts>]\n' +
       '       [--to X] [--type X] [--project X] [--session X] [--user X] [--machine X]\n' +
+      '       [--closes <ts>] [--broadcast] [--no-broadcast]\n' +
       '       [--user-email] [--username X] [--icon-emoji :x:]\n' +
       '       [--no-context] [--as-app] [--dry-run]\n' +
       '\n' +
-      '  --to / --type  routing for a session bus, emitted as context elements so a\n' +
-      '                 reader can parse them. Putting them in the body does not work.',
+      '  --to / --type   routing for a session bus, emitted as context elements so a\n' +
+      '                  reader can parse them. Putting them in the body does not work.\n' +
+      '                  type: request reply claim done fail status, or an x- prefix.\n' +
+      '  --closes <ts>   which claim a done/fail discharges. Mirrors supersedes: on a\n' +
+      '                  takeover - without it a thread records what was overridden\n' +
+      '                  but not what was fulfilled.\n' +
+      '  --broadcast     also place a threaded reply in the CHANNEL timeline, where a\n' +
+      '                  poller can see it. AUTOMATIC for done/fail/claim in a thread.\n' +
+      '  --no-broadcast  suppress that. A threaded reply no watcher can see is how a\n' +
+      '                  finished task ends up looking permanently open.\n' +
+      '  --thread-ts     QUOTE THE TIMESTAMP. Unquoted, a shell rounds it to a float and\n' +
+      '                  Slack silently ignores the threading.',
   );
   process.exit(a.help ? 0 : 1);
 }
@@ -292,10 +304,24 @@ if (a['thread-ts']) {
   payload.thread_ts = a['thread-ts'];
 
   // A threaded reply is NOT in the channel timeline, so conversations.history - and
-  // therefore any cursor-based watcher - structurally cannot see it. Use --broadcast for
-  // anything a peer must not miss (done, fail, a decision), or it lands somewhere no
-  // poller looks and the task appears permanently open.
-  if (a.broadcast) payload.reply_broadcast = true;
+  // therefore any cursor-based watcher - structurally cannot see it.
+  //
+  // ⛔ SO DECISION-CHANGING TYPES BROADCAST BY DEFAULT. Leaving this opt-in was a live
+  // bug: slack-claim broadcast its claims, this path did not, and a `done` posted here
+  // was invisible to every watcher on the bus. Exactly backwards - a claim says someone
+  // MIGHT be working; a done says the task is OFF THE BOARD. The message that closes a
+  // task was the one nobody received. It compounded with --closes, whose whole purpose
+  // is audit, being emitted only through the invisible path.
+  //
+  // ★ And note HOW it survived: thread-blindness was found on the CLAIM path, fixed
+  // there, and verified there. The done path shared the bug and was never re-tested.
+  // A fix verified only on the path that reported the bug leaves its siblings broken.
+  //
+  // This is the push/pull rule made structural instead of documented: push what changes
+  // what someone should DO (claim, done, fail); leave status and progress to be pulled.
+  const DECISION_TYPES = ['done', 'fail', 'claim'];
+  const decisionInThread = a['thread-ts'] && DECISION_TYPES.includes(a.type);
+  if ((a.broadcast || decisionInThread) && !a['no-broadcast']) payload.reply_broadcast = true;
 }
 
 let contextLine = '';

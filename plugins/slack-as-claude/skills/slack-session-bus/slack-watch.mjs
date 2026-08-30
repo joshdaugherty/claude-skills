@@ -32,6 +32,26 @@ const HISTORY = 'https://slack.com/api/conversations.history';
 // the sender believes it claimed. Flag it loudly rather than letting it pass as noise.
 const KNOWN_TYPES = ['request', 'reply', 'claim', 'done', 'fail', 'status'];
 
+// ⚠ A BUS ACCUMULATES IDENTITIES AND NEVER RETIRES THEM. Every label that ever spoke is
+// a peer forever: dead sessions, one-off test fixtures, a name used once by mistake.
+//
+// ⛔⛔ BUT SILENCE IS NOT EVIDENCE OF ABSENCE, AND THIS IS EASY TO GET WRONG. A
+// long-lived session can be perfectly alive and simply have nothing to say for hours.
+// Ageing it out would declare it gone for the crime of being quiet.
+//
+// So the three states are distinguished by WHAT THE SESSION PROMISED, not by silence:
+//
+//   BEATING             -> alive. It said it would beat, and it is.
+//   BEAT AND STOPPED    -> STALE. Silence is meaningful ONLY here, because it broke a
+//                          promise it made. This is still an inference, not proof.
+//   NEVER BEAT          -> quiet. Status UNKNOWN. It never promised anything, so its
+//                          silence says nothing at all - it may be idle and healthy.
+//
+// Age-out therefore applies to DISPLAY of quiet sessions only. It never frees a claim:
+// only an announced retirement (positive evidence) or a broken heartbeat promise
+// (inference, with a stated timeout) can do that. See slack-claim.mjs.
+const GONE_AFTER_DEFAULT = 14400;
+
 /**
  * This watcher's own plugin version, for comparison against senders'.
  *
@@ -86,6 +106,12 @@ const { values: a } = parseArgs({
     presence: { type: 'boolean', default: false },
     raw: { type: 'boolean', default: false },
     doctor: { type: 'boolean', default: false },
+    all: { type: 'boolean', default: false },
+    'gone-after': { type: 'string' },
+    retire: { type: 'boolean', default: false },
+    releases: { type: 'string' },
+    ping: { type: 'string' },
+    wait: { type: 'string', default: '45' },
     'ignore-session': { type: 'string', multiple: true, default: [] },
     'include-self': { type: 'boolean', default: false },
     once: { type: 'boolean', default: false },
@@ -99,9 +125,24 @@ if (a.help || !a.channel) {
       '       [--session <label>] [--heartbeat <sec>] [--presence] [--raw]\n' +
       '       [--ignore-session <label>]... [--include-self] [--once]\n' +
       '\n' +
-      '  --heartbeat  publish liveness for --session, refreshed in place. Match the rate\n' +
-      '               to the staleness window you care about, not to impatience.\n' +
+      '       [--heartbeat <sec>] [--retire] [--releases <ts,ts>] [--all]\n' +
+      '       [--ping <session>] [--wait <sec>] [--gone-after <sec>]\n' +
+      '\n' +
+      '  --heartbeat <sec>  publish liveness for --session, refreshed in place. Match the\n' +
+      '               rate to the staleness window you care about, not to impatience.\n' +
       '  --presence   read the roster: who is alive, who is STALE. Pull, not push.\n' +
+      '  --all        also list sessions not seen recently, which --presence hides.\n' +
+      '               NOT SEEN IS NOT GONE: a long-lived session can be quietly alive.\n' +
+      '  --gone-after <sec>  how long before a quiet session is hidden (default 14400).\n' +
+      '  --ping <session>  ask ONE session BY NAME if it is there, and wait for a pong.\n' +
+      '               A PONG IS PROOF. NO PONG IS NOT EVIDENCE. A broadcast ping measures\n' +
+      '               nothing - every correctly-filtering session stays silent and so\n' +
+      '               reads as dead. A named session must answer unconditionally.\n' +
+      '  --wait <sec>  how long to wait for that pong (default 45).\n' +
+      '  --retire     announce departure, then delete your presence message. POSITIVE\n' +
+      '               evidence of absence, so a peer can skip the staleness timeout\n' +
+      '               instead of inferring it from silence.\n' +
+      '  --releases <ts,ts>  claims you are handing back as you retire.\n' +
       '  --doctor     Am I behind? Compares RUNNING / INSTALLED / AVAILABLE / PEERS by\n' +
       '               BYTES, not version numbers, and prints what to ask a human for.\n' +
       '  --raw        INSPECTOR. Every message verbatim - raw ts, edited, every context\n' +
@@ -128,6 +169,7 @@ if (!token) {
 }
 
 const intervalMs = Math.max(5, Number(a.interval) || 30) * 1000;
+const GONE_AFTER_SEC = Math.max(60, Number(a['gone-after']) || GONE_AFTER_DEFAULT);
 
 // A session should not react to its own messages: it would see its own request as
 // new work on the next restart. CLAUDE_SESSION_NAME (or the session id prefix) is
@@ -217,6 +259,7 @@ const STALE_AFTER = 2.5; // missed beats before a session is considered gone
 // TOLERANCE - a fast heartbeat is MORE evidence of life and was punished for it, and one
 // scheduler hiccup would kill it. Declaring an aggressive rate must not make you fragile.
 const STALE_FLOOR_SEC = 90;
+
 
 async function slackPost(method, body) {
   return fetch(`https://slack.com/api/${method}`, {
@@ -315,7 +358,12 @@ async function roster() {
     console.log('no presence messages found - no session is publishing a heartbeat');
     return;
   }
+  const nowSec = Math.floor(Date.now() / 1000);
+  const gone = [...seen].filter(([, p]) => p.beat && nowSec - p.beat > GONE_AFTER_SEC);
   for (const [label, p] of [...seen].sort()) {
+    // Aged out: not listed. A session silent for an hour is not "stale", it is gone, and
+    // listing it forever is what turns a roster into a graveyard.
+    if (!a.all && p.beat && nowSec - p.beat > GONE_AFTER_SEC) continue;
     // A presence message with no usable beat is MALFORMED, not ancient. Reporting it
     // as "last beat 1788104193s ago" is arithmetic on a missing field dressed up as a
     // measurement, and it reads like a real observation about a real session.
@@ -331,8 +379,14 @@ async function roster() {
     const state = age > limit ? 'STALE' : 'alive';
     console.log(`${state.padEnd(5)} ${label.padEnd(16)} last beat ${age}s ago (every ${p.every}s)`);
   }
+  if (gone.length && !a.all) {
+    console.log(`\n${gone.length} session(s) aged out after ${GONE_AFTER_SEC}s and are not listed: ${gone.map(([s]) => s).join(', ')}`);
+    console.log('Pass --all to see them. They are omitted because a roster that never forgets becomes a graveyard.');
+  }
   console.log('\nSTALE means the watcher stopped publishing - the session is gone, or its watcher died.');
   console.log('It does NOT prove the session is wedged, and alive does NOT prove it is responsive.');
+  console.log('A session that never published a heartbeat is not listed here AT ALL - absence from');
+  console.log('this roster means "not beating", never "not present".');
 }
 
 let cursor = a.since ?? null;
@@ -465,6 +519,170 @@ if (a.presence) {
 }
 
 /**
+ * --retire: delete this session's presence message, so its label leaves the roster at
+ * once instead of lingering as STALE until it ages out.
+ *
+ * ⚠ AN EXPLICIT COMMAND, BECAUSE SIGNAL HANDLERS DO NOT WORK HERE. On Windows SIGTERM is
+ * not a POSIX signal - the process is terminated without a JS-visible event, so an exit
+ * handler never runs. Measured: a watcher killed with SIGTERM left its presence message
+ * untouched and printed nothing. A Monitor's TaskStop kills the same way, which is how
+ * watchers usually die.
+ *
+ * So retirement is something a session DOES before stopping, not something it hopes will
+ * happen on the way out - and AGE-OUT still carries the weight, because a crashed session
+ * runs no commands at all.
+ */
+/**
+ * --ping <session>: ask a peer whether it is actually there, and wait for an answer.
+ *
+ * ★★ THIS IS THE ONLY MECHANISM HERE THAT TESTS RESPONSIVENESS RATHER THAN INFERRING IT.
+ * Presence proves a WATCHER PROCESS is running - §6 says plainly that a session wedged
+ * behind a live watcher reads alive and nothing can tell you. A pong can, because it only
+ * exists if the session WOKE AND ACTED.
+ *
+ * ⛔ THE PONG MUST COME FROM THE SESSION, NOT THE WATCHER. An auto-reply in the poller
+ * would prove only that the poller is alive, which presence already tells you - it would
+ * look like new evidence while carrying none. That is the single most repeated failure in
+ * this whole design, and here it would be built in on purpose.
+ *
+ * ⚠ Silence still is not proof, and it has MORE causes than it looks:
+ *
+ *   1. the session does not exist
+ *   2. it is dead, or mid-turn, or running no watcher
+ *   3. IT IS ALIVE, WELL, AND CORRECTLY DECLINING - because §3 puts to: filtering on the
+ *      reader, so a session obeying the addressing convention stays quiet
+ *
+ * Cause 3 is produced by the protocol WORKING, and it is why:
+ *
+ *   ⛔ A BROADCAST PING MEASURES NOTHING. Every correctly-filtering session stays silent
+ *      and reads as dead. Ping ONE session BY NAME, and require that a named session
+ *      answers UNCONDITIONALLY - a conditional answer makes silence meaningless again.
+ */
+if (a.ping) {
+  const target = a.ping;
+  const waitSec = Math.max(5, Number(a.wait) || 45);
+  const sent = await slackPost('chat.postMessage', {
+    channel: a.channel,
+    text: `ping: ${target}`,
+    blocks: [
+      {
+        type: 'context',
+        elements: [
+          { type: 'mrkdwn', text: 'type: `x-ping`' },
+          { type: 'mrkdwn', text: `to: \`${target}\`` },
+          { type: 'mrkdwn', text: `session: \`${selfLabel ?? 'unknown'}\`` },
+          // ⚠ EVERY hand-built context block must carry this. A path that omits it makes
+          // its messages read as `plugin=?`, which the degradation rule interprets as
+          // "older than the version that started announcing" - a confident and WRONG
+          // inference about a current sender. This block shipped without it.
+          ...(OWN_PLUGIN ? [{ type: 'mrkdwn', text: `plugin: \`${OWN_PLUGIN}\`` }] : []),
+        ],
+      },
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `*${target}, are you there?* Reply with \`--type x-pong\` if you are. ` +
+            'No answer within the window is not proof of death - you may simply be mid-turn.',
+        },
+      },
+    ],
+  });
+  if (!sent.ok) {
+    console.error(`Could not send ping: ${sent.error}`);
+    process.exit(2);
+  }
+  console.log(`Pinged "${target}" at ${sent.ts}. Waiting up to ${waitSec}s...`);
+
+  const deadline = Date.now() + waitSec * 1000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 5000));
+    for (const m of await recentMessages(50)) {
+      if (Number(m.ts) <= Number(sent.ts)) continue;
+      const mm = parseMessage(m).meta;
+      if (mm.type === 'x-pong' && mm.session === target) {
+        const rtt = (Number(m.ts) - Number(sent.ts)).toFixed(1);
+        console.log(`PONG from "${target}" after ${rtt}s. It is awake and responsive.`);
+        console.log('That is stronger than presence: presence proves a watcher runs, a pong');
+        console.log('proves the SESSION woke and acted.');
+        process.exit(0);
+      }
+    }
+  }
+  console.log(`No pong from "${target}" within ${waitSec}s. THIS IS NOT EVIDENCE OF ABSENCE.`);
+  console.log('  - it may not exist');
+  console.log('  - it may be dead, mid-turn, or running no watcher');
+  console.log('  - it may be alive and well but not answering unconditionally, which is the');
+  console.log('    one cause you would never guess: obeying the addressing convention looks');
+  console.log('    identical to being dead.');
+  console.log('Check --presence: beating + no pong is the wedged signature.');
+  process.exit(1);
+}
+
+if (a.retire) {
+  if (!selfLabel) {
+    console.error('--retire needs a label: pass --session, or set CLAUDE_SESSION_NAME.');
+    process.exit(1);
+  }
+
+  // ★★ RETIREMENT IS POSITIVE EVIDENCE OF ABSENCE, AND IT IS THE ONLY SUCH SIGNAL ON THIS
+  // BUS. Every other absence signal here is an inference from SILENCE, which is why §6 is
+  // weak: silence is ambiguous between three states that need different responses.
+  //
+  //   FINISHED CLEANLY AND LEFT  -> its claims are free NOW
+  //   DIED HOLDING A CLAIM       -> probably free, but wait out the timeout first
+  //   ALIVE BUT WEDGED          -> NOT free, and nothing can tell you
+  //
+  // An earlier version implemented retirement as "delete the presence message", which
+  // produces a state BYTE-IDENTICAL to having died - collapsing the first two, so every
+  // takeover paid the full staleness timeout even when the holder had left a note saying
+  // it was done. Announcing first is what makes the difference legible.
+  //
+  // Broadcast, because it changes what a peer should DO (a held claim just became free).
+  const rel = (a.releases ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+  const elements = [
+    { type: 'mrkdwn', text: 'type: `x-retired`' },
+    { type: 'mrkdwn', text: `session: \`${selfLabel}\`` },
+  ];
+  if (rel.length) elements.push({ type: 'mrkdwn', text: `releases: \`${rel.join(' ')}\`` });
+  if (OWN_PLUGIN) elements.push({ type: 'mrkdwn', text: `plugin: \`${OWN_PLUGIN}\`` });
+
+  const announced = await slackPost('chat.postMessage', {
+    channel: a.channel,
+    text: `retired: ${selfLabel}`,
+    reply_broadcast: true,
+    blocks: [
+      { type: 'context', elements },
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: rel.length
+            ? `Leaving cleanly and releasing ${rel.length} claim(s): \`${rel.join('`, `')}\`. ` +
+              'These are free immediately - a taker does not need to wait out the staleness timeout.'
+            : 'Leaving cleanly. No claims declared as held; anything I did hold should be treated as released.',
+        },
+      },
+    ],
+  });
+  if (!announced.ok) console.error(`  could not announce retirement: ${announced.error}`);
+
+  // Only NOW remove presence. The announcement is the durable record; presence is
+  // ephemeral status and is what would otherwise linger as STALE.
+  let removed = 0;
+  for (const m of await recentMessages()) {
+    const p = presenceOf(m);
+    if (!p || p.session !== selfLabel) continue;
+    const res = await slackPost('chat.delete', { channel: a.channel, ts: m.ts });
+    if (res.ok) removed++;
+    else console.error(`  could not delete ${m.ts}: ${res.error}`);
+  }
+  console.log(`Retired "${selfLabel}": announced${rel.length ? ` (releasing ${rel.length} claim(s))` : ''}, removed ${removed} presence message(s).`);
+  console.log('Claims and dones stay in their threads: this discards STATUS, never history.');
+  process.exit(0);
+}
+
+/**
  * Inspector mode. Dumps every message verbatim: raw ts, edited, subtype, every context
  * element exactly as sent, and the undecoded body.
  *
@@ -583,6 +801,15 @@ if (a.doctor) {
     const { meta } = parseMessage(m);
     if (!meta.session || meta.session === selfLabel || peers.has(meta.session)) continue;
     const pr = live.get(meta.session);
+    // Aged out entirely - not a peer, not a corpse, just forgotten. Same threshold the
+    // roster uses, because the two views must never disagree about who exists.
+    //
+    // ⚠ Age on LAST ACTIVITY, not just on a beat. A session that never published
+    // presence has no beat to age, so a beat-only check would keep it forever - and a
+    // one-off label that posted once and vanished is exactly what fills a graveyard.
+    // msgs is newest-first and this is its first sighting, so m.ts is its last word.
+    const lastSeen = Math.max(pr?.beat ?? 0, Number(m.ts) || 0);
+    if (lastSeen && now - lastSeen > GONE_AFTER_SEC && !a.all) continue;
     const alive = pr ? now - pr.beat <= Math.max((pr.every || 60) * STALE_AFTER, STALE_FLOOR_SEC) : false;
     peers.set(meta.session, { plugin: meta.plugin ?? null, alive, seen: !!pr });
   }
@@ -672,6 +899,12 @@ if (heartbeatSec > 0) {
   }
   await beat(selfLabel, heartbeatSec);
   console.error(`[watch] publishing presence as "${selfLabel}" every ${heartbeatSec}s (read it with --presence)`);
+
+  // NOTE: there is deliberately NO exit handler here. SIGTERM is not a POSIX signal on
+  // Windows - the process dies without a JS-visible event, so a handler never runs, and
+  // a Monitor's TaskStop kills the same way. Shipping a safeguard that silently never
+  // fires is worse than shipping none: it invites everyone to rely on it. Retire with
+  // the explicit --retire command, and rely on age-out for sessions that crash.
   // Deliberately on its own timer rather than tied to the poll interval: how often you
   // check for messages and how often you prove you are alive are different questions.
   setInterval(() => beat(selfLabel, heartbeatSec), heartbeatSec * 1000).unref?.();

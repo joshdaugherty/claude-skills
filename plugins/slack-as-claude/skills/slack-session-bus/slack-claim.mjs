@@ -162,6 +162,25 @@ async function resolutions() {
     .filter((m) => m.type === 'done' || m.type === 'fail');
 }
 
+/**
+ * Has this session ANNOUNCED that it left? Returns the newest x-retired ts, or null.
+ *
+ * ★ This is the one POSITIVE signal of absence on the bus. Everything else - a stale
+ * heartbeat, silence - is an inference, and inference costs a timeout. A session that
+ * said it was leaving frees its claims IMMEDIATELY, because there is nothing to wait for.
+ */
+async function retirementOf(session) {
+  const res = await api(HISTORY, { channel: a.channel, limit: '200' });
+  if (!res.ok) return null;
+  let newest = null;
+  for (const m of res.messages ?? []) {
+    const mm = meta(m);
+    if (mm.type !== 'x-retired' || mm.session !== session) continue;
+    if (!newest || Number(m.ts) > Number(newest.ts)) newest = { ts: m.ts, releases: mm.releases ?? '' };
+  }
+  return newest;
+}
+
 /** Liveness for one session, from its presence message. §6: an idle session is otherwise
  *  byte-identical to a dead one holding a claim. */
 async function livenessOf(session) {
@@ -199,7 +218,19 @@ const holder = before.slice().sort((x, y) => Number(x.ts) - Number(y.ts))[0] ?? 
 let supersede = null;
 
 if (holder && holder.session !== label) {
-  const live = await livenessOf(holder.session);
+  // Retirement first: it is positive evidence, so it does not need a timeout. Only fall
+  // back to the staleness judgement if the holder never said it was going.
+  const retired = await retirementOf(holder.session);
+  const retiredAfterClaim = retired && Number(retired.ts) > Number(holder.ts);
+
+  const live = retiredAfterClaim ? null : await livenessOf(holder.session);
+  if (retiredAfterClaim) {
+    supersede = holder.session;
+    takeoverReason = 'retired';
+    takeoverEvidence = retired.ts;
+    console.log(`${holder.session} held claim ${holder.ts} and RETIRED at ${retired.ts}.`);
+    console.log('That is an announced departure, not a timeout: the claim is free immediately.');
+  } else {
   const state = !live ? 'no presence published' : live.alive ? `alive, last beat ${live.age}s ago` : `STALE, last beat ${live.age}s ago`;
   if (live?.alive || a['ignore-stale'] || !live) {
     console.log(`HELD BY ${holder.session} (claim ${holder.ts}) - ${state}.`);
@@ -210,8 +241,9 @@ if (holder && holder.session !== label) {
   supersede = holder.session;
   console.log(`${holder.session} holds claim ${holder.ts} but is ${state}.`);
   console.log('Taking it over. This is a JUDGEMENT from a timeout, not proof that session is dead:');
-  console.log('a wedged session behind a running watcher reads alive, and a live session whose');
-  console.log('watcher died reads stale. Do not do this where double-execution is destructive.');
+    console.log('a wedged session behind a running watcher reads alive, and a live session whose');
+    console.log('watcher died reads stale. Do not do this where double-execution is destructive.');
+  }
 }
 
 if (a['dry-run']) {

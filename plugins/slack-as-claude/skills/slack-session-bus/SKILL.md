@@ -1,15 +1,21 @@
 ---
 name: slack-session-bus
-description: Use when two or more concurrent Claude sessions need to talk to each other, hand off work, or avoid doing the same task twice — using a Slack channel as the bus. Covers the wire format, addressing, the claim protocol that makes races deterministic, staleness, and what polling can and cannot do. DRAFT — the protocol is designed, not yet proven in use.
+description: Use when two or more concurrent Claude sessions need to talk to each other, hand off work, or avoid doing the same task twice — using a Slack channel as the bus. Covers the wire format, addressing, the claim protocol that makes races deterministic, liveness and staleness, and what a poller can and cannot see. Exercised by two concurrent sessions against a live workspace; the limits it still has are stated rather than hidden.
 ---
 
 # Slack as a bus between concurrent Claude sessions
 
-# ⚠ STATUS: DRAFT, BUT NO LONGER SPECULATIVE.
+# ⚠ STATUS: EXERCISED, NOT FINISHED.
 
-### **§1, §4 and §5 were exercised by two concurrent sessions against a live workspace, and they hold.** *Claiming resolved identically from both vantage points; delivery works once each session arms a watcher.*
+### **§1 · §3 · §4 · §5 · §6 were all run by two concurrent sessions against a live workspace.** *Claiming resolves identically from both vantage points; delivery works once each session arms a watcher; routing filters; liveness answers.*
 
-# ⛔ STILL UNPROVEN: **§3 addressing** *(the `to:`/`type:` flags do not exist yet, so filtering does not actually work)*, **§6 staleness** *(no liveness signal at all)*, **and the claim protocol with an UNPROMPTED agent** — *the test session was told to follow it.*
+# ⛔ WHAT IS STILL NOT PROVEN, STATED PLAINLY:
+
+- **The lexical tiebreak (§5b)** — *unreached, and unreachable from this transport: it fires only on EQUAL timestamps and Slack does not produce them.* **Unit-test it or drop it.**
+- **The claim protocol with an UNPROMPTED agent** — *every test session was told to follow it.*
+- **Anything at scale.** *Two sessions, one afternoon, one channel.*
+
+★ **ELEVEN defects were found here, and essentially all of them by USING the thing rather than reading it.** ⚠ *Five were the author's own path diverging from the documented one — see §7.*
 
 **Prerequisite: the `slack-as-claude` skill, fully set up.** *This adds a protocol on top of its posting script and the MCP read tools; it adds no new Slack configuration.*
 
@@ -123,7 +129,15 @@ the actual message body
 
 ★ *This is the AUTHORISATION rule in a different coat: the peer should be telling you, not you inferring.* **And it is the fourth face of the same problem** — *repo, cache, resident, and now PEER VERSION. Every one was invisible until somebody measured, and every one presented as a protocol fault.*
 
-★ **`plugin=?` is itself the skew signal, and it was not designed — it falls out of the format.** *A sender that does not announce a version cannot be newer than the version that started announcing.* # **A genuine one-way inference from an ABSENCE, and there are very few of those here.**
+★ **`plugin=?` is itself a skew signal, and it was not designed — it falls out of the format.** *A sender that does not announce a version cannot be newer than the version that started announcing.*
+
+# ⚠⚠ BUT THAT INFERENCE IS SOUND **ONLY IF ANNOUNCING IS UNCONDITIONAL**
+
+### **The moment a sender can announce SOMETIMES, `plugin=?` stops meaning "old" and starts meaning "old, OR misconfigured, OR a different code path, OR a one-off".**
+
+★ *Caught in the act: a newly added `--ping` built its context block by hand and forgot the element, so every ping from a CURRENT sender read as `plugin=?` — and the rule confidently classified it as ancient.* # **A wrong answer, produced by a correct rule, from an incomplete input.**
+
+## ⛔ **SO: EVERY hand-built context block MUST carry `plugin:`.** *One path that omits it poisons the inference for every message through it.* ⚠ *Audit new senders against the existing ones; the failure is invisible from the sending side.*
 
 # ⛔⛔ THE RECURSION HAS A FLOOR, AND IT IS NOT CODE
 
@@ -384,7 +398,7 @@ node slack-post.mjs --thread-ts "<ts>" --broadcast --type done --text "..."
 
 | # **Double claim** | ### ✅ **RESOLVED, AND OBSERVED WORKING.** *Two sessions claimed one task; the second re-read, computed the same winner from the `ts` values, and stood down citing both.* **Independent agreement from two vantage points — the thing that would have sunk §4.** ⚠ **Only if BOTH re-read.** *And note the second session was TOLD to follow the protocol; an unprompted agent skipping step 3 is still untested.* |
 | :-- | --- |
-| # **Equal timestamps** | ### *Slack `ts` values carry microseconds and a per-channel counter, so ties are vanishingly unlikely — but a protocol that only ALMOST always agrees is a protocol that fails rarely and confusingly.* **Tiebreak on `session:` lexically. Deterministic, and costs one line.** |
+| # **Equal timestamps** | ### **TS ORDERING PROVEN. LEXICAL TIEBREAK UNREACHED.** *A race where the two rules DISAGREED — earlier `ts`, later name — was won by `ts`, as predicted before the verdict.* # ⚠ **But the tiebreak branch never executed and cannot: it fires only on EQUAL timestamps, and the claims differed by 10.3ms.** ## **Slack does not produce equal timestamps, so this branch is unreachable from the transport. UNIT-TEST IT OR DROP IT — do not call it covered.** ★ *An earlier changelog line said "tiebreak proven", which is how an unreachable branch acquires a reputation for being tested: two releases on, the distinction is gone and all anyone remembers is that it was proven.* |
 | # ⚠⚠ **The dead claimant** | ### **A session claims, then its process ends.** *The task is claimed and will never be done.* # **NOTHING IN SLACK DETECTS THIS.** → *see §6* |
 | # **Lost wakeup** | ### **PROMOTED TO §5 — it is the defining constraint, not one hazard among several.** |
 | # **Duplicate work from re-reads** | ### *A session restarting re-reads the channel and sees its OWN earlier request as new.* **Ignore messages whose `session:` is your own** — *and note that a raw session id CHANGES on restart, so a stable `CLAUDE_SESSION_NAME` is what makes self-recognition possible at all.* |
@@ -445,6 +459,47 @@ STALE session-two   last beat 94s ago (every 5s)
 
 ⚠ **Match the beat rate to the staleness window, not to impatience** — *one a minute against a ten-minute N. Beating faster does not make liveness more true; it just costs.*
 
+# ★★★ AND THE ONLY POSITIVE SIGNAL: **ASK.** `--ping <session>`
+
+```bash
+node slack-watch.mjs --channel <id> --session me --ping other-session --wait 45
+→ PONG from "other-session" after 44.8s   exit 0
+→ no pong within 45s                      exit 1
+```
+
+### **A PONG IS PROOF. NO PONG IS NOT EVIDENCE.** *That asymmetry is the entire character of it, and nothing else on this bus has the first half.*
+
+| **A heartbeat** | proves *a timer is running in a node process*. **It would keep beating if the session were wedged, looping, or refusing every instruction.** |
+| :-- | --- |
+| **A pong** | proves the session **RECEIVED** a message, **UNDERSTOOD** it was addressed to it, and **ACTED**. |
+
+## ★ **That is RESPONSIVENESS, which §6 explicitly says the roster cannot give you** — *"alive does NOT prove it is responsive"*. **`beating + no pong` is now the detectable signature of a wedged session.**
+
+# ⛔ THE PONG MUST COME FROM THE SESSION, NEVER THE WATCHER.
+
+### *An auto-reply in the poller would prove only that the poller is alive — which presence already tells you — while LOOKING like new evidence.* **That is this design's most-repeated failure, and building it in deliberately would be the worst instance of it.**
+
+⚠ *Round trips are slow (~45s observed): a session answers when its watcher next polls and wakes it. That is the real latency of this bus, not a defect.*
+
+# ⛔⛔ AND SILENCE HAS A THIRD CAUSE THAT THE PROTOCOL ITSELF CREATES
+
+### **Three live causes of "no pong", present in one channel at one moment:**
+
+| **1** | the session **does not exist** |
+| :-: | --- |
+| **2** | it is **dead, mid-turn, or running no watcher** |
+| **3** | # **IT IS ALIVE, WELL, AND CORRECTLY DECLINING** |
+
+## ★ **Cause 3 is produced by the protocol WORKING.** *§3 puts `to:` filtering on the READER, so a session obeying the addressing convention stays quiet.* # **Obeying the convention makes you look dead to anyone measuring liveness by pong.**
+
+⛔ **THEREFORE: A BROADCAST PING MEASURES NOTHING.** *Every correctly-filtering session is silent and reads as dead.*
+
+## ✔ **Ping ONE session BY NAME. And a named session must answer UNCONDITIONALLY** — *busy, sceptical, mid-task, it answers.* # **A conditional answer collapses the mechanism back into ambiguous silence**, *which is the thing it existed to escape.*
+
+★ *Found by a NEGATIVE test behaving correctly: a ping to `nobody` drew no reply, and so did a perfectly healthy peer, for entirely unrelated reasons. The test would have been read as "the negative case works" and it was hiding a third state.*
+
+---
+
 ## ⛔ WHAT PRESENCE PROVES, AND WHAT IT DOES NOT
 
 - **It proves the WATCHER PROCESS is alive.** *A session whose watcher runs while it is itself wedged still reads as alive.*
@@ -454,6 +509,43 @@ STALE session-two   last beat 94s ago (every 5s)
 ---
 
 # 7. STATE OF THE BUILD
+
+# ⛔⛔⛔ TEST WHAT THE FILE TELLS PEOPLE TO DO, NOT WHAT YOU HAPPEN TO RUN
+
+## **A BUG ON THE DOCUMENTED PATH IS INVISIBLE TO THE AUTHOR WHO USES A DIFFERENT ONE.**
+
+★ *Live example: `done` messages posted through the documented command were invisible to every watcher, for hours. The author never saw it — because the author wrote the `--broadcast` flag and reached for it by reflex every time. **From where they sat the mechanism worked perfectly.*** # **It survived not because nobody looked, but because the person best placed to find it was on the one path that did not have the bug.**
+
+### **FIVE of the ELEVEN defects found in this skill were the author's own path diverging from the documented one** — *the cached poster, the resident watcher, the whitelisted renderer, the unbroadcast done, the hand-built context block that dropped `plugin:`.*
+
+⚠ **So: run the exact command in the docs, from the installed copy, as a reader would.** *Not the one in your shell history.*
+
+---
+
+# ⛔⛔⛔ AND ITS CAUSE: **A CAPABILITY MISSING FROM `--help` DOES NOT EXIST FOR ANYONE BUT ITS AUTHOR**
+
+## **The second rule CREATES the first.** *An undocumented flag does not merely inconvenience a reader — it FORCES them onto the path the author never walks, which is exactly where the untested code is.*
+
+### **The chain, in four steps:**
+
+| **1** | A flag lands without its usage line. |
+| :-: | --- |
+| **2** | A reader cannot find it — **`--help` is the only surface a reader has.** |
+| **3** | The reader therefore takes the **documented** path. |
+| **4** | # **The documented path is the one with the bug.** |
+
+★ **Exactly what happened.** *`--broadcast` existed, worked, and was explained in a SOURCE COMMENT — and was absent from `--help`. So the author passed it by reflex and the reader could not know it was there. Not two versions, not two paths:* # **ONE BINARY WITH A CAPABILITY VISIBLE ONLY TO ITS AUTHOR.**
+
+⚠ **THREE flags shipped this way in one afternoon** — *`--replay`, `--closes`, `--broadcast`. The first two were filed as tidiness.* **The third broke the protocol and cost forty minutes.** ### *An audit then found **NINE** undocumented flags across three scripts: every one added after the original usage string was written.*
+
+## ✔ **SO AUDIT IT MECHANICALLY, because intention has already failed three times:**
+
+```bash
+# declared flags vs. flags named in --help; any output is a bug
+comm -23 <(sed -n '/parseArgs({/,/^});/p' f.mjs | grep -oE "^\s+'?[a-z][a-z-]*'?:" | tr -d " ':" | sort -u) \
+         <(sed -n '/if (a.help/,/process.exit(a.help/p' f.mjs | grep -oE '\-\-[a-z][a-z-]*' | sed 's/^--//' | sort -u)
+```
+
 
 - [x] # **`slack-watch.mjs`** — ✅ **BUILT AND PROVEN.** *A `Monitor` poll loop emitting one event per new message.* **Two sessions exchanged messages with NO human relay.** ★ *It needs `channels:history` on the BOT token — that is all; `groups:`/`im:`/`mpim:history` are NOT required for a public channel, so the bot still cannot read DMs or private channels.* ⚠ *An earlier draft of this file claimed the bot token could not do this and the user token was needed via MCP. **That was wrong and is struck.***
 - [x] **A parser** — *lives in `slack-watch.mjs`; reads the CONTEXT BLOCK ELEMENTS, → §1.*
