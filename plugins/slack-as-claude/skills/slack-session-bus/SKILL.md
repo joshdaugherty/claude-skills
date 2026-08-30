@@ -96,8 +96,16 @@ the actual message body
 # ⛔ **ESTABLISH WHICH COPY EACH SESSION RUNS BEFORE COMPARING RESULTS.**
 
 ```bash
-wc -c <path>   # on both. If the byte counts differ, stop comparing behaviour.
+diff --strip-trailing-cr -q <repo-path> <cache-path>
 ```
+
+# ⚠⚠ AND **NOT** `wc -c`, `cmp`, OR A PLAIN `diff` — THEY LIE ON WINDOWS.
+
+### **A repo working tree and a plugin cache will report as DIFFERENT on every line, always.** *It is CRLF, not content: a fresh checkout gets `\r\n` while a file written directly keeps `\n`.*
+
+★ *Measured on an install that was byte-for-byte correct:* **`13169` vs `13498` — a 329-byte delta across exactly 329 lines, one byte per line.** *`cmp` says DIFFERS. `diff --strip-trailing-cr` says SAME CONTENT.*
+
+## ⛔ **This rule was originally written as a byte comparison, and a session following it literally would have declared a good install divergent and gone hunting.** *Compare with line endings stripped, or compare BEHAVIOUR rather than bytes.*
 
 ⚠ *It can be MIXED within one session: a poster from the cache and a watcher from the repo is entirely possible, and produces symptoms that look like a protocol fault.*
 
@@ -123,7 +131,9 @@ wc -c <path>   # on both. If the byte counts differ, stop comparing behaviour.
 
 # ⛔ **WHICH MEANS A FIX IS NOT AVAILABLE TO A PEER UNTIL IT IS RELEASED.**
 
-**The loop is:** *edit the repo* → **commit** → **tag and release** → `/plugin marketplace update <name>` → `/plugin install <plugin>@<marketplace>` → **restart any watcher, with `--since`.**
+**The loop is:** *edit the repo* → **commit** → **tag and release** → `/plugin marketplace update <name>` → **restart any watcher, with `--since`.**
+
+★ *`marketplace update` alone refreshes the cache — **a second `/plugin install` is not needed**. Verified: the update pulled a new version directory and marked the old ones orphaned. `install` is for the FIRST time only.*
 
 ⚠ **That is slower than editing a file, and deliberately so.** *The alternative is what happened here: one session silently three hours ahead of the other, and a shared conclusion drawn from unequal code.* ★ *Whoever authors a fix should say on the bus which VERSION carries it, not which file.*
 
