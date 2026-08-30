@@ -109,6 +109,7 @@ const { values: a } = parseArgs({
     all: { type: 'boolean', default: false },
     'gone-after': { type: 'string' },
     retire: { type: 'boolean', default: false },
+    audit: { type: 'string' },
     releases: { type: 'string' },
     ping: { type: 'string' },
     wait: { type: 'string', default: '45' },
@@ -143,6 +144,10 @@ if (a.help || !a.channel) {
       '               evidence of absence, so a peer can skip the staleness timeout\n' +
       '               instead of inferring it from silence.\n' +
       '  --releases <ts,ts>  claims you are handing back as you retire.\n' +
+      '  --audit <thread-ts>  list replies present in the THREAD but absent from the\n' +
+      '               channel timeline - messages no watcher can see. --raw CANNOT find\n' +
+      '               these: it reads history, and the failure IS absence from history.\n' +
+      '               Exits 1 if any are found.\n' +
       '  --doctor     Am I behind? Compares RUNNING / INSTALLED / AVAILABLE / PEERS by\n' +
       '               BYTES, not version numbers, and prints what to ask a human for.\n' +
       '  --raw        INSPECTOR. Every message verbatim - raw ts, edited, every context\n' +
@@ -617,6 +622,62 @@ if (a.ping) {
   console.log('    identical to being dead.');
   console.log('Check --presence: beating + no pong is the wedged signature.');
   process.exit(1);
+}
+
+/**
+ * --audit <thread-ts>: find replies that exist in a THREAD but not in the CHANNEL
+ * TIMELINE - i.e. messages no watcher on this bus can ever see.
+ *
+ * ★★ WHY A FOURTH SURFACE IS NEEDED. --help and --dry-run describe INTENT: what you are
+ * about to send. --raw describes REALITY - but it reads conversations.history, and a
+ * NON-BROADCAST REPLY IS NOT IN HISTORY. So the inspector can confirm that a broadcast
+ * happened and can NEVER show one that failed, because the failure mode is absence from
+ * the very source it reads.
+ *
+ * That leaves this failure silent on every surface at once:
+ *
+ *   SILENT AT SEND     the poster returns a ts and exits 0
+ *   SILENT AT RECEIVE  nothing arrives, and nothing arriving is normal
+ *   INVISIBLE TO --raw the message is absent from the source the inspector reads
+ *
+ * The only way to detect it is to compare two views that no single command compared:
+ * the thread, and the timeline. That is this.
+ */
+if (a.audit) {
+  if (!/^\d{10,}\.\d{6}$/.test(a.audit)) {
+    console.error(`--audit "${a.audit}" is not a Slack timestamp. Quote it.`);
+    process.exit(2);
+  }
+  const rep = await fetch(
+    `https://slack.com/api/conversations.replies?channel=${a.channel}&ts=${a.audit}&limit=200`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  ).then((r) => r.json());
+  if (!rep.ok) {
+    console.error(`Could not read the thread: ${rep.error}`);
+    process.exit(2);
+  }
+  const timeline = new Set((await recentMessages(200)).map((m) => m.ts));
+  const replies = (rep.messages ?? []).filter((m) => m.ts !== a.audit);
+  const invisible = replies.filter((m) => !timeline.has(m.ts));
+
+  console.log(`Thread ${a.audit}: ${replies.length} repl(ies).`);
+  for (const m of replies) {
+    const { meta } = parseMessage(m);
+    const seen = timeline.has(m.ts);
+    console.log(`  ${seen ? 'visible  ' : 'INVISIBLE'} ${m.ts}  type=${meta.type ?? '?'} from=${meta.session ?? '?'}`);
+  }
+  if (invisible.length) {
+    console.log('');
+    console.log(`${invisible.length} repl(ies) are in the thread and NOT in the channel timeline.`);
+    console.log('No watcher on this bus has seen them, or can. If any is a done or a fail, the');
+    console.log('task looks permanently open to every peer. Repost it with --broadcast.');
+  } else {
+    console.log('');
+    console.log('All replies are in the timeline: every watcher could have seen them.');
+  }
+  console.log(`(Timeline compared over the last ${timeline.size} channel messages - a reply older`);
+  console.log(' than that window reads as INVISIBLE whether or not it was broadcast.)');
+  process.exit(invisible.length ? 1 : 0);
 }
 
 if (a.retire) {

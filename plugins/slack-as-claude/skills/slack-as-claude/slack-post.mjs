@@ -378,7 +378,25 @@ if (a['dry-run']) {
   console.log(`  username : ${payload.username ?? "(the app's own name)"}`);
   console.log(`  icon     : ${payload.icon_emoji ?? "(the app's own avatar)"}`);
   console.log(`  context  : ${payload.blocks ? contextLine : '(none)'}`);
-  if (payload.thread_ts) console.log(`  thread_ts: ${payload.thread_ts}`);
+  if (payload.thread_ts) {
+    console.log(`  thread_ts: ${payload.thread_ts}`);
+    // ⚠ A FIELD THAT CHANGES DELIVERY MUST BE VISIBLE IN EVERY SURFACE THAT CLAIMS TO
+    // DESCRIBE THE MESSAGE - --help, --dry-run, and the raw inspector.
+    //
+    // reply_broadcast decides whether a threaded reply is visible to any poller at all,
+    // and it was previously reported by NONE of them: absent from --help (which forced
+    // readers onto the path without it), and absent here. A preview whose whole purpose
+    // is "show me what you are about to send" was omitting the one field whose absence
+    // is invisible in the result.
+    const why = a['no-broadcast']
+      ? 'no  (--no-broadcast: this reply will be INVISIBLE to every watcher)'
+      : payload.reply_broadcast
+        ? a.broadcast
+          ? 'yes (--broadcast)'
+          : `yes (automatic: type "${a.type}" in a thread changes what a peer should do)`
+        : `no  (type "${a.type ?? 'none'}" is not decision-changing; it will be visible only in the thread)`;
+    console.log(`  broadcast: ${why}`);
+  }
   console.log(`  text     : ${a.text}`);
   process.exit(0);
 }

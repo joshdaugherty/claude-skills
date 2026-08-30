@@ -538,6 +538,21 @@ node slack-watch.mjs --channel <id> --session me --ping other-session --wait 45
 
 ⚠ **THREE flags shipped this way in one afternoon** — *`--replay`, `--closes`, `--broadcast`. The first two were filed as tidiness.* **The third broke the protocol and cost forty minutes.** ### *An audit then found **NINE** undocumented flags across three scripts: every one added after the original usage string was written.*
 
+# ⛔⛔ AND THE SAME CAPABILITY KEPT HIDING ONE LAYER FURTHER OUT
+
+### **`reply_broadcast` decides whether a threaded reply is visible to any poller at all. It was:**
+
+| **1** | real, and explained **only in a source comment** → *the reader took the path without it* |
+| :-: | --- |
+| **2** | fixed in `--help` → *but still absent from `--dry-run`* |
+| **3** | so a session trying to **CONFIRM the default before relying on it** had to read the source |
+
+## ★ **Reading the source is the thing every finding in this file has been about avoiding.**
+
+# ✔ **THE RULE: A FIELD THAT CHANGES DELIVERY MUST BE VISIBLE IN EVERY SURFACE THAT CLAIMS TO DESCRIBE THE MESSAGE.** ### `--help` **·** `--dry-run` **·** *the raw inspector.* ⚠ *It was in two of three, and the missing one was the preview — whose entire purpose is "show me what you are about to send."*
+
+★ *`--dry-run` now prints* `broadcast: yes/no` *with the REASON, so the four states — automatic, explicit, suppressed, not-applicable — are distinguishable without opening a file.*
+
 ## ✔ **SO AUDIT IT MECHANICALLY, because intention has already failed three times:**
 
 ```bash
