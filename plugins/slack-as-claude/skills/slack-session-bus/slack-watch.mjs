@@ -95,8 +95,7 @@ function botToken() {
   return null;
 }
 
-const { values: a } = parseArgs({
-  options: {
+const OPTIONS = {
     channel: { type: 'string' },
     interval: { type: 'string', default: '30' },
     since: { type: 'string' },
@@ -116,12 +115,13 @@ const { values: a } = parseArgs({
     'ignore-session': { type: 'string', multiple: true, default: [] },
     'include-self': { type: 'boolean', default: false },
     once: { type: 'boolean', default: false },
+    'self-test': { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h', default: false },
-  },
-});
+};
 
-if (a.help || !a.channel) {
-  console.error(
+const { values: a } = parseArgs({ options: OPTIONS });
+
+const USAGE =
     'usage: node slack-watch.mjs --channel <id> [--interval 30] [--since <ts>] [--replay]\n' +
       '       [--session <label>] [--heartbeat <sec>] [--presence] [--raw]\n' +
       '       [--ignore-session <label>]... [--include-self] [--once]\n' +
@@ -159,11 +159,33 @@ if (a.help || !a.channel) {
       '  --replay  emit the existing backlog too (it can contain closed work).\n' +
       '  --once    poll once and exit; always emits what it finds.\n' +
       '\n' +
+      '  --self-test  check that every declared flag appears in this usage text. Four\n' +
+      '               flags have shipped invisible; this is the check that stops it.\n' +
+      '\n' +
       '  COLD START: bare is right - you do not want a backlog of closed work.\n' +
       '  RE-ARM:     pass --since <last ts you saw>. Priming would silently swallow\n' +
       '              anything posted between stopping the old watcher and starting this\n' +
-      '              one, and the two cases look identical from inside the script.',
+      '              one, and the two cases look identical from inside the script.';
+
+/**
+ * EVERY DECLARED FLAG MUST APPEAR IN USAGE - see the long note in slack-post.mjs.
+ * Four flags shipped invisible before this check existed, and the audit meant to catch
+ * them gave a FALSE PASS by grepping the whole file instead of the usage text.
+ */
+function selfTest() {
+  const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
+  const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
+  for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
+  console.log(
+    missing.length ? `\n${missing.length} FLAG(S) MISSING FROM USAGE: ${missing.join(', ')}` : '\nall pass',
   );
+  process.exit(missing.length ? 1 : 0);
+}
+
+if (a['self-test']) selfTest();
+
+if (a.help || !a.channel) {
+  console.error(USAGE);
   process.exit(a.help ? 0 : 1);
 }
 
@@ -970,9 +992,33 @@ if (a.doctor) {
     const lastSeen = Math.max(pr?.beat ?? 0, Number(m.ts) || 0);
     if (lastSeen && now - lastSeen > GONE_AFTER_SEC && !a.all) continue;
     const alive = pr ? now - pr.beat <= Math.max((pr.every || 60) * STALE_AFTER, STALE_FLOOR_SEC) : false;
-    peers.set(meta.session, { plugin: meta.plugin ?? null, alive, seen: !!pr });
+    peers.set(meta.session, { plugin: meta.plugin ?? null, alive, seen: !!pr, beatAge: pr ? Math.round(now - pr.beat) : null });
   }
-  const fmt = ([s, v]) => `${s}=${v.plugin ?? '?'}`;
+  /**
+   * ⛔⛔ A PEER'S VERSION IS "AS OF ITS LAST BEAT", NEVER "NOW". SAY SO.
+   *
+   * This is the THIRD lag layer, and it is the one nobody had named:
+   *
+   *     repo     -> cache        lags until /plugin marketplace update
+   *     cache    -> resident     lags until the watcher restarts
+   *     resident -> ADVERTISED   lags until the peer's next HEARTBEAT
+   *
+   * PEERS reads the third. The presence message is rewritten on each beat, so what it
+   * says is true of the moment that beat was written - and the interval is a number the
+   * PEER chose and you cannot see.
+   *
+   * ★ Observed: this line reported `session-two=2.8.1` and a session concluded the peer
+   * had not restarted. It HAD - onto 2.9.1, from the cache path, minutes earlier. The
+   * read landed 44 SECONDS before that peer's next beat rewrote the message. Nobody
+   * misread anything; the surface stated a past fact in the present tense. At
+   * --heartbeat 300 the same wrong inference would have held for five minutes.
+   *
+   * Identical defect to AVAILABLE asserting a fact about the marketplace while knowing
+   * only a fact about a local clone, and it takes the identical fix: RENDER THE AGE, so
+   * the number arrives with its own expiry rather than looking current.
+   */
+  const fmt = ([s, v]) =>
+    `${s}=${v.plugin ?? '?'}${v.beatAge === null ? '' : ` (as of its beat ${v.beatAge}s ago)`}`;
   const alive = [...peers].filter(([, v]) => v.alive);
   const dead = [...peers].filter(([, v]) => !v.alive);
   console.log(`PEERS      ${alive.length ? alive.map(fmt).join(', ') : 'none live'}`);

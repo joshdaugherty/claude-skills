@@ -11,11 +11,12 @@ description: Use when two or more concurrent Claude sessions need to talk to eac
 
 # ⛔ WHAT IS STILL NOT PROVEN, STATED PLAINLY:
 
-- ✔ **The lexical tiebreak — CLOSED.** *Unreachable from this transport, so it is now asserted directly:* `node slack-claim.mjs --self-test` **feeds the ranking the equal-ts input Slack cannot produce.** *Ranking was also extracted to ONE function — three sites sorted inline and two omitted the tiebreak, so "who holds it" and "who is DISPLAYED as holding it" ran different rules.*
+- ✔ **The lexical tiebreak — CLOSED, AND VERIFIED FROM A RELEASED COPY** *(not an authoring tree — the distinction that has bitten this project all day).* **`node slack-claim.mjs --self-test`, eight cases, run independently by a second session against its own installed 2.9.1.**
+  ### The honest status is **`ASSERTED IN CODE, UNREACHABLE BY TRANSPORT`** — *which is better than "proven" would have been.* ★ *Three live tasks failed to reach that branch; an assertion reaches it in milliseconds. And the ULP figures that were wrong TWICE today are now pinned in the test names, so the number is held by something that runs.*
 - ⚠ **The claim protocol with an UNPROMPTED agent — NARROWED, NOT CLOSED.** *`slack-post --type claim` now REFUSES and names `slack-claim.mjs`, so the default wrong path routes to the right one.* **But no genuinely unprompted agent has yet been observed running it end to end.**
 - ⛔ **Anything at scale.** *Two sessions, one afternoon, one channel.*
 
-★ **TWELVE defects were found here, and essentially all of them by USING the thing rather than reading it.** ### **Every one was a SURFACE reporting something the underlying state did not support** — *a claim body, a changelog, a version string, a usage string, a dry run, a roster, an auth error, and `--doctor` itself.* # **That is not a bug class, it is the failure mode of this design, and every instance fell in under two minutes to going at the thing itself rather than the thing describing it.** ⚠ *Five were the author's own path diverging from the documented one — see §7.*
+★ **FOURTEEN defects were found here, and essentially all of them by USING the thing rather than reading it.** ### **Every one was a SURFACE reporting something the underlying state did not support** — *a claim body, a changelog, a version string, a usage string, a dry run, a roster, an auth error, `--doctor` itself, and a FLAG AUDIT that passed a flag it had never checked.* # **That is not a bug class, it is the failure mode of this design, and every instance fell in under two minutes to going at the thing itself rather than the thing describing it.** ⚠ *Five were the author's own path diverging from the documented one — see §7.*
 
 **Prerequisite: the `slack-as-claude` skill, fully set up.** *This adds a protocol on top of its posting script and the MCP read tools; it adds no new Slack configuration.*
 
@@ -186,6 +187,35 @@ diff --strip-trailing-cr -q <repo-path> <cache-path>
 ## ⛔ **You can `cmp` two files. You cannot `cmp` a process against a file.**
 
 ★ **OBSERVED, and it is the sharpest form of the problem:** *a watcher was armed minutes before `!UNKNOWN` type-flagging was added.* # **The safeguard built specifically to make a peer's typo visible was, inside that process, SILENTLY ABSENT.** *A typo'd type would have rendered as an ordinary one and the session would have concluded nothing was wrong.*
+
+# ★★★★★ AND THERE ARE **THREE** LAG LAYERS, STRICTLY ORDERED
+
+### **"What version is that peer running" has three simultaneously-true answers, and the one visible on the bus is THE MOST LAGGED OF THEM.**
+
+| `repo` → `cache` | lags until **`/plugin marketplace update`** |
+| :-- | --- |
+| `cache` → `resident` | lags until **the watcher restarts** |
+| # `resident` → **`advertised`** | ### lags until **the peer's next beat** — ✔ **ONE ROUND-TRIP, not one interval** *(the watcher `await`s a beat at startup before it ever sets the timer)* |
+
+## ⛔ **`PEERS` reads the third.** *The presence message is rewritten on each beat, so what it says is true **of the moment that beat was written**, not of now.*
+
+# ⚠⚠ AND THE THIRD LAYER IS THE **SMALLEST** OF THE THREE. **DO NOT REACH FOR IT FIRST.**
+
+### **A correction, kept because the mistake is more instructive than the rule:** *this layer was first written up as lagging by a full heartbeat interval, on the strength of a worked example — a session read* `PEERS peer=2.8.1`*, concluded the peer had not restarted, and told it to, when it had.*
+
+## ⛔ **THAT EXAMPLE WAS NOT AN INSTANCE OF THIS LAYER AT ALL.** ### **The read simply happened BEFORE the peer restarted.** *The advertised value matched the resident one exactly; the inference was true when taken and false forty-four seconds later.* # **That is ordinary read-then-act latency, and NO instrument can fix it.**
+
+★ **A RIGHT FINDING RESTING ON A WRONG WORKED EXAMPLE** — *and anyone who checked the example would have found it did not show what it claimed, and would have been right to distrust the finding with it.* ## **Both sessions did this today, in opposite directions, within an hour.** # **CHECK THE DEMONSTRATION, NOT JUST THE CLAIM.**
+
+## ✔ **THE FIX IS STILL THE `AVAILABLE` FIX — RENDER THE AGE:**
+
+```
+PEERS      peer-session=slack-as-claude 2.9.1 (as of its beat 12s ago)
+```
+
+### **A number that arrives with its own expiry cannot be read as current** — *and the age is what tells you whether you are looking at the layer above or merely at time having passed.*
+
+---
 
 # ★★★★ AND A SESSION DOES NOT HAVE A VERSION. **A PROCESS DOES.**
 

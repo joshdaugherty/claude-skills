@@ -162,8 +162,7 @@ function claudeUser(includeEmail) {
 
 // --- args -------------------------------------------------------------------
 
-const { values: a } = parseArgs({
-  options: {
+const OPTIONS = {
     channel: { type: 'string' },
     text: { type: 'string' },
     'text-file': { type: 'string' },
@@ -184,10 +183,11 @@ const { values: a } = parseArgs({
     'unsafe-claim': { type: 'boolean', default: false },
     'as-app': { type: 'boolean', default: false },
     'dry-run': { type: 'boolean', default: false },
+    'self-test': { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h', default: false },
-  },
-  allowPositionals: false,
-});
+};
+
+const { values: a } = parseArgs({ options: OPTIONS, allowPositionals: false });
 
 /**
  * Resolve the message body WITHOUT letting a shell touch it.
@@ -232,14 +232,23 @@ function die(msg, code = 1) {
   process.exit(code);
 }
 
-if (a.help || !a.channel || (a.text === undefined && a['text-file'] === undefined)) {
-  console.error(
-    'usage: node slack-post.mjs --channel <id> --text "..." [--thread-ts <ts>]\n' +
-      '       [--to X] [--type X] [--project X] [--session X] [--user X] [--machine X]\n' +
-      '       [--closes <ts>] [--broadcast] [--no-broadcast]\n' +
-      '       [--user-email] [--username X] [--icon-emoji :x:]\n' +
-      '       [--no-context] [--as-app] [--dry-run]\n' +
+const USAGE =
+  'usage: node slack-post.mjs --channel <id> --text "..." [--thread-ts <ts>]\n' +
+      '       [--text-file <path>] [--to X] [--type X] [--project X] [--session X]\n' +
+      '       [--user X] [--machine X] [--closes <ts>] [--broadcast] [--no-broadcast]\n' +
+      '       [--user-email] [--username X] [--icon-emoji :x:] [--unsafe-claim]\n' +
+      '       [--no-context] [--as-app] [--dry-run] [--self-test]\n' +
       '\n' +
+      '  --text-file <p> read the body from a FILE, or - for stdin, instead of --text.\n' +
+      '                  USE THIS FOR ANYTHING CONTAINING CODE. Backticks in a double-\n' +
+      '                  quoted shell string are command-substituted and VANISH before\n' +
+      '                  this script runs, so nothing here can detect it and --dry-run\n' +
+      '                  cannot either: it prints the already-mangled text, which reads\n' +
+      '                  fine because the missing part is missing from the preview too.\n' +
+      '  --unsafe-claim  permit --type claim from this tool. Normally REFUSED: posting a\n' +
+      '                  claim does not win one, and slack-claim.mjs is what re-reads and\n' +
+      '                  answers in its exit code. For doc examples and replays only.\n' +
+      '  --self-test     check that every declared flag appears in this usage text.\n' +
       '  --to / --type   routing for a session bus, emitted as context elements so a\n' +
       '                  reader can parse them. Putting them in the body does not work.\n' +
       '                  type: request reply claim done fail status, or an x- prefix.\n' +
@@ -251,8 +260,45 @@ if (a.help || !a.channel || (a.text === undefined && a['text-file'] === undefine
       '  --no-broadcast  suppress that. A threaded reply no watcher can see is how a\n' +
       '                  finished task ends up looking permanently open.\n' +
       '  --thread-ts     QUOTE THE TIMESTAMP. Unquoted, a shell rounds it to a float and\n' +
-      '                  Slack silently ignores the threading.',
+      '                  Slack silently ignores the threading.';
+
+/**
+ * ⛔⛔⛔ EVERY DECLARED FLAG MUST APPEAR IN USAGE. AN INVARIANT, NOT A HABIT.
+ *
+ * FOUR flags shipped invisible before this existed: --replay, --closes, --broadcast
+ * and --text-file. One caused a real protocol failure. After the second it was agreed
+ * this should become mechanical, it did not, and the fourth shipped in the release
+ * whose commit message was "Kill the shell-mangling class, and make the tool the
+ * protocol". THE FEATURE BUILT TO STOP SILENT CORRUPTION SHIPPED SILENTLY INVISIBLE.
+ *
+ * Four occurrences is not carelessness, it is a MISSING CHECK. Usage is prose, flags
+ * live in parseArgs, and nothing made them agree - so they drifted every single time.
+ *
+ * ⚠ AND THE AUDIT MEANT TO CATCH THIS GAVE A FALSE PASS. It grepped the WHOLE FILE for
+ * /--[a-z-]+/ and matched --text-file in a comment and in an error message, then
+ * reported "undocumented: none" about a flag that was undocumented. A check that
+ * cannot tell DOCUMENTED from MERELY MENTIONED is the bug it is checking for, in a
+ * hi-vis jacket. This one reads USAGE and nothing else.
+ *
+ * ★ Both of the edits that were supposed to add --text-file to usage were python
+ * str.replace() calls whose anchor did not match. replace() returns the input
+ * unchanged and raises NOTHING, so the script printed success twice and wrote a file
+ * with no change in it. ASSERT THE ANCHOR, or verify the result afterwards.
+ */
+function selfTest() {
+  const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
+  const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
+  for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
+  console.log(
+    missing.length ? `\n${missing.length} FLAG(S) MISSING FROM USAGE: ${missing.join(', ')}` : '\nall pass',
   );
+  process.exit(missing.length ? 1 : 0);
+}
+
+if (a['self-test']) selfTest();
+
+if (a.help || !a.channel || (a.text === undefined && a['text-file'] === undefined)) {
+  console.error(USAGE);
   process.exit(a.help ? 0 : 1);
 }
 

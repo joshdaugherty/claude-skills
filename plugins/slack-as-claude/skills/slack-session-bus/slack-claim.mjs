@@ -183,12 +183,19 @@ function selfTest() {
     ].map((p) => rankClaims(p)[0].session))], ['a']);
   check('empty set ranks to nothing rather than throwing', rankClaims([]), []);
 
+  // The other invariant: EVERY DECLARED FLAG APPEARS IN USAGE. Four flags shipped
+  // invisible before this existed - see the long note in slack-post.mjs. Enforced in
+  // all three scripts, because one enforced and two unenforced is how it drifts back.
+  for (const f of Object.keys(OPTIONS)) {
+    if (f === 'help') continue;
+    check(`--${f} is documented in usage`, USAGE.includes(`--${f}`), true);
+  }
+
   console.log(failed ? `\n${failed} FAILED` : '\nall pass');
   process.exit(failed ? 1 : 0);
 }
 
-const { values: a } = parseArgs({
-  options: {
+const OPTIONS = {
     channel: { type: 'string' },
     task: { type: 'string' },
     session: { type: 'string' },
@@ -203,17 +210,16 @@ const { values: a } = parseArgs({
     'self-test': { type: 'boolean', default: false },
     'dry-run': { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h', default: false },
-  },
-});
+};
 
-if (a['self-test']) selfTest();
+const { values: a } = parseArgs({ options: OPTIONS });
 
 const label = a.session || process.env.CLAUDE_SESSION_NAME || (process.env.CLAUDE_CODE_SESSION_ID ?? '').slice(0, 8);
 
-if (a.help || !a.channel || !a.task || !label) {
-  console.error(
-    'usage: node slack-claim.mjs --channel <id> --task <ts> [--session <label>]\n' +
-      '       [--note "..."] [--settle 2] [--ignore-stale] [--dry-run]\n' +
+const USAGE =
+  'usage: node slack-claim.mjs --channel <id> --task <ts> [--session <label>]\n' +
+      '       [--note "..."] [--settle 2] [--ignore-stale] [--takeover] [--dry-run]\n' +
+      '       [--self-test]\n' +
       '\n' +
       '  exit 0 = you hold the claim   exit 1 = you do not, stand down\n' +
       '\n' +
@@ -229,8 +235,12 @@ if (a.help || !a.channel || !a.task || !label) {
       '                 transport cannot produce. Exits 0 all-pass, 1 on any failure.\n' +
       '\n' +
       '  QUOTE THE --task TIMESTAMP. A Slack ts has 16 significant digits; a shell that\n' +
-      '  parses the bare token as a float rounds it, and Slack silently ignores it.',
-  );
+  '  parses the bare token as a float rounds it, and Slack silently ignores it.';
+
+if (a['self-test']) selfTest();
+
+if (a.help || !a.channel || !a.task || !label) {
+  console.error(USAGE);
   process.exit(a.help ? 0 : 2);
 }
 
