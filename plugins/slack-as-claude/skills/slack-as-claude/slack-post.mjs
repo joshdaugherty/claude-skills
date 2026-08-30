@@ -252,9 +252,11 @@ const USAGE =
       '  --to / --type   routing for a session bus, emitted as context elements so a\n' +
       '                  reader can parse them. Putting them in the body does not work.\n' +
       '                  type: request reply claim done fail status, or an x- prefix.\n' +
-      '  --closes <ts>   which claim a done/fail discharges. Mirrors supersedes: on a\n' +
-      '                  takeover - without it a thread records what was overridden\n' +
-      '                  but not what was fulfilled.\n' +
+      '  --closes <ts>   which CLAIM a done/fail discharges - NOT the task. Mirrors\n' +
+      '                  supersedes: on a takeover; without it a thread records what was\n' +
+      '                  overridden but not what was fulfilled. Passing the thread parent\n' +
+      '                  is REJECTED (exit 2): it records "this done closes this task",\n' +
+      '                  which was never in doubt, while rendering like a real value.\n' +
       '  --broadcast     also place a threaded reply in the CHANNEL timeline, where a\n' +
       '                  poller can see it. AUTOMATIC for done/fail/claim in a thread.\n' +
       '  --no-broadcast  suppress that. A threaded reply no watcher can see is how a\n' +
@@ -384,6 +386,46 @@ const KNOWN_TYPES = ['request', 'reply', 'claim', 'done', 'fail', 'status'];
  * thinking. So THAT is the path that has to be safe, because it is the one taken
  * by default. A written rule binds only a reader; a refusal binds everyone.
  */
+/**
+ * ⛔⛔ `--closes` NAMES THE **CLAIM** A done/fail DISCHARGES, NOT THE TASK.
+ *
+ * Passing the thread parent makes the field SELF-REFERENTIAL: `closes: <this thread>`
+ * asserts "this done closes this task", which was never in doubt. The field carries
+ * exactly zero information, and renders identically to a correct one.
+ *
+ * ★ AND THE WRONG VALUE IS THE CONVENIENT ONE, WHICH IS WHY THIS NEEDS A GUARD RATHER
+ * THAN A DOC LINE. The task ts is already in your hand - it is the --thread-ts you just
+ * typed. The claim ts is buried in slack-claim's output and has to be captured
+ * deliberately. So the ergonomics push toward the useless value, and nothing in the
+ * output distinguishes them.
+ *
+ * ★ Measured: in an 8-agent scale run, FIVE OF SIX dones carried the task ts. Nothing
+ * objected - not this script, not the audit written to check it, not the peer who
+ * pre-registered "closes: names a real claim" as a pass criterion and then did not run
+ * it. Three independent chances to catch it and it survived all three.
+ *
+ * ⚠ In an ordinary thread nobody notices, because the winner is recoverable from the
+ * claims anyway. IN A TAKEOVER THREAD - the case this field exists for - it would be
+ * silently useless at precisely the moment it is the only evidence.
+ *
+ * This cannot fire on a correct value: a claim ts is never the thread parent.
+ */
+if (a.closes && a['thread-ts'] && a.closes === a['thread-ts']) {
+  die(
+    '--closes must name the CLAIM this done/fail discharges, not the task.\n' +
+      '\n' +
+      `  You passed the thread parent (${a.closes}) for both --closes and --thread-ts.\n` +
+      '  That records "this done closes this task", which was never in question, and\n' +
+      '  the field then carries no information at all - while rendering exactly like a\n' +
+      '  correct one. In a takeover thread that is the only evidence of what was\n' +
+      '  fulfilled, and it would be silently empty.\n' +
+      '\n' +
+      '  The value you want is the ts of the CLAIM being discharged - slack-claim.mjs\n' +
+      '  prints it when it posts one.',
+    2,
+  );
+}
+
 if (a.type === 'claim' && !a['unsafe-claim']) {
   die(
     'Refusing to post --type claim from the plain poster.\n' +
@@ -480,6 +522,7 @@ if (!a['as-app']) {
   // ts, then done - but in a thread where a takeover happened it is NOT, and that is
   // precisely the thread where you need to know which claim actually did the work.
   if (a.closes) elements.push({ type: 'mrkdwn', text: `closes: \`${a.closes}\`` });
+
   if (project) elements.push({ type: 'mrkdwn', text: `project: \`${project}\`` });
   if (session) elements.push({ type: 'mrkdwn', text: `session: \`${session}\`` });
   if (user) elements.push({ type: 'mrkdwn', text: `user: ${user}` });
