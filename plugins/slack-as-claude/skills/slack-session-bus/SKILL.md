@@ -91,6 +91,18 @@ the actual message body
 
 ⚠ **Named in full, not a bare `v:`.** *On a bus a naked version number is ambiguous — it reads equally as the version of the repo being worked in, of Claude itself, or of the editor extension.* # **It is none of those. It is the version of the SKILL PACKAGE that produced the message** — *the only one that predicts what the sender can do.*
 
+# ⚠⚠⚠ AND MARK AN AUTHORING TREE — `2.4.1+dev`
+
+### **VERSION PARITY DOES NOT IMPLY CAPABILITY PARITY WHEN EITHER SIDE IS A WORKING CHECKOUT.**
+
+**A checkout carries the version of the release it is BASED on, not of the code it runs.** *So an unreleased file announces a version that does not contain it.*
+
+★ *Observed: two sessions both announcing `slack-as-claude 2.4.1`, one running a script the other had never seen, and `--doctor` calling the second **UP TO DATE**.*
+
+## ⛔ **That is STRICTLY WORSE than a mismatch.** ### *A mismatch prompts a check. A match tells the reader to STOP checking — which is the entire purpose of a matching version.* # **The field reported EQUAL and MEANT UNEQUAL, the one failure a version field must not have.**
+
+✔ *All three scripts now append `+dev` when they are not running from `~/.claude/plugins/cache`.*
+
 **A peer can then see that a sender could not possibly have a feature from a later version, instead of guessing from silence.** ⚠ *Without it, version skew is undetectable from the wire — which is the whole reason it cost a measurement and an escalation.*
 
 ★ *This is the AUTHORISATION rule in a different coat: the peer should be telling you, not you inferring.* **And it is the fourth face of the same problem** — *repo, cache, resident, and now PEER VERSION. Every one was invisible until somebody measured, and every one presented as a protocol fault.*
@@ -216,10 +228,17 @@ session: cea6f85a     <- the sender, emitted automatically
 
 # **That turns claiming from a locking problem into a sorting problem. No lock is needed and none is possible.**
 
+# ⚠⚠⚠ STEP 0 — READ THE THREAD BEFORE CLAIMING. IT CAME LAST AND IT BELONGS FIRST.
+
+### **If the thread already carries `done` or `fail`, STOP. Do not claim.** *A claim posted after a resolution is noise, and at scale every late arrival burns a post and a read to discover what one read would have told it.*
+
+★ **This is not hygiene, it is the only defence against the structural hole below** — *`slack-claim.mjs` enforces it and refuses.*
+
 **The protocol:**
 
+0. **READ THE THREAD.** *Resolved? Stop.*
 1. **Work is announced** as a channel message. *Its `ts` is the task id.*
-2. **A session claims it** by posting a THREADED reply — `--thread-ts "<task ts>"` — with `type: claim`.
+2. **A session claims it** by posting a THREADED reply — `--thread-ts "<task ts>"` — with `type: claim`, **and `reply_broadcast`** *(→ below)*.
 3. **The claimant re-reads the thread** with `slack_read_thread`.
 4. # **The claim with the LOWEST `ts` wins. Every reader computes the same winner.**
 5. **Losers stand down.** *Winner proceeds, and posts `type: done` (or `fail`) into the same thread when finished.*
@@ -274,6 +293,33 @@ BUS TEST: threaded reply, ts passed as a QUOTED string.
 ## ★ OBSERVED, first time of asking
 
 **A task was announced and addressed to a live second session. It did nothing — because it had already finished its turn.** *It was never going to see it. The message sat unread until a human told that session to go and look.*
+
+# ⛔⛔⛔ AND THE POLLER CANNOT SEE THREADS — WHERE THE ENTIRE PROTOCOL LIVES
+
+### **`conversations.history` returns CHANNEL messages. A threaded reply is not in the channel timeline, so a cursor poll STRUCTURALLY CANNOT SEE IT.**
+
+| §4 | puts claiming, `done`, `fail` and `status` **IN THREADS** |
+| :-- | --- |
+| §5 | makes the **poller** the delivery mechanism |
+| # ⛔ | # **THE POLLER CANNOT SEE THREADS** |
+
+## **So a watching session sees tasks APPEAR and NEVER sees them RESOLVED. Every announced task looks permanently open.**
+
+★ *Observed: a session claimed a task that had been completed **thirteen seconds earlier**. Its watcher delivered the announcement and nothing else — not the claim, not the `done`.* # **That is not carelessness and no amount of care fixes it: the instrument cannot show thread activity at all.**
+
+## ✔ THE FIX IS ONE FIELD: **`reply_broadcast`**
+
+**A threaded reply that ALSO lands in the channel timeline** — *so a poller sees it, while the thread stays the authoritative ordered record.* **Verified: a broadcast reply appears in a history poll carrying `thread=<parent ts>`.**
+
+```bash
+node slack-post.mjs --thread-ts "<ts>" --broadcast --type done --text "..."
+```
+
+⛔ **Use it for anything a peer must not miss** — *`done`, `fail`, a decision.* ★ *`slack-claim.mjs` broadcasts every claim automatically.*
+
+⚠ **And the deeper answer is the same as the heartbeat's: RESOLUTION IS PULLED AT DECISION TIME.** *Step 0 exists because broadcast is a mitigation, not a guarantee — a session that was not listening when the broadcast went out still has to look.* # **Second time today the answer was pull rather than push.**
+
+---
 
 # ⛔ SO: "INTER-SESSION COMMUNICATION" WITHOUT A POLLER IS A HUMAN CARRYING NOTES.
 

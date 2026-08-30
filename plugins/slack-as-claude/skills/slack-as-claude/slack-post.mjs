@@ -51,7 +51,17 @@ function pluginVersion() {
     if (!existsSync(manifest)) return null;
     const m = JSON.parse(readFileSync(manifest, 'utf8'));
     if (!m.version) return null;
-    return `${m.name || 'plugin'} ${m.version}`;
+
+    // ⚠⚠ MARK AN AUTHORING TREE. A working checkout carries the version of the release
+    // it is BASED on, not of the code it is running - so an unreleased file announces a
+    // version that does not contain it. Both sides then report `2.4.1`, one has a script
+    // the other has never seen, and the field REPORTS EQUAL WHILE MEANING UNEQUAL.
+    //
+    // That is worse than a mismatch: a mismatch prompts a check, and a match tells the
+    // reader to stop checking, which is what a matching version is FOR.
+    const released = here.includes(join('.claude', 'plugins', 'cache'));
+    const suffix = released ? '' : '+dev';
+    return `${m.name || 'plugin'} ${m.version}${suffix}`;
   } catch {
     /* a missing version is not worth failing a post over */
   }
@@ -157,6 +167,7 @@ const { values: a } = parseArgs({
     channel: { type: 'string' },
     text: { type: 'string' },
     'thread-ts': { type: 'string' },
+    broadcast: { type: 'boolean', default: false },
     to: { type: 'string' },
     type: { type: 'string' },
     project: { type: 'string' },
@@ -278,6 +289,12 @@ if (a['thread-ts']) {
     );
   }
   payload.thread_ts = a['thread-ts'];
+
+  // A threaded reply is NOT in the channel timeline, so conversations.history - and
+  // therefore any cursor-based watcher - structurally cannot see it. Use --broadcast for
+  // anything a peer must not miss (done, fail, a decision), or it lands somewhere no
+  // poller looks and the task appears permanently open.
+  if (a.broadcast) payload.reply_broadcast = true;
 }
 
 let contextLine = '';

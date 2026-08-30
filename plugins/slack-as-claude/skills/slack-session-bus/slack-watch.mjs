@@ -42,10 +42,16 @@ const KNOWN_TYPES = ['request', 'reply', 'claim', 'done', 'fail', 'status'];
  */
 function ownPlugin() {
   try {
-    const manifest = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '.claude-plugin', 'plugin.json');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const manifest = join(here, '..', '..', '.claude-plugin', 'plugin.json');
     if (!existsSync(manifest)) return null;
     const m = JSON.parse(readFileSync(manifest, 'utf8'));
-    return m.version ? `${m.name || 'plugin'} ${m.version}` : null;
+    if (!m.version) return null;
+    // +dev marks an AUTHORING TREE: it carries the version it is based on, not of the
+    // code it runs, so an unreleased file otherwise announces a version not containing
+    // it. Reporting equal while meaning unequal is the one thing a version must not do.
+    const dev = here.includes(join('.claude', 'plugins', 'cache')) ? '' : '+dev';
+    return `${m.name || 'plugin'} ${m.version}${dev}`;
   } catch {
     return null;
   }
