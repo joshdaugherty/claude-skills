@@ -66,6 +66,12 @@ browser, and that `/mcp` will report a server as `connected` when its token has 
 Setup is machine-wide (`--scope user` plus a user environment variable), so **the first repo to
 run it is the only one that has to** — every later repo inherits the connection.
 
+The plugin also bundles **`slack-session-bus`** (draft): using a Slack channel as a message bus
+between concurrent Claude sessions, with a claim protocol that makes races deterministic by
+sorting on Slack's server-assigned timestamps. Its primitives are proven — two sessions exchanged
+messages and resolved a contested claim with no human relay — but addressing and staleness are
+still design.
+
 ## Layout
 
 ```

@@ -145,7 +145,7 @@ claude mcp add --transport http slack https://mcp.slack.com/mcp --scope user --c
 
 **a.** *OAuth & Permissions → **Bot** Token Scopes → add `chat:write`.* (Creates the bot user. If refused, set a Display Name under **App Home** first.)
 
-**b.** Slack shows a reinstall banner. **Click it.**
+**b.** # ⛔ **DO NOT CLICK THE YELLOW BANNER.** ### **Scroll UP to *OAuth Tokens* and click "Reinstall to \<workspace\>" there.** → *trap 5 — this is the single most expensive trap in this file.*
 
 # ⚠ **THE REINSTALL ROTATES THE USER TOKEN AND BREAKS THE WORKING CONNECTION** → *trap 3.* ### **Warn BEFORE the click, not after.**
 
@@ -348,7 +348,32 @@ Slack: post progress to #build-notifications (C01234ABCDE) via the slack-as-clau
 
 ---
 
-# 4. THE FOUR TRAPS
+# 4. THE FIVE TRAPS
+
+# ⚠⚠⚠ 5 · THE YELLOW BANNER'S REINSTALL LINK DOES NOT APPLY SCOPES
+
+### **Change a scope and Slack shows a banner: *"You've changed the permission scopes… Please reinstall your app."* # ITS LINK DOES NOT DO THE JOB.**
+
+## **The one that works is "Reinstall to \<workspace\>" under *OAuth Tokens*, further up the same page.** ⚠ *Both are on `/oauth`. Both say reinstall. Only one applies the scopes.*
+
+# ★ HOW IT PRESENTS — AND WHY IT COSTS HOURS
+
+**Everything looks correct and nothing reports an error.** *The scope is listed under Bot Token Scopes, marked Required. The banner goes away. The app says installed.* # **AND THE TOKEN STILL CARRIES THE OLD SCOPES.**
+
+### **This cost FOUR rounds of diagnosis on `chat:write.customize`** — *a session repeatedly proposed wrong explanations (wrong scope section, missed reinstall, missed Allow, stale token copy) while the user had correctly done every step, using the link that silently does nothing.*
+
+## ⛔ **DIAGNOSE BY TOKEN, NEVER BY APPEARANCE:**
+
+```bash
+curl -s -D - -o /dev/null -X POST https://slack.com/api/auth.test \
+  -H "Authorization: Bearer $SLACK_BOT_TOKEN" | grep -i '^x-oauth-scopes:'
+```
+
+★ *The correct link opens a consent page; it needs an explicit **Allow**.* **The token STRING does not change — Slack updates the grant in place — so "the token looks the same" is EXPECTED and proves nothing.** *Only the scope list moves.*
+
+---
+
+## The other four
 
 | # ⚠ **1 · "Create and Install" CAN NEVER SUCCEED FROM A BROWSER** | ### It ends in an OAuth redirect to `localhost:<port>`, **which only Claude Code can answer.** *"Installation was not completed" is expected and meaningless.* # **BUT IT CREATES THE APP ON EVERY ATTEMPT.** ★ *Clicking it repeatedly makes one app per click.* **Click once, then check `api.slack.com/apps` — it is there.** ## **The real install happens at `/mcp`, not here.** |
 | :-- | --- |
