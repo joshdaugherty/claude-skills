@@ -494,6 +494,32 @@ node slack-post.mjs --thread-ts "<ts>" --broadcast --type done --text "..."
 
 # 6. STALENESS — STILL A SIGNAL, NOT A LEASE — AND NOW OPT-IN
 
+# ⛔⛔⛔ FIRST: **ARE *YOU* VISIBLE?** A LABEL WITH NO `--heartbeat` IS INVISIBLE TO EVERY PEER.
+
+### **It cannot be `--ping`'d, it is absent from `--presence` ENTIRELY, and a stale takeover of its claims looks JUSTIFIED to whoever performs one.** *A correctness hazard, not cosmetics.*
+
+★★ **AND THE WORST INSTANCE OF THE DAY WAS THE AUTHOR'S OWN.** *A session spent a full day building and documenting liveness **while publishing none of it** — every watcher it armed omitted `--heartbeat`.* # **`--doctor` had already printed that session's own label in the dead list:**
+
+```
+(stale/gone: session-one, roster-probe, retiree, ...)
+```
+
+## **In output it READ, and QUOTED TO A PEER, more than once.** ### *It scanned that line for peers and never once looked for **itself** in it.* # **The instrument was correct and complete; the reader filtered it out. It took the peer to notice.**
+
+✔ **`--doctor` now says it outright** — checked **FROM THE WIRE**, not from the running process's flags. *`--doctor` is short-lived and never beats, so its own `heartbeatSec` is always `0` and testing that would fire on every run. The question is whether the **LABEL** is beating, and only the channel records that.*
+
+# ★★★★ AND THE OPEN QUESTION IT RAISES: **A MESSAGE IS BETTER LIVENESS EVIDENCE THAN A HEARTBEAT.**
+
+### **A beat proves A TIMER FIRED inside a process. A message proves THE SESSION ACTED.** *The same distinction that makes a pong worth more than a beat.*
+
+## ⚠ **The roster reads presence markers and ignores messages ENTIRELY** — *so a session posting but not beating (between watcher restarts, or running a poster with no watcher) reads as **DEAD** while being demonstrably alive in the transcript directly above it.*
+
+★ *Seen three times, each a live, healthy, correctly-behaving session reading as dead — and once it produced a wrong instruction: a session read* `PEERS peer=<old version>`*, concluded the peer had not restarted, and told it to, while that peer's restart AND its messages sat in the channel being read.* # **The evidence that would have corrected it was already on the bus. No instrument was looking at it.**
+
+⛔ **NOT BUILT.** *Folding `last-message-ts` into the roster —* `no beat 900s, but POSTED 44s ago <- active, not beating` *— is the obvious fix and is in no release.* ⚠ **Until it is, read `PEERS` as "who is BEATING", never as "who is THERE".**
+
+---
+
 # **A claim has a `ts`, so its AGE is computable. Whether the claimant is ALIVE is not.**
 
 **The best available approximation:**

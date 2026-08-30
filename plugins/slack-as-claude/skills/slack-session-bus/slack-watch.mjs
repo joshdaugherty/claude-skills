@@ -1029,6 +1029,43 @@ if (a.doctor) {
   // Verdict, by BYTES not by version number.
   console.log('');
   const asks = [];
+
+  /**
+   * ⛔⛔ ARE *YOU* VISIBLE? THIS TOOL KNEW AND REPORTED AROUND IT.
+   *
+   * A session with a label but no heartbeat is INVISIBLE TO EVERY PEER: it cannot be
+   * --ping'd, it is absent from --presence entirely, and a stale takeover of its claims
+   * looks justified to anyone evaluating one. That is a correctness hazard, not cosmetics.
+   *
+   * ★ OBSERVED, and it is the sharpest self-indictment in this file: a session spent a
+   * full day building and documenting liveness WHILE PUBLISHING NONE OF IT. Every watcher
+   * it armed omitted --heartbeat. This very command had already printed its own label in
+   * the dead list -
+   *
+   *     (stale/gone: session-one, roster-probe, retiree, ...)
+   *
+   * - in output that session read and quoted to a peer more than once, scanning the line
+   * for PEERS and never once looking for ITSELF in it. The instrument was correct and
+   * complete; the reader filtered it out. It took the peer to notice.
+   *
+   * ⚠ CHECKED FROM THE WIRE, NOT FROM THIS PROCESS'S FLAGS. --doctor is a short-lived
+   * invocation that never beats, so its own heartbeatSec is always 0 and testing it would
+   * fire on every run. The question is whether the LABEL is beating - which is a fact
+   * about the resident watcher, and the only place it is recorded is the channel.
+   */
+  if (selfLabel) {
+    const mine = live.get(selfLabel);
+    const fresh = mine ? now - mine.beat <= Math.max((mine.every || 60) * STALE_AFTER, STALE_FLOOR_SEC) : false;
+    if (!fresh) {
+      asks.push(
+        `YOU ARE NOT PUBLISHING PRESENCE as "${selfLabel}"${mine ? ` - last beat ${Math.round(now - mine.beat)}s ago, past its window` : ' - no presence message at all'}.\n` +
+          '  Every peer sees you as GONE. You cannot be --ping\'d, you are absent from\n' +
+          '  --presence, and a STALE TAKEOVER of any claim you hold will look justified to\n' +
+          '  the session performing it. Arm a watcher with:  --session <label> --heartbeat 60',
+      );
+    }
+  }
+
   if (available && installed && cmpVer(available.version, installed.version) > 0) {
     asks.push(`ASK THE HUMAN TO RUN:  /plugin marketplace update ${available.marketplace}\n  (installed ${installed.version}, available ${available.version})`);
   }
