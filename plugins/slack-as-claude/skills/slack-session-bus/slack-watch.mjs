@@ -374,14 +374,67 @@ async function beat(label, every) {
   else console.error(`[watch] heartbeat failed: ${res.error}`);
 }
 
+/**
+ * ★★★★ A MESSAGE IS BETTER LIVENESS EVIDENCE THAN A HEARTBEAT.
+ *
+ * A beat proves A TIMER FIRED inside a process. A message proves THE SESSION ACTED.
+ * That is the same distinction that makes a pong worth more than a beat - and for a
+ * long time this roster read only the weaker signal, in a channel already carrying the
+ * stronger one.
+ *
+ * ⛔ THE COST WAS A LIVE SESSION READING AS DEAD. A session that is posting but not
+ * beating - between watcher restarts, or running a poster with no watcher at all - was
+ * absent from the roster while being demonstrably alive in the transcript directly
+ * above it. Observed THREE times in one day, and once it produced a wrong instruction:
+ * a session read the roster, concluded a peer had not restarted, and told it to, while
+ * that peer's messages sat in the very channel being read. THE EVIDENCE THAT WOULD HAVE
+ * CORRECTED IT WAS ALREADY ON THE BUS. No instrument was looking at it.
+ *
+ * ⚠ The two signals mean DIFFERENT things and are not merged into one verdict:
+ *
+ *     alive   beating       - a watcher is running and publishing
+ *     active  posted only   - the session ACTED recently but publishes no usable beat;
+ *                             it cannot be --ping'd and will not answer a liveness probe
+ *     STALE   neither, recently enough to still be worth naming
+ *
+ * `active` is deliberately NOT called alive. A posting session is present but not
+ * REACHABLE, and a takeover decision needs to know which of those it has.
+ */
+function lastSpokeAt(msgs, meta) {
+  return msgs.reduce((best, m) => {
+    const { meta: mm } = parseMessage(m);
+    if (mm.session !== meta) return best;
+    const ts = Number(m.ts) || 0;
+    return ts > best ? ts : best;
+  }, 0);
+}
+
 async function roster() {
   const now = Math.floor(Date.now() / 1000);
+  const msgs = await recentMessages();
   const seen = new Map();
-  for (const m of await recentMessages()) {
+  for (const m of msgs) {
     const p = presenceOf(m);
     if (p && (!seen.has(p.session) || seen.get(p.session).beat < p.beat)) seen.set(p.session, p);
   }
-  if (!seen.size) {
+  // Sessions that have SPOKEN but publish no presence. Formerly invisible here entirely.
+  const spoke = new Map();
+  for (const m of msgs) {
+    const { meta } = parseMessage(m);
+    if (!meta.session || seen.has(meta.session)) continue;
+    const ts = Number(m.ts) || 0;
+    if (ts > (spoke.get(meta.session) ?? 0)) spoke.set(meta.session, ts);
+  }
+  // Rendered AFTER the beating sessions, below - a roster is read top-down for "who is
+  // working", and a non-beater is the weaker answer. Only recent ones are shown by
+  // default: a label that neither beats NOR has spoken lately is gone, and listing every
+  // one-off that ever posted is precisely the graveyard the age-out exists to prevent.
+  const active = [...spoke]
+    .map(([label, ts]) => [label, Math.max(0, Math.floor(now - ts))])
+    .filter(([, age]) => a.all || age <= STALE_FLOOR_SEC)
+    .sort((x, y) => x[1] - y[1]);
+
+  if (!seen.size && !active.length) {
     console.log('no presence messages found - no session is publishing a heartbeat');
     return;
   }
@@ -406,14 +459,26 @@ async function roster() {
     const state = age > limit ? 'STALE' : 'alive';
     console.log(`${state.padEnd(5)} ${label.padEnd(16)} last beat ${age}s ago (every ${p.every}s)`);
   }
+  for (const [label, age] of active) {
+    const state = age <= STALE_FLOOR_SEC ? 'active' : 'STALE';
+    console.log(
+      `${state.padEnd(5)} ${label.padEnd(16)} no beat, but POSTED ${age}s ago` +
+        (state === 'active' ? "  <- present, NOT reachable (cannot be --ping'd)" : ''),
+    );
+  }
   if (gone.length && !a.all) {
     console.log(`\n${gone.length} session(s) aged out after ${GONE_AFTER_SEC}s and are not listed: ${gone.map(([s]) => s).join(', ')}`);
     console.log('Pass --all to see them. They are omitted because a roster that never forgets becomes a graveyard.');
   }
   console.log('\nSTALE means the watcher stopped publishing - the session is gone, or its watcher died.');
   console.log('It does NOT prove the session is wedged, and alive does NOT prove it is responsive.');
-  console.log('A session that never published a heartbeat is not listed here AT ALL - absence from');
-  console.log('this roster means "not beating", never "not present".');
+  console.log('');
+  console.log('active = the session POSTED recently but publishes NO BEAT. A message is STRONGER');
+  console.log('evidence of life than a beat: a beat proves only that a timer fired, a message');
+  console.log('proves the session ACTED. But active is NOT alive - it is PRESENT and NOT');
+  console.log("REACHABLE: it cannot be --ping'd and will not answer a liveness probe.");
+  console.log('DO NOT take an active session\'s claims on staleness grounds. Silence on a');
+  console.log('heartbeat it never published is not evidence of anything.');
 }
 
 let cursor = a.since ?? null;
@@ -992,7 +1057,20 @@ if (a.doctor) {
     const lastSeen = Math.max(pr?.beat ?? 0, Number(m.ts) || 0);
     if (lastSeen && now - lastSeen > GONE_AFTER_SEC && !a.all) continue;
     const alive = pr ? now - pr.beat <= Math.max((pr.every || 60) * STALE_AFTER, STALE_FLOOR_SEC) : false;
-    peers.set(meta.session, { plugin: meta.plugin ?? null, alive, seen: !!pr, beatAge: pr ? Math.round(now - pr.beat) : null });
+    // ⚠ PEERS AND --presence MUST NOT DISAGREE, and for one release they did: --presence
+    // learned to report a posting-but-not-beating session as `active` while THIS view
+    // still filed it under stale/gone. PEERS is the surface that caused the wrong
+    // instruction in the first place, so fixing only the other one fixed the wrong half.
+    const spokeAge = Math.max(0, Math.round(now - (Number(m.ts) || 0)));
+    const active = !alive && spokeAge <= STALE_FLOOR_SEC;
+    peers.set(meta.session, {
+      plugin: meta.plugin ?? null,
+      alive,
+      active,
+      spokeAge,
+      seen: !!pr,
+      beatAge: pr ? Math.round(now - pr.beat) : null,
+    });
   }
   /**
    * ⛔⛔ A PEER'S VERSION IS "AS OF ITS LAST BEAT", NEVER "NOW". SAY SO.
@@ -1020,8 +1098,17 @@ if (a.doctor) {
   const fmt = ([s, v]) =>
     `${s}=${v.plugin ?? '?'}${v.beatAge === null ? '' : ` (as of its beat ${v.beatAge}s ago)`}`;
   const alive = [...peers].filter(([, v]) => v.alive);
-  const dead = [...peers].filter(([, v]) => !v.alive);
+  const acting = [...peers].filter(([, v]) => v.active);
+  const dead = [...peers].filter(([, v]) => !v.alive && !v.active);
   console.log(`PEERS      ${alive.length ? alive.map(fmt).join(', ') : 'none live'}`);
+  if (acting.length) {
+    console.log(
+      `           ACTIVE, not beating: ${acting
+        .map(([s, v]) => `${s}=${v.plugin ?? '?'} (posted ${v.spokeAge}s ago)`)
+        .join(', ')}`,
+    );
+    console.log("           ^ present but NOT reachable - cannot be --ping'd. NOT a takeover candidate.");
+  }
   if (dead.length) console.log(`           (stale/gone: ${dead.map(([s]) => s).join(', ')})`);
   const quiet = alive.filter(([, v]) => !v.plugin).map(([s]) => s);
   if (quiet.length) console.log(`           not announcing a version, necessarily older: ${quiet.join(', ')}`);
@@ -1057,11 +1144,23 @@ if (a.doctor) {
     const mine = live.get(selfLabel);
     const fresh = mine ? now - mine.beat <= Math.max((mine.every || 60) * STALE_AFTER, STALE_FLOOR_SEC) : false;
     if (!fresh) {
+      // ⚠ THIS TEXT WAS WRITTEN WITH A KNOWN EXPIRY AND THE EXPIRY HAS ARRIVED. In 2.9.3
+      // it said flatly "Every peer sees you as GONE", which was true only because the
+      // roster read beats alone. Now that a peer's roster also reads MESSAGES, a session
+      // that is posting is seen as ACTIVE, and the flat version would be an overstatement
+      // shipped by the very release that made it false. The two cases say different things.
+      const spokeAge = Math.max(0, Math.round(now - lastSpokeAt(msgs, selfLabel)));
+      const speaking = spokeAge <= STALE_FLOOR_SEC;
       asks.push(
         `YOU ARE NOT PUBLISHING PRESENCE as "${selfLabel}"${mine ? ` - last beat ${Math.round(now - mine.beat)}s ago, past its window` : ' - no presence message at all'}.\n` +
-          '  Every peer sees you as GONE. You cannot be --ping\'d, you are absent from\n' +
-          '  --presence, and a STALE TAKEOVER of any claim you hold will look justified to\n' +
-          '  the session performing it. Arm a watcher with:  --session <label> --heartbeat 60',
+          (speaking
+            ? `  You posted ${spokeAge}s ago, so peers on 2.10.0+ see you as ACTIVE - present, but\n` +
+              '  NOT REACHABLE. Older peers see you as GONE outright. Either way you cannot be\n' +
+              "  --ping'd and cannot answer a liveness probe."
+            : '  Every peer sees you as GONE. You cannot be --ping\'d, you are absent from\n' +
+              '  --presence, and a STALE TAKEOVER of any claim you hold will look justified to\n' +
+              '  the session performing it.') +
+          '\n  Arm a watcher with:  --session <label> --heartbeat 60',
       );
     }
   }
