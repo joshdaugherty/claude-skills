@@ -279,6 +279,35 @@ async function threadClaims() {
 async function resolutions() {
   // A done/fail in the thread ends the task: nothing to claim, and nothing to take over.
   const res = await api(REPLIES, { channel: a.channel, ts: a.task, limit: '200' });
+  /**
+   * ⛔⛔⛔ THE MOST DANGEROUS MISSING CHECK IN THIS FILE, AND IT WAS MISSING.
+   *
+   * This is STEP 0 - "is the task already resolved?" - the check §4 calls the only
+   * defence against claiming work that is already finished. Without the guard below,
+   * a failed read (`res.messages` undefined) fell through `?? []` and returned NO
+   * RESOLUTIONS, which is indistinguishable from a genuinely open task. The caller
+   * then claimed and executed work that was already DONE.
+   *
+   * ⚠ THAT IS DOUBLE EXECUTION - the single outcome this protocol exists to prevent -
+   * produced by the check written to prevent it, silently, with every surface
+   * reporting success.
+   *
+   * ★ AND IT FAILS IN THE DIRECTION THAT ACTS. An empty result means "go ahead". A
+   * rate limit is not an unlucky one-process event either: 429 is a property of the
+   * CHANNEL, so it hits every contender at once, by definition. The more concurrency,
+   * the likelier it fires - and concurrency is exactly when a stale "nothing here yet"
+   * is most expensive.
+   *
+   * The two other reads in this file already exit 2 on !ok. This one did not, and
+   * nothing distinguished it: same api(), same shape, one missing guard.
+   */
+  if (!res.ok) {
+    console.error(`ERROR (not a verdict): could not check whether this task is resolved: ${res.error}`);
+    console.error('Exit 2 = the question was not answered. Proceeding would risk claiming a task');
+    console.error('that is ALREADY DONE, because an unread thread and an unresolved one look');
+    console.error('identical from here. UNKNOWN MUST NOT RENDER AS OPEN.');
+    process.exit(2);
+  }
   return (res.messages ?? [])
     .map((m) => ({ ts: m.ts, ...meta(m) }))
     .filter((m) => m.type === 'done' || m.type === 'fail');
@@ -293,6 +322,8 @@ async function resolutions() {
  */
 async function retirementOf(session) {
   const res = await api(HISTORY, { channel: a.channel, limit: '200' });
+  // A failed read is NOT "no retirement". Both land on null, and that conflation is
+  // fail-safe here - no retirement means no AUTOMATIC takeover - so the null stays.
   if (!res.ok) return null;
   let newest = null;
   for (const m of res.messages ?? []) {
@@ -307,7 +338,11 @@ async function retirementOf(session) {
  *  byte-identical to a dead one holding a claim. */
 async function livenessOf(session) {
   const res = await api(HISTORY, { channel: a.channel, limit: '200' });
-  if (!res.ok) return null;
+  // ⚠ A FAILED READ IS NOT AN ABSENT HEARTBEAT. Returning null for both made the caller
+  // announce "that session publishes no heartbeat" - a claim about the PEER - when all
+  // that had happened was that this process could not ask. Fail-safe either way, since
+  // the caller stands down; but a wrong REASON in a thread is what §4 relies on later.
+  if (!res.ok) return { unknown: true };
   let best = null;
   for (const m of res.messages ?? []) {
     const mm = meta(m);
@@ -359,10 +394,17 @@ if (holder && holder.session !== label) {
     console.log(`${holder.session} held claim ${holder.ts} and RETIRED at ${retired.ts}.`);
     console.log('That is an announced departure, not a timeout: the claim is free immediately.');
   } else {
-  const state = !live ? 'no presence published' : live.alive ? `alive, last beat ${live.age}s ago` : `STALE, last beat ${live.age}s ago`;
-  if (live?.alive || a['ignore-stale'] || !live) {
+  const state = live?.unknown
+    ? 'liveness UNREADABLE - the API call failed, which is not a fact about that session'
+    : !live
+      ? 'no presence published'
+      : live.alive
+        ? `alive, last beat ${live.age}s ago`
+        : `STALE, last beat ${live.age}s ago`;
+  if (live?.alive || a['ignore-stale'] || !live || live.unknown) {
     console.log(`HELD BY ${holder.session} (claim ${holder.ts}) - ${state}.`);
-    if (!live) console.log('That session publishes no heartbeat, so its liveness is unknown. Treating the claim as held.');
+    if (live?.unknown) console.log('The liveness read FAILED. That is not a statement about that session - treating the claim as held, which is the safe direction.');
+  else if (!live) console.log('That session publishes no heartbeat, so its liveness is unknown. Treating the claim as held.');
     console.log('Stand down.');
     process.exit(1);
   }
