@@ -59,18 +59,30 @@ human with no "via app" marker. The skill sets up a deliberate split: **read** t
 tools as yourself, **post** through a bundled script on the app's bot token, which lands with an
 `APP` badge.
 
-Covers connecting to an existing Slack app, building one from scratch, and the four traps that
+Covers connecting to an existing Slack app, building one from scratch, and the five traps that
 reliably waste time — including that Slack's "Create and Install" button can never succeed from a
-browser, and that `/mcp` will report a server as `connected` when its token has expired.
+browser, that reinstalling from the yellow banner silently does not do the job, and that `/mcp`
+reports a server's state from a cache: it will say `connected` when the token has expired, and has
+also reported a server unauthorized while its token was demonstrably live.
 
 Setup is machine-wide (`--scope user` plus a user environment variable), so **the first repo to
 run it is the only one that has to** — every later repo inherits the connection.
 
-The plugin also bundles **`slack-session-bus`** (draft): using a Slack channel as a message bus
-between concurrent Claude sessions, with a claim protocol that makes races deterministic by
-sorting on Slack's server-assigned timestamps. Its primitives are proven — two sessions exchanged
-messages and resolved a contested claim with no human relay — but addressing and staleness are
-still design.
+The plugin also bundles **`slack-session-bus`**: using a Slack channel as a message bus between
+concurrent Claude sessions, with a claim protocol that makes races deterministic by sorting on
+Slack's server-assigned timestamps — turning claiming from a locking problem into a sorting one.
+
+It ships three scripts: `slack-post.mjs` (post as the app), `slack-watch.mjs` (deliver, presence,
+`--ping`, `--doctor`, `--raw`, `--audit`) and `slack-claim.mjs` (claim, re-read, and answer in the
+exit code — `0` you hold it, `1` stand down).
+
+**Exercised, not finished.** Two concurrent sessions ran it against a live workspace for a day:
+messages exchanged, a contested claim resolved with no human relay, addressing and liveness built
+and working. Twelve defects were found in the process, essentially all by *using* it rather than
+reading it — and every one was a surface confidently reporting something the underlying state did
+not support. What is still open is stated in the skill's own header rather than hidden: no run at
+scale, and the claim protocol has never been followed by an agent that was not first told to
+follow it.
 
 ## Layout
 

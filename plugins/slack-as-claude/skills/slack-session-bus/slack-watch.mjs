@@ -19,7 +19,7 @@
  * Node 18+. No dependencies.
  */
 import { execFileSync } from 'node:child_process';
-import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -509,7 +509,21 @@ async function poll() {
     // moment a peer appears to lack a capability that has simply not shipped to it.
     let plugin = '';
     if (!meta.plugin) plugin = ' plugin=?';
-    else if (OWN_PLUGIN && meta.plugin !== OWN_PLUGIN) plugin = ` plugin=${meta.plugin}!SKEW(you=${OWN_PLUGIN})`;
+    // `reader=`, NOT `you=`. A SESSION DOES NOT HAVE A VERSION - A PROCESS DOES, and
+    // one session routinely holds several at once: a long-lived watcher plus every
+    // short-lived invocation beside it. `you=` implied a single answer existed and
+    // made two correct processes look like one wrong instrument. Observed: the same
+    // message rendered `2.8.1+dev` by a resident watcher and `2.9.0+dev` by a fresh
+    // call, seconds apart. Neither was faulty; the QUESTION was ill-posed.
+    //
+    // ⚠ AND OWN_PLUGIN IS READ ONCE, AT MODULE LOAD (see the const above). In a CACHE
+    // copy that is exact forever - the version is in the path and the files never
+    // change. In a REPO checkout the number describes the manifest AT LAUNCH and not
+    // the code, which is the whole reason `+dev` exists. So a `+dev` version is not a
+    // stale reading of the code; it is not a reading of the code at all. Do not
+    // re-read the manifest per message to "fix" this: it would make the process
+    // report a version it is not running, which is strictly worse.
+    else if (OWN_PLUGIN && meta.plugin !== OWN_PLUGIN) plugin = ` plugin=${meta.plugin}!SKEW(reader=${OWN_PLUGIN})`;
 
     // One line per message: each becomes a single Monitor event.
     console.log(`[bus] ts=${m.ts} from=${from}${to}${type}${thread}${plugin}${edited} :: ${body.replace(/\s+/g, ' ')}`);
@@ -824,6 +838,32 @@ function sameCode(a1, b1) {
   }
 }
 
+/**
+ * How long ago the marketplace clone was last pulled, as a phrase fit to sit beside
+ * a version number. Read from .git/FETCH_HEAD, which git rewrites on every fetch.
+ *
+ * Falls back to "age unknown" rather than to silence: an ABSENT age reads as no
+ * caveat at all, which is precisely the failure being fixed. A caveat that
+ * disappears when it cannot be computed is worse than useless, because the reader
+ * cannot tell "fresh" from "could not tell".
+ */
+function cloneAge(dir) {
+  for (const f of ['FETCH_HEAD', 'HEAD']) {
+    try {
+      const ms = Date.now() - statSync(join(dir, '.git', f)).mtimeMs;
+      const mins = Math.round(ms / 60000);
+      if (mins < 1) return 'fetched just now';
+      if (mins < 90) return `fetched ${mins}m ago`;
+      const hrs = Math.round(mins / 60);
+      if (hrs < 48) return `fetched ${hrs}h ago`;
+      return `fetched ${Math.round(hrs / 24)}d ago`;
+    } catch {
+      /* try the next marker */
+    }
+  }
+  return 'age unknown';
+}
+
 function cmpVer(x, y) {
   const p = (v) => String(v).split('.').map(Number);
   const [a1, b1, c1] = p(x);
@@ -861,18 +901,41 @@ if (a.doctor) {
   }
   console.log(`INSTALLED  ${installed ? `${installed.version}   (marketplace: ${installed.marketplace})` : 'none found'}`);
 
-  // Available: what the marketplace clone on disk currently offers.
+  // Available: what the marketplace clone ON DISK currently offers.
+  //
+  // ⛔⛔ THIS IS A CACHE, AND IT IS AS OLD AS THE LAST PULL. It is NOT what the
+  // marketplace offers - it is what it offered when someone last ran
+  // `/plugin marketplace update`. A release can be committed, tagged and pushed
+  // and this number will not move.
+  //
+  // ★ Demonstrated live: --doctor printed `AVAILABLE 2.8.1 ... UP TO DATE ... and
+  // nothing newer is available` while v2.9.0 sat tagged and pushed on origin. The
+  // instrument built to detect version skew was itself reporting a stale cache as
+  // current - and reported it in the exact words that tell a reader to stop looking.
+  //
+  // SO THE AGE SHIPS NEXT TO THE NUMBER, ALWAYS. A figure that can be stale must
+  // carry how stale it might be, or the reader has no way to discount it. This is
+  // the same rule as `+dev` on a version and `!SKEW` on a peer: the surface has to
+  // disclose its own uncertainty, because a confident number reads as a fresh one.
   const mktRoot = join(homedir(), '.claude', 'plugins', 'marketplaces');
   let available = null;
   try {
     for (const mkt of readdirSync(mktRoot)) {
       const m = readJson(join(mktRoot, mkt, 'plugins', pluginName, '.claude-plugin', 'plugin.json'));
-      if (m?.version && (!available || cmpVer(m.version, available.version) > 0)) available = { version: m.version, marketplace: mkt };
+      if (m?.version && (!available || cmpVer(m.version, available.version) > 0)) {
+        available = { version: m.version, marketplace: mkt, fetched: cloneAge(join(mktRoot, mkt)) };
+      }
     }
   } catch {
     /* no marketplaces */
   }
-  console.log(`AVAILABLE  ${available ? `${available.version}   (marketplace: ${available.marketplace})` : 'unknown - marketplace clone not found'}`);
+  console.log(
+    `AVAILABLE  ${
+      available
+        ? `${available.version}   (marketplace: ${available.marketplace}, ${available.fetched})`
+        : 'unknown - marketplace clone not found'
+    }`,
+  );
 
   // Peers, from the wire.
   // Count peers by SESSION, not by message. Messages arrive newest-first, so the first
@@ -946,7 +1009,21 @@ if (a.doctor) {
   }
 
   if (!asks.length) {
-    console.log('UP TO DATE. Running code matches the newest installed copy, and nothing newer is available.');
+    // ⛔ WAS: "...and nothing newer is available." THAT SENTENCE WAS A LIE THIS TOOL
+    // COULD NOT DETECT. It asserts a fact about the MARKETPLACE while knowing only a
+    // fact about a LOCAL CLONE, and it was printed verbatim while v2.9.0 sat tagged
+    // and pushed on origin. The words told the reader to stop looking, which is the
+    // most expensive thing a wrong status line can do.
+    //
+    // The claim is now scoped to what was actually checked, and the caveat is
+    // UNCONDITIONAL - not shown only when the clone looks old, because "old" is
+    // exactly the judgement this tool has already proved it cannot make.
+    console.log('UP TO DATE, AS FAR AS THIS CAN SEE. Running code matches the newest INSTALLED copy,');
+    console.log('and nothing newer is present in the marketplace clone ON DISK.');
+    console.log(
+      `⚠ That clone is a CACHE (${available?.fetched ?? 'age unknown'}). A release pushed since then is`,
+    );
+    console.log('invisible here. This tool cannot see origin. Run /plugin marketplace update to be sure.');
     console.log('Note a version DIFFERENCE alone would not have meant anything: a docs-only release bumps');
     console.log('the number without changing behaviour. This check compares bytes, not version strings.');
   } else {

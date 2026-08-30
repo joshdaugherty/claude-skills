@@ -1,6 +1,6 @@
 ---
 name: slack-as-claude
-description: Use when a repo needs Claude to post into Slack — whether connecting to a Slack app that already exists or building one from scratch. Covers the read-as-human / post-as-app identity split, the one-time machine-wide setup that every later repo inherits for free, and the four traps that reliably cost time.
+description: Use when a repo needs Claude to post into Slack — whether connecting to a Slack app that already exists or building one from scratch. Covers the read-as-human / post-as-app identity split, the one-time machine-wide setup that every later repo inherits for free, and the five traps that reliably cost time.
 ---
 
 # Slack from a Claude session

@@ -15,7 +15,7 @@ description: Use when two or more concurrent Claude sessions need to talk to eac
 - ⚠ **The claim protocol with an UNPROMPTED agent — NARROWED, NOT CLOSED.** *`slack-post --type claim` now REFUSES and names `slack-claim.mjs`, so the default wrong path routes to the right one.* **But no genuinely unprompted agent has yet been observed running it end to end.**
 - ⛔ **Anything at scale.** *Two sessions, one afternoon, one channel.*
 
-★ **ELEVEN defects were found here, and essentially all of them by USING the thing rather than reading it.** ⚠ *Five were the author's own path diverging from the documented one — see §7.*
+★ **TWELVE defects were found here, and essentially all of them by USING the thing rather than reading it.** ### **Every one was a SURFACE reporting something the underlying state did not support** — *a claim body, a changelog, a version string, a usage string, a dry run, a roster, an auth error, and `--doctor` itself.* # **That is not a bug class, it is the failure mode of this design, and every instance fell in under two minutes to going at the thing itself rather than the thing describing it.** ⚠ *Five were the author's own path diverging from the documented one — see §7.*
 
 **Prerequisite: the `slack-as-claude` skill, fully set up.** *This adds a protocol on top of its posting script and the MCP read tools; it adds no new Slack configuration.*
 
@@ -187,6 +187,24 @@ diff --strip-trailing-cr -q <repo-path> <cache-path>
 
 ★ **OBSERVED, and it is the sharpest form of the problem:** *a watcher was armed minutes before `!UNKNOWN` type-flagging was added.* # **The safeguard built specifically to make a peer's typo visible was, inside that process, SILENTLY ABSENT.** *A typo'd type would have rendered as an ordinary one and the session would have concluded nothing was wrong.*
 
+# ★★★★ AND A SESSION DOES NOT HAVE A VERSION. **A PROCESS DOES.**
+
+### **One session routinely holds SEVERAL residents at once** — *a long-lived watcher, plus every short-lived invocation beside it.* ⚠ **They can be at different versions, simultaneously, and both be correct.**
+
+★ **OBSERVED:** *the same message, ts `1788114445.023379`, rendered twice within seconds —* `2.8.1+dev` *by the resident watcher and* `2.9.0+dev` *by a fresh call.* # **Neither process was faulty. The QUESTION was ill-posed.** ## *So the marker reads `reader=`, never `you=`: it names the RENDERING PROCESS, because that is the only thing a single number can honestly describe.*
+
+# ⛔⛔ AND `+dev` IS STRONGER THAN "POSSIBLY OUT OF DATE". **IT VOIDS THE NUMBER AS EVIDENCE ABOUT CODE.**
+
+| **In a CACHE copy** | ### **The version is IN THE PATH and the files never change.** *A load-time read is exact forever —* **the number IS the code.** |
+| :-- | --- |
+| **In a REPO checkout** | ### **The number describes the MANIFEST AT LAUNCH and never described the code at all.** ⚠ *The watcher above was running 2.9.0's code and reporting 2.8.1 — the bump landed 114 seconds after it armed.* |
+
+## ⛔ **So two `+dev` versions agreeing tells you NOTHING, and one disagreeing tells you nothing either.** ### **`!SKEW` between `+dev` copies is not evidence.** *Both lanes read it as though it were, for a whole day.*
+
+# ✔ **AND DO NOT "FIX" THIS BY RE-READING THE MANIFEST PER MESSAGE.** ### *In the cache it is already exact; in the repo there is no correct value to read.* **Re-reading would make a process report a version it is not running — the exact failure this file is about.** ★ *This began as "the instrument is stale", which was wrong, and as "the value is already right", which was also wrong. The truth was neither.*
+
+---
+
 # ⚠⚠ AND THE FIX FOR THIS TRIGGERS THE HANDOVER HOLE.
 
 ### **After ANY edit to `slack-watch.mjs`, every session running it must RESTART it — and a bare restart drops whatever arrived in the gap.** ## **So: restart with `--since <last ts you saw>`.** *Two defects interlock, and doing the right thing about one opens the other unless you already know about both.*
@@ -226,11 +244,11 @@ diff --strip-trailing-cr -q <repo-path> <cache-path>
 # 3. ADDRESSING — ✅ BUILT
 
 ```bash
-node slack-post.mjs --channel <id> --to r-branch --type claim --text "..."
+node slack-post.mjs --channel <id> --to indexer --type claim --text "..."
 ```
 
 ```
-to: r-branch          <- omit for broadcast
+to: indexer           <- omit for broadcast
 type: claim           <- validated, see below
 session: cea6f85a     <- the sender, emitted automatically
 ```
@@ -250,7 +268,7 @@ session: cea6f85a     <- the sender, emitted automatically
 
 ★ **`slack-watch` flags an unrecognised type as `type=foo!UNKNOWN`** *rather than letting it pass as noise, so a PEER's typo is visible to you too.*
 
-### **A session should set `CLAUDE_SESSION_NAME` to a stable lane name** *(`main`, `r-branch`, `indexer`)*. **A raw session id changes every restart, which makes it useless as an address.**
+### **A session should set `CLAUDE_SESSION_NAME` to a stable lane name** *(`main`, `indexer`, `worker-2`)*. **A raw session id changes every restart, which makes it useless as an address.**
 
 ⚠ **`to:` is a CONVENTION, not a delivery mechanism.** *Every session sees every message in the channel. Filtering is the reader's job, and a reader that ignores `to:` will happily act on someone else's work.*
 
