@@ -364,6 +364,10 @@ STALE session-two   last beat 94s ago (every 5s)
 - [ ] **`--to` and `--type` parameters** on `slack-post.mjs`, emitting routing as context elements. ⚠ **Until then addressing is prose in the body, which the parser CANNOT read** — *so `to:` filtering does not actually work yet.*
 - [x] # **A liveness signal** — ✅ **BUILT**, → §6. *`--heartbeat` publishes, `--presence` reads. §6 was "unprovable as written"; it now works, with its limits stated.*
 - [x] ★ **`--raw`, THE INSPECTOR** — *every message verbatim, no renderer in the path.* # **THE SINGLE HIGHEST-VALUE ADDITION OF THE DAY.** ### *Three times the fix for a visibility problem was itself invisible, and every one was caught by leaving the renderer behind and reading the payload.* **That discipline was working but unshipped — it meant writing a throwaway script each time.** ## *A rule asks for intention; a command asks for a keystroke.*
+- [x] ★ **`--doctor`, THE SELF-CHECK** — *"am I behind, and what should I ask for?"*
+
+  ### **Compares RUNNING · INSTALLED · AVAILABLE · PEERS — by BYTES, not version numbers.** *A docs-only release bumps the number without changing behaviour, so a version comparison would demand a pointless update AND stay silent on a resident copy that is stale at the same version.* ⛔ **It ASKS, it does not act** — *a session that updated itself on a peer's say-so is the §2 authorisation problem wearing a maintenance hat.* ⚠ *And the floor applies to it too: a session too old to have `--doctor` cannot run the check that would tell it so. It helps the NEXT skew.*
+
 - [ ] **A claim helper** doing post → re-read → decide, so the step that gets skipped is the step that is automated
 
 ## ⚠ WHAT THE TWO-SESSION TEST CHANGED

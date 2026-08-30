@@ -19,8 +19,9 @@
  * Node 18+. No dependencies.
  */
 import { execFileSync } from 'node:child_process';
-import { readFileSync, existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
@@ -78,6 +79,7 @@ const { values: a } = parseArgs({
     heartbeat: { type: 'string', default: '0' },
     presence: { type: 'boolean', default: false },
     raw: { type: 'boolean', default: false },
+    doctor: { type: 'boolean', default: false },
     'ignore-session': { type: 'string', multiple: true, default: [] },
     'include-self': { type: 'boolean', default: false },
     once: { type: 'boolean', default: false },
@@ -94,6 +96,8 @@ if (a.help || !a.channel) {
       '  --heartbeat  publish liveness for --session, refreshed in place. Match the rate\n' +
       '               to the staleness window you care about, not to impatience.\n' +
       '  --presence   read the roster: who is alive, who is STALE. Pull, not push.\n' +
+      '  --doctor     Am I behind? Compares RUNNING / INSTALLED / AVAILABLE / PEERS by\n' +
+      '               BYTES, not version numbers, and prints what to ask a human for.\n' +
       '  --raw        INSPECTOR. Every message verbatim - raw ts, edited, every context\n' +
       '               element, undecoded body. No whitelist, no decode, no filtering.\n' +
       '               Reach for this the moment the rendering looks wrong: the renderer\n' +
@@ -442,6 +446,140 @@ if (a.presence) {
  * exactly one path with NO renderer in it - no whitelist, no decoding, no filtering,
  * not even the self-ignore. If a field is on the wire, it appears here.
  */
+/**
+ * --doctor: work out whether this session is behind, and if so print the exact thing to
+ * ask a human for.
+ *
+ * ★ WHY IT COMPARES CODE AND NOT VERSION NUMBERS. A docs-only release bumps the version
+ * while changing no behaviour, so "you are on 2.2.1, 2.3.0 exists" would demand an update
+ * that gains nothing - and, worse, a version match says nothing about a RESIDENT copy
+ * that has been running since before the file changed. The version is a label; the bytes
+ * are the capability. So: compare the bytes, and report the version only as context.
+ *
+ * ⛔ IT ASKS. IT DOES NOT ACT. Updating a plugin is the human's call, and a session that
+ * updated itself on a peer's say-so would be the authorisation problem in §2 wearing a
+ * maintenance hat.
+ */
+function readJson(p) {
+  try {
+    return existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : null;
+  } catch {
+    return null;
+  }
+}
+
+function sameCode(a1, b1) {
+  try {
+    const norm = (p) => readFileSync(p, 'utf8').replace(/\r\n/g, '\n');
+    return norm(a1) === norm(b1);
+  } catch {
+    return null; // unknown, not "different"
+  }
+}
+
+function cmpVer(x, y) {
+  const p = (v) => String(v).split('.').map(Number);
+  const [a1, b1, c1] = p(x);
+  const [a2, b2, c2] = p(y);
+  return a1 - a2 || b1 - b2 || c1 - c2;
+}
+
+if (a.doctor) {
+  const selfFile = fileURLToPath(import.meta.url);
+  const skillDir = dirname(selfFile);
+  const runningManifest = readJson(join(skillDir, '..', '..', '.claude-plugin', 'plugin.json'));
+  const pluginName = runningManifest?.name ?? 'slack-as-claude';
+  const runningVer = runningManifest?.version ?? 'unknown';
+  const inCache = selfFile.includes(join('.claude', 'plugins', 'cache'));
+
+  console.log(`RUNNING    ${pluginName} ${runningVer}   ${inCache ? '(installed copy)' : '(REPO checkout - authoring only)'}`);
+  console.log(`           ${selfFile}`);
+
+  // Installed: newest version directory in any marketplace cache for this plugin.
+  const cacheRoot = join(homedir(), '.claude', 'plugins', 'cache');
+  let installed = null;
+  try {
+    for (const mkt of readdirSync(cacheRoot)) {
+      const dir = join(cacheRoot, mkt, pluginName);
+      if (!existsSync(dir)) continue;
+      for (const v of readdirSync(dir)) {
+        if (existsSync(join(dir, v, '.orphaned_at'))) continue;
+        if (!installed || cmpVer(v, installed.version) > 0) {
+          installed = { version: v, marketplace: mkt, watcher: join(dir, v, 'skills', basename(skillDir), 'slack-watch.mjs') };
+        }
+      }
+    }
+  } catch {
+    /* no cache */
+  }
+  console.log(`INSTALLED  ${installed ? `${installed.version}   (marketplace: ${installed.marketplace})` : 'none found'}`);
+
+  // Available: what the marketplace clone on disk currently offers.
+  const mktRoot = join(homedir(), '.claude', 'plugins', 'marketplaces');
+  let available = null;
+  try {
+    for (const mkt of readdirSync(mktRoot)) {
+      const m = readJson(join(mktRoot, mkt, 'plugins', pluginName, '.claude-plugin', 'plugin.json'));
+      if (m?.version && (!available || cmpVer(m.version, available.version) > 0)) available = { version: m.version, marketplace: mkt };
+    }
+  } catch {
+    /* no marketplaces */
+  }
+  console.log(`AVAILABLE  ${available ? `${available.version}   (marketplace: ${available.marketplace})` : 'unknown - marketplace clone not found'}`);
+
+  // Peers, from the wire.
+  const peers = new Map();
+  let silent = 0;
+  for (const m of await recentMessages()) {
+    const { meta } = parseMessage(m);
+    if (!meta.session || meta.session === selfLabel) continue;
+    if (meta.plugin) peers.set(meta.session, meta.plugin);
+    else if (!peers.has(meta.session)) silent++;
+  }
+  console.log(`PEERS      ${peers.size ? [...peers].map(([s, v]) => `${s}=${v}`).join(', ') : 'none announcing'}${silent ? ` (+${silent} not announcing a version - necessarily older)` : ''}`);
+
+  // Verdict, by BYTES not by version number.
+  console.log('');
+  const asks = [];
+  if (available && installed && cmpVer(available.version, installed.version) > 0) {
+    asks.push(`ASK THE HUMAN TO RUN:  /plugin marketplace update ${available.marketplace}\n  (installed ${installed.version}, available ${available.version})`);
+  }
+  if (installed && existsSync(installed.watcher)) {
+    const same = sameCode(selfFile, installed.watcher);
+    if (same === false && inCache) {
+      asks.push(
+        `RESTART THIS WATCHER from the installed copy - the running process is stale:\n` +
+          `  node "${installed.watcher}" --channel ${a.channel} --session <label> --since <last ts you saw>\n` +
+          `  ⚠ pass --since, or the restart silently drops anything posted during the handover.`,
+      );
+    } else if (same === false && !inCache) {
+      // Running a repo checkout whose bytes differ from the release. Direction is not
+      // knowable from bytes alone, but a working tree is normally AHEAD, not behind -
+      // so do not tell the human to go fetch something. Tell them what is actually true.
+      asks.push(
+        `You are running an AUTHORING CHECKOUT whose code differs from the released ${installed.version}.\n` +
+          `  That usually means uncommitted work, not a stale session. Nothing to fetch.\n` +
+          `  Peers on the release cannot see anything you added here until it ships.`,
+      );
+    } else if (same === true && !inCache) {
+      asks.push(`Switch to the installed copy - same code, but the repo is authoring-only:\n  ${installed.watcher}`);
+    }
+  }
+
+  if (!asks.length) {
+    console.log('UP TO DATE. Running code matches the newest installed copy, and nothing newer is available.');
+    console.log('Note a version DIFFERENCE alone would not have meant anything: a docs-only release bumps');
+    console.log('the number without changing behaviour. This check compares bytes, not version strings.');
+  } else {
+    const behind = asks.some((x) => x.startsWith('ASK') || x.startsWith('RESTART'));
+    console.log(behind ? 'THIS SESSION IS BEHIND, and cannot fix it itself - updating a plugin is the human\'s call.' : 'ACTION SUGGESTED:');
+    if (behind) console.log('Paste this to them:\n\n  I am behind on the slack-as-claude plugin and need you to authorise catching up.');
+    asks.forEach((x) => console.log(`  ${x.replace(/\n/g, '\n  ')}`));
+  }
+  if (!a.session) console.log('\n(Pass --session <label> so your own messages are not counted as peers.)');
+  process.exit(0);
+}
+
 if (a.raw) {
   const msgs = (await recentMessages(a.since ? 200 : 20)).slice().reverse();
   for (const m of msgs) {
