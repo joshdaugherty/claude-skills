@@ -184,8 +184,79 @@ claude mcp add --transport http slack https://mcp.slack.com/mcp --scope user --c
 ```
 
 **`-ThreadTs <ts>`** replies in a thread — *get the `ts` from `mcp__slack__slack_read_channel`.*
+**`-DryRun`** prints the composed identity and context line and sends nothing. **Use it before the first real post, and for every experiment** — *an overridden-identity message cannot be deleted afterwards.*
+**`-NoContext`** drops the context line · **`-AsApp`** drops the whole override.
 
-**Success:** `Posted to C01234ABCDE as bot B01234ABCDE - ts 1788055161.122969`
+**Success:** `Posted to C01234ABCDE as 'Claude - josh@josh-pc - myrepo - main#cea6f85a' :desktop_computer: - ts 1788094979.110239`
+
+---
+
+## ★ PER-SESSION IDENTITY — telling several Claude sessions apart
+
+**Every message is labelled with where it came from**, so a channel several sessions post into stays legible. **The label is SPLIT across two places, because they truncate completely differently:**
+
+```
+🖥  Claude·daugherty-ydna              APP        <- display name, ~50 chars, CLIPS
+    🖥  main#cea6f85a · Josh@josh-pc              <- context block, WRAPS, no clip
+    The actual message.
+```
+
+| Part | Where | Detected from | Override |
+| :-- | :-: | --- | --- |
+| **icon** | both | OS — `:desktop_computer:` · `:apple:` · `:penguin:` | `-IconEmoji` |
+| **project** | **name** | git repo root's basename, else cwd | `-Project` |
+| **session** | context | `CLAUDE_SESSION_NAME`, else git branch | `-Session` |
+| **id** | context | first 8 of `CLAUDE_CODE_SESSION_ID` | `-NoSessionId` |
+| **user** | context | `$env:USERNAME` / `$env:USER` | `-User` |
+| **machine** | context | `CLAUDE_SLACK_MACHINE`, else computer name | `-Machine` |
+
+# ★★ WHY SPLIT — THE TWO FIELDS TRUNCATE IN OPPOSITE WAYS
+
+### **MEASURED, not read off a doc — Slack documents neither.**
+
+| **Display name** | # **CLIPS at ~50 visible characters.** *Window-width dependent, silent, mid-word.* ★ *A first attempt put `<session>#<id>` last and Slack ate exactly the part that made it unique.* **Put only what must always be visible here.** |
+| :-- | --- |
+| **Context block** | # **WRAPS. Does not clip.** ### *A 300-character ruler rendered all 300, flowing onto a second line.* **API cap is 3000 per text object, 10 elements per block — neither is reachable in practice.** ⚠ *Costs vertical space, so one line's worth (~260 chars at a typical width) is the real budget.* |
+
+⚠ **Runs of whitespace COLLAPSE in a context block.** *Padding to align columns does not survive. Use separators.*
+
+★ **Consequence: the context line is nearly free.** *An ugly `DESKTOP-HBNGBFQ` costs nothing there, so `CLAUDE_SLACK_MACHINE` is cosmetic rather than necessary.* **Add git SHA, worktree, or task label if useful — there is room.**
+
+## ⚠ Two implementation traps, both SILENT
+
+- # **`ConvertTo-Json` DEFAULTS TO `-Depth 2`.** ### *Blocks nest four levels deep; at the default, inner objects serialise as .NET type names and Slack rejects or mangles the message.* **Always `-Depth 10`.**
+- # **KEEP `text` POPULATED ALONGSIDE `blocks`.** ### *It is what push notifications and unfurls read.* **Drop it and mobile alerts arrive silent and contentless** — *and nothing in the API response tells you.*
+
+### ⚠ **Requires the `chat:write.customize` BOT scope.** **Adding it is a scope change → reinstall → trap 3 → BOTH tokens rotate.** *`-AsApp` posts under the app's plain identity instead.*
+
+# ⚠⚠ WITHOUT THE SCOPE SLACK **SILENTLY IGNORES** `username` AND `icon_emoji`
+
+## **It returns `ok: true` and posts under the app's default name.** *No `missing_scope`, no warning, no clue in the response.* # **A SUCCESSFUL POST IS NOT EVIDENCE THE OVERRIDE APPLIED.**
+
+### ★ **So verify the TOKEN, not the response.** *Any Web API call returns the granted scopes in a response header:*
+
+```powershell
+$t = [Environment]::GetEnvironmentVariable('SLACK_BOT_TOKEN','User')
+$r = Invoke-WebRequest -Uri 'https://slack.com/api/auth.test' -Method Post -Headers @{ Authorization = "Bearer $t" } -UseBasicParsing
+$r.Headers['X-OAuth-Scopes']
+```
+
+# **If `chat:write.customize` is not in that list, the override cannot work — no matter what the post returned.**
+
+# ★ WHY THE SESSION ID IS APPENDED BY DEFAULT
+
+## **A branch is NOT unique.** *Two concurrent sessions on `main` in the same repo compose byte-identical names.* **The id is the only thing that actually separates them** — `CLAUDE_CODE_SESSION_ID` is per-session and stable for the session's life.
+
+⚠ # **Claude Code exposes NO session TITLE.** ### *Conversation summaries are written on compaction, not live — there is nothing to read at post time.* **Do not go looking; the id and the branch are what exist.** *Set `CLAUDE_SESSION_NAME` if a session deserves a human label.*
+
+★ *`CLAUDE_SLACK_MACHINE` is worth setting.* **A Windows default like `DESKTOP-HBNGBFQ` eats 15 characters of every name.**
+
+## ⛔ Two limits of the override, both real
+
+- # **It is a DISPLAY override, not a separate account.** ### *Every message still comes from the same bot with the same `APP` badge; clicking through shows the one underlying app.* **Good for "which project is talking". Useless against anyone adversarial.** *True separation means one Slack app per identity — the whole of PATH B, per identity.*
+- # ⚠ **A message posted with an overridden identity CANNOT be retracted with `chat.delete`.** ### **This bites for real: a throwaway test post cannot be cleaned up by the thing that made it — a human has to delete it by hand.** *Think before posting anything you may need to withdraw, and prefer `-DryRun` for experiments.*
+
+⚠ ★ **AND THE MCP READ TOOLS DO NOT SHOW THE OVERRIDE.** ### `slack_read_channel` *reports the AUTHORING BOT for every such message — the custom name is invisible to it.* # **So you cannot verify the rendering by reading it back, and you cannot verify it from the post response either.** ## **Check the token's scopes, then ask a human to look at the channel.** *Those are the only two honest checks.*
 
 ## ★ Getting the channel id
 
