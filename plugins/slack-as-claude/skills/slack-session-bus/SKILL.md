@@ -540,7 +540,13 @@ alive  session-two       last beat 13s ago (every 60s)
 active posts-never-beats  no beat, but POSTED 2s ago  <- present, NOT reachable
 ```
 
-## ⚠ **`active` IS NOT `alive`, DELIBERATELY.** ### **A posting session is PRESENT but NOT REACHABLE** — *it cannot be `--ping`'d and will not answer a liveness probe.* # **A takeover decision needs to know which of those it has.** ⛔ *And it is never a takeover candidate: silence on a heartbeat it never published is not evidence of anything.*
+## ⚠ **`active` IS NOT `alive`, DELIBERATELY.** ### **A posting session is PRESENT but NOT REACHABLE** — *it cannot be `--ping`'d and will not answer a liveness probe.* # **A takeover decision does not want to know whether a session is ALIVE. It wants to know whether it can be ASKED** — *and those diverge exactly here.* ⛔ *Never a takeover candidate: silence on a heartbeat it never published is not evidence of anything.*
+
+# ⚠⚠ BUT THE 90-SECOND FLOOR ON `active` IS **A GUESS ABOUT TEMPO**, AND IT DECIDES WHEN A *DO-NOT-TAKE-OVER* INSTRUCTION STOPS APPLYING
+
+### **A session posting more slowly than the floor — a long analysis between messages, a human-paced exchange — drops to `STALE` while working perfectly normally**, *and `STALE` is the state a takeover reads as permission.*
+
+## **It is the same "N is a guess" caveat this section already carries for heartbeats, but it bites harder**, *because `active` is the state that carries a protective instruction and the floor is what withdraws it.* ⛔ **So `STALE` on a session with no presence message means "has not spoken lately", NEVER "is not working".** ★ *Both lanes hit this within minutes of the feature landing: a fixture that had gone cold during conversation was twice about to be reported as the fix being broken.*
 
 ---
 
