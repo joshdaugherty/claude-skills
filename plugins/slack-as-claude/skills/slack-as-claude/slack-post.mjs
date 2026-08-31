@@ -488,7 +488,15 @@ function sectionBlocks(text) {
     if (cut < MAX_SECTION * 0.5) cut = rest.lastIndexOf(' ', MAX_SECTION);
     if (cut <= 0) cut = MAX_SECTION;
     chunks.push(rest.slice(0, cut));
-    rest = rest.slice(cut).replace(/^\s+/, '');
+    // ⚠ THE SEPARATOR IS KEPT, NOT STRIPPED, SO THE SPLIT IS EXACTLY REVERSIBLE.
+    //
+    // It used to be trimmed for tidier rendering, which made concatenating the blocks
+    // back together lossy: words ran into each other and paragraph breaks vanished at
+    // every boundary. That did not matter while the reader only ever showed the FIRST
+    // block - a defect that silently truncated 24 messages before it was found - and it
+    // matters now that the reader rejoins them. A writer that splits must split in a way
+    // its reader can undo; anything else moves the loss rather than removing it.
+    rest = rest.slice(cut);
   }
   if (rest) chunks.push(rest);
   if (chunks.length > MAX_BLOCKS) {
