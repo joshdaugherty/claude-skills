@@ -568,6 +568,34 @@ async function poll() {
     return res.error !== 'channel_not_found' && res.error !== 'invalid_auth';
   }
 
+  /**
+   * ★ NOT A LOSS - A LAG. The difference was settled by MEASUREMENT, not reasoning.
+   *
+   * The reported worry was that a burst larger than one page would be SKIPPED: take the
+   * newest 50, advance the cursor past them, never see the older remainder. Tested
+   * against the live API with `oldest` set and `limit=3`, and the premise is REFUTED -
+   * Slack returns the OLDEST slice of the window, not the newest:
+   *
+   *     window held 57 messages, has_more=true
+   *     limit=3 returned the three OLDEST, matching the window's first three exactly
+   *
+   * So walking `oldest` forward CANNOT skip: each poll takes the next-oldest page, and
+   * the cursor never advances past a message that was not emitted. A backlog DRAINS over
+   * successive polls rather than being lost.
+   *
+   * ⚠ What is left is real but different: the watcher is BEHIND, and was silently so. A
+   * claim thread whose earliest claims - the ones that WIN under lowest-ts - are still
+   * queued reads as unresolved until the drain catches up. Reporting is therefore enough;
+   * draining is not needed, because nothing is gone.
+   */
+  if (res.has_more) {
+    console.error(
+      '[watch] a full page was waiting - this poll is BEHIND, not lossy. Slack returns the\n' +
+        '        OLDEST slice of the window, so nothing is skipped and the backlog clears over\n' +
+        '        the next polls. Lower --interval if the delay matters.',
+    );
+  }
+
   // Slack returns newest-first; emit oldest-first so events read in order.
   const fresh = (res.messages ?? []).slice().reverse();
 
