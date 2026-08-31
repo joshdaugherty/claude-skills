@@ -23,7 +23,7 @@
  *
  * Node 18+. No dependencies.
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -60,6 +60,17 @@ const STALE_AFTER = 2.5; // missed beats before a claimant counts as gone
 // Absolute floor - see the note in slack-watch.mjs. A threshold proportional to the
 // claimant's own declared rate punishes fast heartbeats, which are more evidence of life.
 const STALE_FLOOR_SEC = 90;
+
+/**
+ * ⚠ DEFAULTS TO 2, NOT 1. In this script exit 1 is a VERDICT ("you do not hold the
+ * claim, stand down"), so a misuse must never borrow it - see the uncaughtException
+ * note above. This existed only in slack-post.mjs, where 1 is an ordinary failure;
+ * calling it here threw a ReferenceError and the misuse message never printed.
+ */
+function die(msg, code = 2) {
+  console.error(msg);
+  process.exit(code);
+}
 
 function botToken() {
   if (process.env.SLACK_BOT_TOKEN) return process.env.SLACK_BOT_TOKEN;
@@ -189,6 +200,41 @@ function selfTest() {
   for (const f of Object.keys(OPTIONS)) {
     if (f === 'help') continue;
     check(`--${f} is documented in usage`, USAGE.includes(`--${f}`), true);
+  }
+
+  /**
+   * ⛔ GUARD PATHS MUST BE EXECUTED, NOT JUST WRITTEN.
+   *
+   * `--done --fail` called die() when die() existed only in slack-post.mjs. It threw a
+   * ReferenceError and the misuse message never printed. NOTHING IN THE EXISTING CHECKS
+   * COULD SEE IT: `node --check` passes, because an unbound identifier in call position
+   * is a RUNTIME error, not a parse error; and the usage invariant passed, because both
+   * flags were correctly documented. The invariant enforced DOCUMENTATION COVERAGE, and
+   * the defect was in REACHABILITY.
+   *
+   * ⚠ A static sweep for "called but never bound" was tried first and rejected. Three
+   * attempts still left a false positive, and a checker that cries wolf in a repo about
+   * surfaces overstating what they know is the very failure being guarded against.
+   * RUNNING the path cannot false-positive.
+   *
+   * These spawn this same file, so they exercise the real entry point rather than a
+   * re-implementation of it - the distinction that let the original bug through.
+   */
+  const OK = ['--channel', 'C0123456789', '--task', '1788101338.332479', '--session', 'probe'];
+  const guards = [
+    { name: '--done --fail', args: [...OK, '--done', '--fail'], want: 'Pass --done OR --fail, not both.', code: 2 },
+    { name: 'no arguments', args: [], want: 'usage: node slack-claim.mjs', code: 2 },
+    { name: 'unquoted ts', args: ['--channel', 'C0123456789', '--task', '1788101338.33248', '--session', 'probe'], want: 'is not a Slack timestamp', code: 2 },
+  ];
+  for (const g of guards) {
+    const r = spawnSync(
+      process.execPath,
+      [fileURLToPath(import.meta.url), ...g.args],
+      { encoding: 'utf8', env: { ...process.env, SLACK_BOT_TOKEN: 'xoxb-selftest-not-a-real-token' } },
+    );
+    const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+    check(`guard "${g.name}" explains itself`, out.includes(g.want), true);
+    check(`guard "${g.name}" exits ${g.code}, no stack trace`, r.status === g.code && !/ReferenceError|TypeError|is not defined/.test(out), true);
   }
 
   console.log(failed ? `\n${failed} FAILED` : '\nall pass');
