@@ -173,6 +173,44 @@ python make-app-icon.py --emoji "🤖" --bg "#2C2D30" --out app-icon.png
 
 # 2. THE TOKEN, AND THE ENV VAR TRAP
 
+# ⛔⛔⛔ FIRST: **ONE REPO, ONE WORKSPACE — AND POSTING TO THE WRONG ONE RETURNS `ok: true`**
+
+### **A `xoxb-` token is scoped per app PER WORKSPACE.** *If the machine's token is for workspace **A** while this repo means to talk to **B**, the post **SUCCEEDS**. No error, no warning — it lands where nobody is reading, and the success line is byte-identical to a correct one.*
+
+★ **Reported from the field after exactly that, and found only by calling `auth.test` by hand.** # **It is this project's worst class — a WRONG value rendering exactly like a right one — pointed at the DESTINATION**, *and it becomes reachable the moment a second workspace exists, because that is when the wrong token stops being impossible and starts being selectable.*
+
+## ✔ **DECLARE THE BINDING IN THE REPO. IT IS COMMITTABLE AND CARRIES NO SECRET:**
+
+```json
+// <repo>/.claude/slack-workspace.json
+{ "team_id": "T0123456789", "team": "Acme", "token_env": "SLACK_BOT_TOKEN_ACME" }
+```
+
+| `team_id` | ★ **strongest** — exact, and survives a workspace rename. Read it from `auth.test`. |
+| :-- | --- |
+| `team` / `url` | accepted for convenience, matched case-insensitively |
+| `token_env` | **optional** — which env var holds THIS repo's credential. ⚠ **The variable NAME is not a secret; the token is.** |
+
+# ★★★ THE SPLIT IS THE WHOLE DESIGN — **DESTINATION IS REPO-SCOPED, CREDENTIAL IS MACHINE-SCOPED**
+
+| **which workspace** | belongs to the **repo** · committable · **read at CALL time** |
+| :-- | --- |
+| **the credential** | belongs to the **machine** · never committed · `process.env` → registry |
+
+### ⚠ **Routing the DESTINATION through the environment would inherit the launch-time trap below** — *a running process cannot see a variable set after it started.* **A file in the checkout is read when the command runs, so that trap does not apply to it at all.** ★ *And two IDE windows on one checkout cannot disagree about a file at the git root, which is exactly the invariance a one-repo-one-workspace rule needs.*
+
+## **RESOLUTION ORDER, both halves:**
+
+```
+destination : <git root>/.claude/slack-workspace.json    (absent -> unenforced, as before)
+credential  : process.env[token_env || SLACK_BOT_TOKEN]  -> HKCU\Environment, same name
+verify      : auth.test on every send; a mismatch REFUSES with exit 2, naming BOTH
+```
+
+⛔ **A mismatch refuses rather than warns**, *because a warning on a path that still succeeds is precisely how the original misdelivery happened.* ✔ **`--dry-run` and `--doctor` both name the destination**, so *"where is this going"* is answerable without sending. ✔ **No declaration = today's behaviour exactly** — a single-workspace machine needs no configuration.
+
+---
+
 | **Windows** | `setx SLACK_BOT_TOKEN "xoxb-..."` |
 | :-- | --- |
 | **macOS / Linux** | `export SLACK_BOT_TOKEN="xoxb-..."` *in the shell profile* |

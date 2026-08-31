@@ -70,8 +70,31 @@ function pluginVersion() {
 
 // --- token ------------------------------------------------------------------
 
+/**
+ * WHICH environment variable holds this repo's credential.
+ *
+ * ⚠ THE VARIABLE NAME IS NOT A SECRET; THE TOKEN IS. So the repo may name its own
+ * variable in the committed declaration, while the value stays machine-side exactly as
+ * before. That is what lets TWO repos on ONE machine hold TWO credentials without either
+ * mutating shared state or repointing the other - the refusal alone made a collision
+ * safe, this makes it unnecessary.
+ *
+ *     { "team_id": "T0123456789", "token_env": "SLACK_BOT_TOKEN_ACME" }
+ *
+ * Defaults to SLACK_BOT_TOKEN, so a machine with one workspace needs no declaration and
+ * behaves exactly as it did.
+ */
+function tokenVar() {
+  try {
+    return repoWorkspace()?.token_env || 'SLACK_BOT_TOKEN';
+  } catch {
+    return 'SLACK_BOT_TOKEN';
+  }
+}
+
 function botToken() {
-  if (process.env.SLACK_BOT_TOKEN) return process.env.SLACK_BOT_TOKEN;
+  const VAR = tokenVar();
+  if (process.env[VAR]) return process.env[VAR];
 
   // Windows: `setx` writes to HKCU\Environment, but a running process keeps the
   // environment block it inherited at launch - so a token set after Claude Code
@@ -80,10 +103,10 @@ function botToken() {
     try {
       const out = execFileSync(
         'reg',
-        ['query', 'HKCU\\Environment', '/v', 'SLACK_BOT_TOKEN'],
+        ['query', 'HKCU\\Environment', '/v', VAR],
         { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
       );
-      const m = out.match(/SLACK_BOT_TOKEN\s+REG_(?:EXPAND_)?SZ\s+(\S+)/);
+      const m = out.match(new RegExp(VAR + '\\s+REG_(?:EXPAND_)?SZ\\s+(\\S+)'));
       if (m) return m[1];
     } catch {
       /* not set there either */
@@ -158,6 +181,129 @@ function claudeUser(includeEmail) {
   }
   if (name && email) return `${name} (${email})`;
   return name || email || osUser;
+}
+
+// --- workspace binding ------------------------------------------------------
+
+/**
+ * ⛔⛔⛔ POSTING TO THE WRONG WORKSPACE RETURNS ok: true.
+ *
+ * A `xoxb-` token is scoped per app PER WORKSPACE. If the machine's token belongs to
+ * workspace A and this repo is meant to talk to workspace B, the post SUCCEEDS - it
+ * simply lands somewhere nobody is reading, and the success line is byte-identical to a
+ * correct one. No error, no warning, nothing in the response to check.
+ *
+ * ★ Reported from the field after exactly that happened, and found only by calling
+ * auth.test by hand. It is the same class this file has already fixed twice - a WRONG
+ * value rendering exactly like a right one - pointed at the destination rather than at
+ * the content, and it becomes reachable the moment a second workspace exists, because
+ * that is when the wrong token stops being impossible and starts being selectable.
+ *
+ * THE BINDING IS A PROPERTY OF THE REPO, AND IT IS ONE-TO-ONE. A checkout talks to one
+ * workspace, and two IDE windows on the same tree cannot disagree about which - so it is
+ * declared in a committed file at the git root, not in the environment:
+ *
+ *     <repo>/.claude/slack-workspace.json
+ *     { "team_id": "T0123456789", "team": "Acme" }
+ *
+ * ⚠ THE SPLIT IS DELIBERATE. The DESTINATION is repo-scoped, carries no secret, and is
+ * committable so collaborators inherit it. The CREDENTIAL stays machine-scoped in
+ * process.env / HKCU\Environment and is never committed. Routing the destination through
+ * the environment instead would inherit the launch-time inheritance trap documented in
+ * SKILL.md §2 - a running process cannot see a variable set after it started. A file in
+ * the checkout is read at CALL time, so that trap does not apply to it at all.
+ *
+ * `team_id` is the strongest key: exact, and stable across workspace renames. `team` and
+ * `url` are accepted for convenience and matched case-insensitively when present.
+ */
+function repoWorkspace() {
+  const root = gitRoot();
+  if (!root) return null;
+  const p = join(root, '.claude', 'slack-workspace.json');
+  if (!existsSync(p)) return null;
+  try {
+    const j = JSON.parse(readFileSync(p, 'utf8'));
+    if (!j.team_id && !j.team && !j.url) {
+      die(`${p} declares no workspace.\n  Give it at least one of: team_id (best), team, url.`, 2);
+    }
+    return { ...j, path: p };
+  } catch (e) {
+    if (e?.code === 'ERR_INVALID_ARG_TYPE' || e instanceof SyntaxError) {
+      die(`${p} is not valid JSON: ${e.message}`, 2);
+    }
+    throw e;
+  }
+}
+
+/** Who does this token actually belong to? One call, and it is the only source of truth. */
+async function whoAmI(token) {
+  try {
+    const j = await (
+      await fetch('https://slack.com/api/auth.test', { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
+    ).json();
+    return j.ok ? { ok: true, team: j.team, team_id: j.team_id, url: j.url } : { ok: false, error: j.error };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * Verify the token's workspace against the repo's declaration. Returns the identity so
+ * callers can DISPLAY it even when there is nothing to enforce.
+ *
+ * ⚠ NO DECLARATION MEANS NO ENFORCEMENT, deliberately: an existing single-workspace
+ * machine must keep working with no configuration at all. The check is opt-in by adding
+ * the file, which is also the moment a second workspace becomes possible.
+ */
+async function checkWorkspace(token, { enforce = true } = {}) {
+  const want = repoWorkspace();
+  const who = await whoAmI(token);
+  if (!who.ok) {
+    // A failed auth.test is NOT a mismatch - it is an unanswered question. Say which.
+    if (want && enforce) {
+      die(
+        `Could not verify which workspace this token belongs to: ${who.error}\n` +
+          `  ${want.path} requires a match, and an unanswered question is not a match.\n` +
+          '  Refusing rather than posting somewhere unverified.',
+        2,
+      );
+    }
+    return { who, want, verified: false };
+  }
+  if (!want) return { who, want: null, verified: false };
+
+  const eq = (a, b) => String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase();
+  const sub = (u) => String(u ?? '').replace(/^https?:\/\//, '').split('.')[0];
+  const match = want.team_id
+    ? eq(want.team_id, who.team_id)
+    : want.team
+      ? eq(want.team, who.team)
+      : eq(sub(want.url), sub(who.url));
+
+  if (!match && enforce) {
+    die(
+      'WORKSPACE MISMATCH - refusing to send.\n' +
+        `  this repo expects : ${want.team_id ?? want.team ?? want.url}\n` +
+        `  the token belongs : ${who.team} (${who.team_id})  ${who.url}\n` +
+        `  declared in       : ${want.path}\n` +
+        '\n' +
+        '  Sending anyway would have SUCCEEDED and returned ok:true, landing the message\n' +
+        '  in a workspace nobody is reading. That is why this refuses instead of warning.\n' +
+        '\n' +
+        '  Fix whichever is wrong: point SLACK_BOT_TOKEN at the expected workspace, or\n' +
+        '  correct the declaration.',
+      2,
+    );
+  }
+  return { who, want, verified: match };
+}
+
+/** One line naming the destination, for surfaces that describe a send without making one. */
+function workspaceLine({ who, want, verified }) {
+  if (!who.ok) return `unverified (auth.test failed: ${who.error})`;
+  const base = `${who.team} (${who.team_id})  ${who.url}`;
+  if (!want) return `${base}  [no repo declaration - unenforced]`;
+  return `${base}  [${verified ? 'matches' : 'DOES NOT MATCH'} ${want.path}]`;
 }
 
 // --- args -------------------------------------------------------------------
@@ -310,9 +456,9 @@ const TEXT = resolveText();
 const token = botToken();
 if (!token) {
   die(
-    'SLACK_BOT_TOKEN is not set.\n' +
+    `${tokenVar()} is not set.\n` +
       (process.platform === 'win32'
-        ? '  setx SLACK_BOT_TOKEN "xoxb-..."   (then restart, or it is read from the registry)'
+        ? `  setx ${tokenVar()} "xoxb-..."   (then restart, or it is read from the registry)`
         : '  export SLACK_BOT_TOKEN="xoxb-..."'),
   );
 }
@@ -541,8 +687,14 @@ if (!a['as-app']) {
 
 // --- send -------------------------------------------------------------------
 
+// ⚠ CHECKED EVEN ON --dry-run. "Where is this going" must be answerable WITHOUT
+// sending, and the destination is exactly what a preview was silently omitting.
+const WS = await checkWorkspace(token, { enforce: !a['dry-run'] });
+
 if (a['dry-run']) {
   console.log('DRY RUN - nothing sent.');
+  console.log(`  workspace: ${workspaceLine(WS)}`);
+  if (WS.want && !WS.verified) console.log('  ⛔ MISMATCH - a real send would REFUSE. See above.');
   console.log(`  channel  : ${a.channel}`);
   console.log(`  username : ${payload.username ?? "(the app's own name)"}`);
   console.log(`  icon     : ${payload.icon_emoji ?? "(the app's own avatar)"}`);
