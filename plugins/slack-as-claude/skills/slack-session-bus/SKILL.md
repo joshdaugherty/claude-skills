@@ -671,9 +671,29 @@ UP TO DATE, AS FAR AS THIS CAN SEE.
 
 ---
 
-# ★★★★★ 6b. THE TWO FAILURES NO TOOL IN THIS FILE TOUCHES
+# ★★★★★ 6b. THE THREE FAILURES NO TOOL IN THIS FILE TOUCHES
 
-### **Every fix here corrects a SURFACE. These two are about what a reader DOES with a correct surface, and both were caught by a peer catching itself.**
+### **Every fix here corrects a SURFACE. These three are about what a reader DOES with a correct surface, and each was caught by a session catching ITSELF rather than by any check.**
+
+---
+
+# ★★★★★★ THE HABIT THAT ACTUALLY WORKED WAS NOT BEING RIGHT. **IT WAS REFUSING TO ROUND UP.**
+
+### **Counted over one day of two sessions checking each other:**
+
+| **Every claim NARROWED to what the evidence actually showed — HELD.** | *Four times, and in every one the broader claim was true anyway. Narrowing cost nothing and bought the reader a reason to trust everything else.* |
+| :-- | --- |
+| # **EVERY ERROR WAS THE SAME MOVE IN REVERSE** | ### **A TRUE conclusion resting on an example that did not demonstrate it.** *All four — two per session.* |
+
+## ⛔ **SO THE DANGEROUS SENTENCE IS NOT A WRONG ONE. IT IS A RIGHT ONE CARRYING EVIDENCE THAT DOES NOT REACH IT.** ### *It survives review, because a reviewer checks the claim.* # **CHECK THE DEMONSTRATION.**
+
+★ **All four, for the record:** *the ULP table (right change, wrong headroom figure) · the 44-second heartbeat window (real lag layer, wrong instance) · an empty `closes:` blamed on a guard (real gap, wrong cause) · a regression alarm raised from a synthetic sample read as a measurement.*
+
+# ★★★ AND IT APPLIES TO A PEER'S INSTRUCTION, NOT JUST A TOOL'S OUTPUT
+
+### **"Do not run that, it will not show what you expect" IS ITSELF A CLAIM.** ## **A session was told exactly that, ran the command anyway — read-only, one command — and confirmed the mechanism independently.** ✔ *The advice was correct; checking it was still right.* ⛔ **WHEN VERIFICATION IS CHEAP, AN INSTRUCTION NOT TO VERIFY DOES NOT EARN DEFERENCE** — *and the peer issuing it is the party who benefits most from being checked.*
+
+---
 
 | # ⛔⛔ **THE READER SKIPS THE SOURCE BECAUSE THE SURFACE IS FRIGHTENING** | ### **A truncated notification quoting a peer's SAMPLE output was read as a live measurement, and produced a *STOP — CROSS-VERSION REGRESSION* alarm that halted a release and forbade takeovers.** *The disambiguating sentence was one fetch away, in the same paragraph.* ## **That session had fetched the full text before replying to every other message that day. The one time it skipped was the one time the content was ALARMING.** # **URGENCY IS WHEN THE RULE MATTERS MOST AND WHEN FOLLOWING IT FEELS MOST EXPENSIVE.** |
 | :-- | --- |
@@ -686,6 +706,24 @@ UP TO DATE, AS FAR AS THIS CAN SEE.
 ★ **Observed twice:** *seven scale-test losers that correctly did nothing and left no trace, and a second claimant whose pre-check exited **before** posting — one claim visible where two sessions had competed.* # **No reader of that channel could recover either.**
 
 ## ✔ **THE ONLY REMEDY: THE HARNESS MUST REPORT ITS EXIT CODES, BECAUSE IT IS THE SOLE PARTY THAT SAW THEM.** ### *That is what turns CORRECT SILENCE into evidence — instead of a gap a reader fills with the most interesting story available.* ⚠ **A test whose pass condition is silence cannot be VERIFIED by a reader. It can only be ASSERTED by the runner.**
+
+---
+
+# ★★★★ THE PLUGIN CACHE IS AN ACCIDENTAL REGRESSION ARCHIVE — **WITH ONE LIMIT THAT DECIDES WHETHER A RE-RUN MEANS ANYTHING**
+
+### **Every installed version stays on disk, immutably, and its directory name IS its version.** *So any past binary can be executed against any present state, indefinitely. Nobody designed that; it is the only thing on a machine that makes a HISTORICAL defect runnable at all.*
+
+# ⛔⛔ **BUT IT PRESERVES THE BUGGY CODE, NOT THE SITUATION IN WHICH IT WAS BUGGY.**
+
+| ✔ **preserved** | the binary |
+| :-- | --- |
+| ⛔ **NOT preserved** | **the input state that triggered the defect** |
+
+★ **Observed immediately:** *a `--doctor` bug that fired only when `slack-watch.mjs` was BYTE-IDENTICAL across two releases while its siblings changed.* ## **The release that fixed it also edited the watcher — so re-running the old, unfixed copy afterwards produced the CORRECT answer, for a reason that had nothing to do with the fix.** # **A re-run would have shown a pass and proved nothing.**
+
+## ⚠ **"Any past bug can be re-run against any present state" is TRUE, and does not follow.** ### **You can always RUN it. Whether the run MEANS anything depends on a state you neither control nor saved** — *and a fix frequently destroys those conditions as a side effect, because the fix and the trigger touch the same files.*
+
+✔ **THE VALID TEST USES THE FIX UNDER THE OLD CONDITIONS, NOT THE OLD CODE UNDER NEW ONES.** *Stage the NEW script into the OLD version tree so it sees the original situation, and check that it fires.* ★ *That is what actually verified this one; the intuitive test — run the old copy — was the one that would have lied.*
 
 ---
 
