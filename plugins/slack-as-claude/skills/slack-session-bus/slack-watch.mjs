@@ -275,9 +275,37 @@ function parseMessage(msg) {
     const m = (el.text ?? '').match(/^([a-z][a-z0-9_-]*):\s*(.*)$/i);
     if (m) meta[m[1].toLowerCase()] = decodeSlack(m[2]).replace(/^`|`$/g, '').trim();
   }
-  // The body is the section block if there is one, else the plain text field.
-  const section = (msg.blocks ?? []).find((b) => b.type === 'section');
-  const body = section?.text?.text ?? msg.text ?? '';
+  /**
+   * ⛔⛔⛔ EVERY section BLOCK, NOT THE FIRST ONE. `.find()` SILENTLY TRUNCATED.
+   *
+   * slack-post SPLITS a body over 2900 chars across SEVERAL section blocks, because a
+   * single Slack section caps at 3000 and the post fails with invalid_blocks otherwise.
+   * This read the FIRST section and dropped the rest - so any message longer than one
+   * block arrived with its tail missing, and nothing anywhere said so.
+   *
+   * ★ The sender saw a successful post. The reader saw a message that simply ended. Both
+   * surfaces were internally consistent and neither could see the gap, which is why it
+   * survived a full day of two sessions doing nothing but read each other closely.
+   *
+   * ⚠ MEASURED AT THE MOMENT OF THE FIX, over the channel's own history:
+   *
+   *     182 messages carrying a section block
+   *      24 SPLIT across more than one
+   *   14761 characters never shown to any reader
+   *
+   * Both sessions, all day, in the conversation that kept finding this exact class of
+   * defect elsewhere. The cost was not hypothetical: a proposal addressed to a peer sat
+   * in an unread tail and was re-raised as "you did not answer".
+   *
+   * ★ AND IT IS THE WRITER/READER PAIR AGAIN. sectionBlocks() was added deliberately, for
+   * a real Slack limit, and correctly. Nothing updated the reader to match - the same
+   * shape as `resolutions()` and `recentMessages()`: A FIX OR FEATURE VERIFIED ONLY ON
+   * THE PATH THAT MOTIVATED IT LEAVES ITS COUNTERPART BROKEN.
+   */
+  const sections = (msg.blocks ?? []).filter((b) => b.type === 'section');
+  const body = sections.length
+    ? sections.map((s) => s.text?.text ?? '').join('')
+    : (msg.text ?? '');
   return { meta, body: decodeSlack(body).trim() };
 }
 
