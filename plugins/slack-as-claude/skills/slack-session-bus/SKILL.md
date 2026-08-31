@@ -651,6 +651,26 @@ node slack-watch.mjs --channel <id> --session me --ping other-session --wait 45
 
 ---
 
+# ⛔⛔⛔ AND A CHECKER THAT INSPECTS **ONE FILE** REPORTS ON ONE FILE, NOT ON THE PACKAGE
+
+### **`--doctor` printed this, in adjacent lines, and did not act on it:**
+
+```
+RUNNING    slack-as-claude 2.10.1   (installed copy)
+INSTALLED  2.11.0
+UP TO DATE, AS FAR AS THIS CAN SEE.
+```
+
+## **The contradiction was in its OWN OUTPUT, two lines above the verdict.** *Everything in the verdict reasoned about BYTES; nothing compared the two version numbers it had already printed.*
+
+# ★ **AND THE BYTE CHECK COULD NOT HAVE CAUGHT IT, BECAUSE IT COMPARED THE ONE FILE THE CHECKER LIVES IN.** ### `slack-watch.mjs` *was BYTE-IDENTICAL between those releases while* `slack-claim.mjs` *and* `slack-post.mjs` *both changed.* ## **Two of three executables differed, and the instrument reported no change — correctly, about the only file it looked at.**
+
+⚠ **THE HAZARD WAS REAL:** *the release it said you did not need contained the Step 0 guard, so a session was told it was current while running a claim path with a live DOUBLE-EXECUTION defect.*
+
+✔ **Fixed two ways: a version-directory comparison (definitive, needs no bytes, cannot be fooled by which file happens to match) and a per-script diff across the WHOLE plugin.** # **A CHECKER'S SCOPE IS PART OF ITS ANSWER. If it does not say what it examined, "no change" means nothing.**
+
+---
+
 # ★★★★★ 6b. THE TWO FAILURES NO TOOL IN THIS FILE TOUCHES
 
 ### **Every fix here corrects a SURFACE. These two are about what a reader DOES with a correct surface, and both were caught by a peer catching itself.**

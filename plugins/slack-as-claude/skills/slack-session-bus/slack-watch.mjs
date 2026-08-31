@@ -1168,6 +1168,74 @@ if (a.doctor) {
   if (available && installed && cmpVer(available.version, installed.version) > 0) {
     asks.push(`ASK THE HUMAN TO RUN:  /plugin marketplace update ${available.marketplace}\n  (installed ${installed.version}, available ${available.version})`);
   }
+  /**
+   * ⛔⛔⛔ RUNNING < INSTALLED IS DEFINITIVE, AND THIS CHECK DID NOT EXIST.
+   *
+   * --doctor printed, in adjacent lines:
+   *
+   *     RUNNING    slack-as-claude 2.10.1   (installed copy)
+   *     INSTALLED  2.11.0
+   *     UP TO DATE, AS FAR AS THIS CAN SEE.
+   *
+   * The contradiction was in its OWN OUTPUT, two lines above the verdict, and the
+   * verdict did not look at it. Everything below this reasons about BYTES; nothing
+   * compared the two version numbers it had already printed.
+   *
+   * ★ AND THE BYTE CHECK CANNOT COVER THIS, because it compares ONE FILE - the
+   * watcher, which is the file this code happens to live in. slack-watch.mjs was
+   * BYTE-IDENTICAL between 2.10.1 and 2.11.0 while slack-claim.mjs and slack-post.mjs
+   * both changed. Two of three executables differed and the instrument reported no
+   * change, correctly, about the only file it looked at.
+   *
+   * ⚠ THE HAZARD IS REAL, NOT COSMETIC: the release it said you did not need contained
+   * the Step 0 guard, so a session was told it was current while running the claim path
+   * with a live DOUBLE-EXECUTION defect.
+   *
+   * A version directory in the cache is immutable and its name IS its version, so this
+   * needs no byte comparison and cannot be fooled by which file happens to be identical.
+   */
+  if (inCache && installed && cmpVer(runningVer, installed.version) < 0) {
+    asks.push(
+      `YOU ARE RUNNING AN OLDER INSTALLED COPY: ${runningVer}, while ${installed.version} is installed.\n` +
+        '  This is definitive - it compares version directories, not bytes - and it holds\n' +
+        '  even when the file you are executing is unchanged, because the OTHER scripts in\n' +
+        '  the plugin may not be. Restart from the newer copy:\n' +
+        `  node "${installed.watcher}" --channel ${a.channel} --session <label> --since <last ts you saw>\n` +
+        '  ⚠ pass --since, or the restart silently drops anything posted during the handover.',
+    );
+  }
+
+  /**
+   * Compare EVERY script in the plugin, not just this one. Checking only the file the
+   * checker lives in is why a two-of-three change read as no change at all.
+   */
+  if (inCache && installed && installed.version !== runningVer) {
+    const runRoot = join(skillDir, '..');
+    const insRoot = join(installed.watcher, '..', '..');
+    const differing = [];
+    try {
+      for (const skill of readdirSync(insRoot)) {
+        const d = join(insRoot, skill);
+        if (!existsSync(d)) continue;
+        for (const f of readdirSync(d)) {
+          if (!f.endsWith('.mjs')) continue;
+          const mine = join(runRoot, skill, f);
+          if (!existsSync(mine)) { differing.push(`${skill}/${f} (absent in yours)`); continue; }
+          if (sameCode(mine, join(d, f)) === false) differing.push(`${skill}/${f}`);
+        }
+      }
+    } catch {
+      /* best effort - the version check above is the load-bearing one */
+    }
+    if (differing.length) {
+      asks.push(
+        `SCRIPTS THAT DIFFER from the installed ${installed.version}: ${differing.join(', ')}\n` +
+          '  Listed because "the watcher is unchanged" says nothing about the others, and\n' +
+          '  a stale slack-claim is the one that can double-execute a finished task.',
+      );
+    }
+  }
+
   if (installed && existsSync(installed.watcher)) {
     const same = sameCode(selfFile, installed.watcher);
     if (same === false && inCache) {
