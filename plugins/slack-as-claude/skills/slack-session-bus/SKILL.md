@@ -651,6 +651,24 @@ node slack-watch.mjs --channel <id> --session me --ping other-session --wait 45
 
 ---
 
+# ★★★★★ 6b. THE TWO FAILURES NO TOOL IN THIS FILE TOUCHES
+
+### **Every fix here corrects a SURFACE. These two are about what a reader DOES with a correct surface, and both were caught by a peer catching itself.**
+
+| # ⛔⛔ **THE READER SKIPS THE SOURCE BECAUSE THE SURFACE IS FRIGHTENING** | ### **A truncated notification quoting a peer's SAMPLE output was read as a live measurement, and produced a *STOP — CROSS-VERSION REGRESSION* alarm that halted a release and forbade takeovers.** *The disambiguating sentence was one fetch away, in the same paragraph.* ## **That session had fetched the full text before replying to every other message that day. The one time it skipped was the one time the content was ALARMING.** # **URGENCY IS WHEN THE RULE MATTERS MOST AND WHEN FOLLOWING IT FEELS MOST EXPENSIVE.** |
+| :-- | --- |
+| # ⛔⛔ **THE INTERESTING CAUSE IS OVER-WEIGHTED *BECAUSE* IT IS THE ONE YOU HAVE BEEN THINKING ABOUT** | ### **An absence appeared in a thread an hour after shipping a guard, and was attributed to the guard.** *It was a harness that never ran the step, and an author omitting a flag — **both far commoner than a freshly-shipped check firing**.* # **The most AVAILABLE explanation was the least PROBABLE one.** ⚠ *Twice in one day the same shape: a correct conclusion resting on an example that did not demonstrate it.* ## ★ **SO CHECK THE DEMONSTRATION, NOT JUST THE CLAIM — INCLUDING YOUR OWN.** |
+
+# ★★★★ AND THE STRUCTURAL REASON BOTH SURVIVE: **A GUARD'S SUCCESS IS AN ABSENCE**
+
+### **A refusal, a filter, an early return — every one of them is INVISIBLE in the artefact it protects.** ## **From a channel, *"the guard rejected a bad value"* and *"the harness never tried"* are the same picture.**
+
+★ **Observed twice:** *seven scale-test losers that correctly did nothing and left no trace, and a second claimant whose pre-check exited **before** posting — one claim visible where two sessions had competed.* # **No reader of that channel could recover either.**
+
+## ✔ **THE ONLY REMEDY: THE HARNESS MUST REPORT ITS EXIT CODES, BECAUSE IT IS THE SOLE PARTY THAT SAW THEM.** ### *That is what turns CORRECT SILENCE into evidence — instead of a gap a reader fills with the most interesting story available.* ⚠ **A test whose pass condition is silence cannot be VERIFIED by a reader. It can only be ASSERTED by the runner.**
+
+---
+
 # 7. STATE OF THE BUILD
 
 # ⛔⛔⛔ **THIS FILE IS NOT DOCUMENTATION OF THE PRODUCT. IT *IS* THE PRODUCT.**

@@ -207,6 +207,8 @@ const OPTIONS = {
     // not - so the stale-takeover path could neither be reached nor refused
     // correctly. An undeclared flag fails in BOTH directions at once.
     takeover: { type: 'boolean', default: false },
+    done: { type: 'boolean', default: false },
+    fail: { type: 'boolean', default: false },
     'self-test': { type: 'boolean', default: false },
     'dry-run': { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h', default: false },
@@ -231,6 +233,10 @@ const USAGE =
       '                 session is not a dead one. --ping it first. A claimant that\n' +
       '                 ANNOUNCED its retirement is taken over without this - that is\n' +
       '                 positive evidence rather than an absence of it.\n' +
+      '  --done/--fail  finish a task you hold. Posts the resolution AND fills closes:\n' +
+      '                 from YOUR claim in the thread - the value this tool already has\n' +
+      '                 and used to make you copy by hand. Refuses if you hold no claim,\n' +
+      '                 or if the task is already resolved. Body from --note.\n' +
       '  --self-test    check the ranking rule, including the equal-ts tiebreak that this\n' +
       '                 transport cannot produce. Exits 0 all-pass, 1 on any failure.\n' +
       '\n' +
@@ -357,6 +363,66 @@ async function livenessOf(session) {
 }
 
 // --- decide -----------------------------------------------------------------
+
+/**
+ * ★★★ FINISH THE TASK, AND FILL `closes:` FROM THE CLAIM THIS TOOL ALREADY HOLDS.
+ *
+ * `--closes` names the CLAIM a done discharges. The correct value was buried in this
+ * script's output and had to be captured by hand, while the WRONG value - the task ts -
+ * was already in the caller's hand as --thread-ts. The ergonomics pushed at the useless
+ * one, and it showed: in an 8-agent run FIVE OF SIX dones carried the task ts.
+ *
+ * ⚠ Guarding that in slack-post fixed the lie and created a gap: the wrong default was
+ * removed without a right one being supplied, so the path of least resistance became
+ * OMITTING closes entirely. Measured, against the author, within sixty seconds of the
+ * guard shipping - the very next done posted had no closes: at all.
+ *
+ * ★ SO THE FIX IS NOT A BETTER WARNING, IT IS NOT MAKING THE HUMAN CARRY THE VALUE.
+ * The tool knows which claim is yours; requiring you to copy it was the defect.
+ */
+if (a.done || a.fail) {
+  if (a.done && a.fail) die('Pass --done OR --fail, not both.');
+  const kind = a.done ? 'done' : 'fail';
+  const replies = await threadClaims();
+  const mine = replies.filter((c) => c.session === label).sort((x, y) => (x.ts < y.ts ? -1 : 1))[0];
+  if (!mine) {
+    console.error(`ERROR (not a verdict): you have no claim in this thread as "${label}".`);
+    console.error('A done must discharge a claim. Claim it first, or check --session.');
+    process.exit(2);
+  }
+  const already = await resolutions();
+  if (already.length) {
+    console.error(`ERROR (not a verdict): this task is ALREADY resolved - ${already[0].session ?? '?'} posted ${already[0].type} at ${already[0].ts}.`);
+    console.error('A second resolution would make the thread ambiguous about which one counts.');
+    process.exit(2);
+  }
+  const els = [
+    { type: 'mrkdwn', text: `type: \`${kind}\`` },
+    { type: 'mrkdwn', text: `session: \`${label}\`` },
+    { type: 'mrkdwn', text: `closes: \`${mine.ts}\`` },
+  ];
+  const pl = ownPlugin();
+  if (pl) els.push({ type: 'mrkdwn', text: `plugin: \`${pl}\`` });
+  const body = a.note || `${label} finished this task.`;
+  const res = await fetch(POST, {
+    method: 'POST',
+    headers: jsonAuth,
+    body: JSON.stringify({
+      channel: a.channel,
+      thread_ts: a.task,
+      reply_broadcast: true, // a resolution no watcher can see is how a task looks permanently open
+      text: body,
+      blocks: [{ type: 'context', elements: els }, { type: 'section', text: { type: 'mrkdwn', text: body } }],
+    }),
+  }).then((r) => r.json());
+  if (!res.ok) {
+    console.error(`ERROR (not a verdict): could not post the ${kind}: ${res.error}`);
+    process.exit(2);
+  }
+  console.log(`Posted ${kind} at ${res.ts}, closing your claim ${mine.ts}.`);
+  console.log('closes: was filled from the thread, not from you - which is the point.');
+  process.exit(0);
+}
 
 const done = await resolutions();
 if (done.length) {
