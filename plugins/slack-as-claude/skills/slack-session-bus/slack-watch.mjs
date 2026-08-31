@@ -300,8 +300,34 @@ async function recentMessages(limit = 200) {
   const url = new URL(HISTORY);
   url.searchParams.set('channel', a.channel);
   url.searchParams.set('limit', String(limit));
+  /**
+   * ⛔⛔⛔ A FAILED READ IS NOT AN EMPTY CHANNEL.
+   *
+   * This returned `[]` on failure, so every caller was unable to distinguish "nothing is
+   * there" from "I could not ask" - and five surfaces then reported a confident absence
+   * they had never observed. With an invalid token: `--presence` said "no session is
+   * publishing a heartbeat", `--raw` said "0 message(s)", and `--doctor` said
+   * "PEERS none live" AND ADVISED ON IT, telling a session with a healthy watcher to arm
+   * a second one. Every sentence of that advice was an inference from an `invalid_auth`.
+   *
+   * ★ The codebase had already named this class twice and fixed it twice, both times in
+   * slack-claim.mjs - `resolutions()` ("UNKNOWN MUST NOT RENDER AS OPEN") and
+   * `livenessOf()` ("A FAILED READ IS NOT AN ABSENT HEARTBEAT"). The sibling path here
+   * was never given the same treatment, which is the repo's own lesson biting: A FIX
+   * VERIFIED ONLY ON THE PATH THAT REPORTED THE BUG LEAVES ITS SIBLINGS BROKEN.
+   *
+   * ⚠ The two worst-hit surfaces are the two built for use when something ALREADY looks
+   * wrong: `--raw` is the inspector, and rendering an empty channel is the single most
+   * misleading answer it can give; `--doctor` answers "am I behind?" with fabricated
+   * absence. And `--presence` is the evidence a human is told to consult before allowing
+   * a `--takeover`, so it fed the wrong input to the one decision the design insists must
+   * not be automated.
+   *
+   * The shape is deliberate: callers must destructure, so a site that ignores `ok` reads
+   * as obviously wrong rather than quietly wrong.
+   */
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } }).then((r) => r.json());
-  return res.ok ? (res.messages ?? []) : [];
+  return res.ok ? { ok: true, messages: res.messages ?? [] } : { ok: false, error: res.error, messages: [] };
 }
 
 function presenceOf(msg) {
@@ -358,7 +384,12 @@ async function beat(label, every) {
   // Reuse this session's existing presence message if there is one, so a restart does
   // not litter the channel with orphans that a roster would then report as dead.
   if (!presenceTs) {
-    for (const m of await recentMessages()) {
+    // Fail-safe, and it now SAYS which case it is in: on a failed lookup we post a fresh
+    // presence message rather than updating in place. That is a safe degradation (a
+    // duplicate beats a missing heartbeat) but it litters, so it must not be silent.
+    const look = await recentMessages();
+    if (!look.ok) console.error(`[watch] could not look up an existing presence message (${look.error}); posting a NEW one, which may leave an orphan.`);
+    for (const m of look.messages) {
       const p = presenceOf(m);
       if (p && p.session === label) {
         presenceTs = p.ts;
@@ -411,7 +442,15 @@ function lastSpokeAt(msgs, meta) {
 
 async function roster() {
   const now = Math.floor(Date.now() / 1000);
-  const msgs = await recentMessages();
+  const read = await recentMessages();
+  if (!read.ok) {
+    console.error(`could not read the channel: ${read.error}`);
+    console.error('This is NOT "no session is publishing a heartbeat" - that is a claim about');
+    console.error('your peers, and nothing was learned about them. Do not treat any session as');
+    console.error('stale on the strength of this, and do not authorise a --takeover from it.');
+    process.exit(1);
+  }
+  const msgs = read.messages;
   const seen = new Map();
   for (const m of msgs) {
     const p = presenceOf(m);
@@ -703,7 +742,9 @@ if (a.ping) {
   const deadline = Date.now() + waitSec * 1000;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 5000));
-    for (const m of await recentMessages(50)) {
+    const look = await recentMessages(50);
+    if (!look.ok) { console.error(`[ping] read failed (${look.error}) - still waiting; a missed read is not a missed pong.`); continue; }
+    for (const m of look.messages) {
       if (Number(m.ts) <= Number(sent.ts)) continue;
       const mm = parseMessage(m).meta;
       if (mm.type === 'x-pong' && mm.session === target) {
@@ -867,7 +908,9 @@ if (a.retire) {
   // Only NOW remove presence. The announcement is the durable record; presence is
   // ephemeral status and is what would otherwise linger as STALE.
   let removed = 0;
-  for (const m of await recentMessages()) {
+  const look = await recentMessages();
+  if (!look.ok) console.error(`[retire] could not read the channel (${look.error}); the ANNOUNCEMENT is posted and is the durable record, but presence messages could not be removed and may linger as STALE.`);
+  for (const m of look.messages) {
     const p = presenceOf(m);
     if (!p || p.session !== selfLabel) continue;
     const res = await slackPost('chat.delete', { channel: a.channel, ts: m.ts });
@@ -1035,7 +1078,9 @@ if (a.doctor) {
   // a channel ACCUMULATES DEAD SESSIONS PERMANENTLY - the peer list only ever grows, and
   // the one line you read to answer "what are my peers running" fills with corpses.
   // Two views of one dataset that disagree is the exact failure this skill keeps hitting.
-  const msgs = await recentMessages();
+  const read = await recentMessages();
+  const readable = read.ok;
+  const msgs = read.messages;
   const now = Math.floor(Date.now() / 1000);
   const live = new Map();
   for (const m of msgs) {
@@ -1100,7 +1145,9 @@ if (a.doctor) {
   const alive = [...peers].filter(([, v]) => v.alive);
   const acting = [...peers].filter(([, v]) => v.active);
   const dead = [...peers].filter(([, v]) => !v.alive && !v.active);
-  console.log(`PEERS      ${alive.length ? alive.map(fmt).join(', ') : 'none live'}`);
+  console.log(
+    `PEERS      ${!readable ? `UNREADABLE (${read.error}) - nothing was learned about any peer` : alive.length ? alive.map(fmt).join(', ') : 'none live'}`,
+  );
   if (acting.length) {
     console.log(
       `           ACTIVE, not beating: ${acting
@@ -1140,7 +1187,10 @@ if (a.doctor) {
    * fire on every run. The question is whether the LABEL is beating - which is a fact
    * about the resident watcher, and the only place it is recorded is the channel.
    */
-  if (selfLabel) {
+  // ⛔ NEVER ADVISE FROM A FAILED READ. This block told a session with a healthy watcher
+  // to arm a second one, because an invalid_auth rendered as "no presence message at all".
+  // Advice derived from an unanswered question is worse than no advice: it is actionable.
+  if (selfLabel && readable) {
     const mine = live.get(selfLabel);
     const fresh = mine ? now - mine.beat <= Math.max((mine.every || 60) * STALE_AFTER, STALE_FLOOR_SEC) : false;
     if (!fresh) {
@@ -1258,7 +1308,13 @@ if (a.doctor) {
     }
   }
 
-  if (!asks.length) {
+  if (!readable) {
+    console.log('');
+    console.log(`⛔ THE CHANNEL READ FAILED (${read.error}). Everything above about PEERS is`);
+    console.log('UNKNOWN, not empty, and no ACTION has been suggested from it - advice derived');
+    console.log('from an unanswered question is worse than none, because it is actionable.');
+    console.log('The version lines ARE still trustworthy: they come from disk, not from Slack.');
+  } else if (!asks.length) {
     // ⛔ WAS: "...and nothing newer is available." THAT SENTENCE WAS A LIE THIS TOOL
     // COULD NOT DETECT. It asserts a fact about the MARKETPLACE while knowing only a
     // fact about a LOCAL CLONE, and it was printed verbatim while v2.9.0 sat tagged
@@ -1287,7 +1343,15 @@ if (a.doctor) {
 }
 
 if (a.raw) {
-  const msgs = (await recentMessages(a.since ? 200 : 20)).slice().reverse();
+  const read = await recentMessages(a.since ? 200 : 20);
+  if (!read.ok) {
+    console.error(`could not read the channel: ${read.error}`);
+    console.error('⛔ This is NOT "0 messages". --raw is the INSPECTOR - it is reached for when');
+    console.error('the rendering already looks wrong, so an empty channel is the single most');
+    console.error('misleading answer it could give. Nothing was read.');
+    process.exit(1);
+  }
+  const msgs = read.messages.slice().reverse();
   for (const m of msgs) {
     if (a.since && Number(m.ts) <= Number(a.since)) continue;
     const bits = [`ts=${m.ts}`];
