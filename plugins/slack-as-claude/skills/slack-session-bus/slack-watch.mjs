@@ -2033,21 +2033,78 @@ if (a['announce-install']) {
       const dir = join(cacheRoot, mkt, pluginName);
       if (!existsSync(dir)) continue;
       for (const v of readdirSync(dir)) {
-        if (existsSync(join(dir, v, '.orphaned_at'))) continue;
-        versions.push({ version: v, root: join(dir, v, 'skills') });
+        // ⛔⛔ ORPHANED DIRECTORIES ARE KEPT, AND FLAGGED - NOT SKIPPED.
+        //
+        // They were skipped outright, and that discarded THE MOST LIKELY BASELINE: installing
+        // the new release is what orphans the old one, so the version you were just running is
+        // precisely the one marked. The first live notice announced `was 2.17.0` while the
+        // sender's own messages all carried `plugin: … 2.17.1`.
+        //
+        // An orphan is wrong as an ANSWER to "what is installed" and right as a CANDIDATE for
+        // "what was I on before" - so the flag belongs on the record, not on whether to keep it.
+        versions.push({
+          version: v,
+          root: join(dir, v, 'skills'),
+          orphaned: existsSync(join(dir, v, '.orphaned_at')),
+        });
       }
     }
   } catch {
     /* no cache */
   }
   versions.sort((x, y) => cmpVer(x.version, y.version));
-  const now = versions[versions.length - 1];
+  // `now` is what is INSTALLED, so an orphan can never be it. Baselines below may be.
+  const live = versions.filter((v) => !v.orphaned);
+  const now = live[live.length - 1];
   if (!now) die('no installed copy found in the plugin cache - nothing to announce.', 2);
+  /**
+   * ★★★ THE WIRE HOLDS A BETTER BASELINE THAN THE CACHE LISTING, AND IT IS A FACT RATHER
+   * THAN A GUESS: my own last posted `plugin:` says what I was ACTUALLY running.
+   *
+   * ⛔ The cache walk SKIPS `.orphaned_at` directories - which is exactly the version most
+   * likely to be the previous one, because installing the new release is what orphaned it.
+   * Measured on the first live notice: it announced `was 2.17.0` while every message the
+   * sender had posted carried `plugin: … 2.17.1`. THE CACHE HAD DISCARDED THE ANSWER AND
+   * THE CHANNEL STILL HELD IT.
+   *
+   * Precedence: --from (stated) > the wire (observed) > the cache (inferred).
+   */
+  let wireVer = null;
+  if (!a.from) {
+    const seen = await recentMessages(200);
+    // ⛔⛔ PICK BY TIMESTAMP, NOT BY ARRAY POSITION. A first version walked the array
+    // reversed on the belief it was oldest-first, and returned the OLDEST match - a version
+    // from days earlier, announced as `was 2.7.0`, and LABELLED `my own last posted plugin:`
+    // so the wrong value carried a provenance claim. That is strictly worse than the guess
+    // it replaced: an unlabelled guess invites checking, a labelled one forbids it.
+    //
+    // ⚠ The ordering was misread TWICE in five minutes, which is the argument for not
+    // depending on it: `ts` is in the data, so compare that and the question disappears.
+    // Compared as STRINGS - a Slack ts has 16 significant digits and Number() rounds it.
+    let bestTs = '';
+    for (const m of seen.ok ? seen.messages : []) {
+      const { meta } = parseMessage(m);
+      if (meta.session !== a.session || !meta.plugin) continue;
+      // `slack-as-claude 2.17.1`, or `… 2.17.1+dev`. A +dev tree reports the version it is
+      // BASED on rather than what it runs, so it cannot serve as a baseline - skip it.
+      const mm = /\s(\d+\.\d+\.\d+)$/.exec(meta.plugin.trim());
+      if (!mm || mm[1] === now.version) continue;
+      if (m.ts.length === bestTs.length ? m.ts > bestTs : m.ts.length > bestTs.length) {
+        bestTs = m.ts;
+        wireVer = mm[1];
+      }
+    }
+  }
   const prev = a.from
     ? versions.find((v) => v.version === a.from)
-    : versions[versions.length - 2];
+    : (versions.find((v) => v.version === wireVer) ?? versions[versions.length - 2]);
   if (a.from && !prev) die(`--from ${a.from}: no such version in the cache. Present: ${versions.map((v) => v.version).join(', ') || 'none'}`, 2);
   if (!prev) die(`only one version (${now.version}) is installed, so there is no delta to report.`, 2);
+  const baselineSrc = a.from
+    ? 'given'
+    : wireVer && prev.version === wireVer
+      ? 'my own last posted plugin:'
+      : 'inferred from cache';
 
   // ⚠ sameCode() NORMALISES CRLF. A bare byte compare between a cache copy and anything
   // checked out reports 1000+ line endings as a difference that is not one - measured.
@@ -2070,39 +2127,81 @@ if (a['announce-install']) {
     die(`could not compare ${prev.version} against ${now.version}: ${e.message}`, 2);
   }
 
-  const lines = [
-    `*${a.session} is now on ${pluginName} ${now.version}* (was ${prev.version}).`,
-    '',
-    '_Posted because the installed→resident hop is invisible from the wire: a running watcher_',
-    '_executes the code that was on disk when it launched, from a pinned version directory,_',
-    '_and the running process has no version anyone can inspect — including your own `--doctor`._',
-    '',
-  ];
+  /**
+   * ⛔⛔ THE REMEDY GOES FIRST, AND IT MUST BE COMPLETE AND ONE LINE.
+   *
+   * Three separate defects in the first live instance, all of them in this block:
+   *
+   *  1 · `--heartbeat` WAS ABSENT. A reader following the instruction exactly restarts a
+   *      watcher that publishes NO PRESENCE - which §6 calls a correctness hazard: it cannot
+   *      be --ping'd, it is absent from --presence entirely, and a stale takeover of its
+   *      claims looks JUSTIFIED. ★ That is the worst instance in this whole project (a
+   *      session documented liveness all day while publishing none) and the notice was
+   *      REPRODUCING IT WITH MORE AUTHORITY THAN THE ORIGINAL, because it arrives as an
+   *      instruction rather than as a habit.
+   *
+   *  2 · THE FILE LIST CAME FIRST AND THE COMMAND LAST. The delivered instance was cut at
+   *      `*EXECUTABLE F` - diagnosis kept, remedy lost, which is precisely the inversion
+   *      #31 exists to prevent. The criterion was written for this message and did not
+   *      reach it.
+   *
+   *  3 · A TRAILING BACKSLASH CONTINUATION. Slack synthesises `msg.text` from the blocks
+   *      and destroys newlines - measured, 0 newlines on the delivered message - so a
+   *      consumer reading `.text` gets `argc=5` with a bare `\` as the first argument.
+   *
+   * ⚠⚠ AND THE SHAPE THEY SHARE IS THE LESSON: an acceptance criterion that describes PROSE
+   * is checkable by review; one that describes GENERATED OUTPUT IS ONLY CHECKABLE BY
+   * GENERATING IT. All three were accepted into the issue, none reached the generator, and
+   * the code was read twice without any of them being noticed - because reading the code
+   * cannot show you the message it produces.
+   */
+  const cmd =
+    `node "${join(now.root, 'slack-session-bus', 'slack-watch.mjs')}" --channel ${a.channel} ` +
+    '--session <your label> --heartbeat 60 --since <THE LAST ts YOU SAW>';
+  const lines = [`*${a.session} is now on ${pluginName} ${now.version}* (was ${prev.version}).`, ''];
   if (code.length) {
     lines.push(
-      `*EXECUTABLE FILES CHANGED — ${code.length}:*`,
-      ...code.map((f) => `• \`${f}\``),
-      '',
-      '*If you have a watcher armed, it is running the OLD code regardless of what your*',
-      '*`--doctor` says about INSTALLED.* Restart it from the installed copy:',
+      '*IF YOU HAVE A WATCHER ARMED IT IS RUNNING THE OLD CODE* — regardless of what your',
+      '`--doctor` says about INSTALLED. Restart it from the installed copy:',
       '```',
-      `node "<cache>/${now.version}/skills/slack-session-bus/slack-watch.mjs" \\`,
-      `  --channel ${a.channel} --session <your label> --since <THE LAST ts YOU SAW>`,
+      cmd,
       '```',
-      '⚠ *Pass `--since` with your own last-seen ts. A bare restart re-primes and silently*',
+      '⚠ *Keep `--heartbeat` — a watcher without it publishes no presence, cannot be `--ping`ed,',
+      'and is absent from `--presence` entirely, so a stale takeover of your claims looks justified.*',
+      '⚠ *And pass `--since` with your own last-seen ts: a bare restart re-primes and silently*',
       '*swallows anything that landed during the handover.*',
+      '',
     );
   } else {
     lines.push(
       '*NO EXECUTABLE FILE CHANGED — do not restart anything.*',
       '_Your running watcher is already executing identical code. A restart would cost you_',
       '_the `--since` handover risk and buy nothing._',
+      '',
     );
+  }
+  lines.push(
+    '_Why this is posted at all: the installed→resident hop is invisible from the wire. A running_',
+    '_watcher executes the code that was on disk when it launched, from a pinned version directory,_',
+    '_and the running process has no version anyone can inspect — including your own `--doctor`._',
+    '',
+  );
+  if (code.length || docs.length) {
+    lines.push(
+      // ⚠ WHOSE DELTA THIS IS. The file list is computed between the SENDER's two versions,
+      // and every reader has a different baseline. The claim that generalises is "your
+      // resident code is stale" - true whatever you were on. The list is supporting
+      // evidence, and saying so stops it being read as a statement about the reader.
+      `_Files below are *my* delta, ${prev.version} → ${now.version} (baseline ${baselineSrc}). Yours may differ —_`,
+      '_compute your own if it matters; the point above holds either way._',
+    );
+  }
+  if (code.length) {
+    lines.push(`*Executable — ${code.length}:*`, ...code.map((f) => `• \`${f}\``));
   }
   if (docs.length) {
     lines.push(
-      '',
-      `*Instructions/manifests changed — ${docs.length}:*`,
+      `*Instructions/manifests — ${docs.length}:*`,
       ...docs.map((f) => `• \`${f}\``),
       '_On this plugin the instructions ARE behaviour, so re-read rather than restart._',
     );
@@ -2127,7 +2226,7 @@ if (a['announce-install']) {
           // a baseline the reader never ran. This file's own text says the RESIDENT version
           // is uninspectable - so `from:` cannot be read, only inferred, and it must not be
           // stated in the same voice as `installed:`, which really is read off disk.
-          { type: 'mrkdwn', text: `baseline: \`${a.from ? 'given' : 'inferred from cache'}\`` },
+          { type: 'mrkdwn', text: `baseline: \`${baselineSrc}\`` },
           { type: 'mrkdwn', text: `restart: \`${code.length ? 'required' : 'not needed'}\`` },
           // ⚠ THE ONE MESSAGE TYPE WHOSE SUBJECT IS VERSIONS SHIPPED WITHOUT DECLARING ITS
           // OWN. Every other message carries `plugin:`, skew detection KEYS on it, and this
