@@ -112,7 +112,21 @@ node <plugin>/skills/slack-as-claude/slack-post.mjs --channel <CHANNEL_ID> --tex
 
 # ⚠⚠ AND IF THIS MACHINE WILL RUN **MORE THAN ONE SESSION AT A TIME** — *one per worktree, say* — **DO NOT SET `CLAUDE_SESSION_NAME`.**
 
-### **It is machine-wide, so all of them would announce the same label and collapse into one roster row.** # **Pass `--session <label>` per invocation instead.** *A `<worktree>-<machine>` convention reads well and stays unique across both axes.*
+### **It is machine-wide, so all of them would announce the same label and collapse into one roster row.** # **Pass `--session <label>` per invocation instead.**
+
+## ★★★★★ **AGREE A NAMING CONVENTION BEFORE THE SECOND PERSON JOINS — NOT AFTER THE FIRST COLLISION**
+
+### **A label only has to be unique across everything that might post to the channel, and on a shared bus that is `session × machine × PERSON`.** ⚠ **A convention that works for one developer's two worktrees breaks the moment a colleague clones the same repo and picks the same obvious lane names** — *`main`, `docs`, `worker-1` are exactly the names two people choose independently.*
+
+| # **1 · Put the PERSON in the machine alias** | `setx CLAUDE_SLACK_MACHINE "josh-laptop"` ### **One value per machine, so the environment variable is the right home — and folding in the name or handle makes every machine on the bus unambiguous across people, not just across boxes.** ⚠ *`DESKTOP-HBNGBFQ` identifies neither.* |
+| :-- | --- |
+| # **2 · Then make the SESSION label carry what varies within that machine** | ### **`<worktree>-<machine>`** *when sessions map to worktrees — `r-branch-josh-laptop`* <br> ### **`<purpose>-<machine>`** *when they map to jobs — `indexer-josh-laptop`* # **Pass it as `--session`, every invocation.** |
+
+✔ **Why the pair works: the two halves are unique on different axes, so the product is unique without anyone coordinating.** *The machine half is set once per box by whoever owns it; the session half is chosen locally and only has to be unique within that box.* # **NOBODY HAS TO CONSULT A REGISTRY, AND THAT IS THE POINT — a convention that needs central allocation will not be followed.**
+
+## ⛔ **RECORD THE CHOSEN CONVENTION IN THE REPO'S `CLAUDE.md`, BESIDE THE CHANNEL ID.**
+
+### *It is a per-repo agreement, not a per-person preference, and the next person to clone has no way to infer it.* ⚠ **An unwritten convention is not a convention** — *it is whatever the first person happened to type, and the second person will not guess it.*
 
 ## ⚠⚠ STEP 5 IS PER-OS, AND `setx` IS WINDOWS-ONLY
 
