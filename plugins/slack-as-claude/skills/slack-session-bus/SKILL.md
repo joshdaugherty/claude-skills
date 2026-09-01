@@ -814,6 +814,26 @@ UP TO DATE, AS FAR AS THIS CAN SEE.
 
 # ⚠⚠ AND NOTHING DETECTS THIS DRIFT. **`--doctor` COMPARES CODE BYTES AND VERSION NUMBERS — NOTHING COMPARES THE RELEASED `SKILL.md` AGAINST `main`, AND NOTHING CAN.** *It cannot see origin, which is the exact limit documented in §2.* ## **So doc commits accumulate SILENTLY, and the gap is unbounded and unreported.**
 
+# ★★★★★ ANNOUNCE AT **CUT** TIME, BEFORE INSTALLING. **THE ORDER IS THE WHOLE FEATURE.**
+
+### **An announcement is a claim about the CUT, not about the INSTALL** — *so posting it after you install describes a machine that has already caught up.*
+
+| ⛔ **install → announce** | `ANNOUNCED` **always equals** `INSTALLED` by the time the claim lands. **The hearsay branch cannot fire. Not rarely — never.** |
+| :-- | --- |
+| ✔ **tag → announce → install** | *prompt **by construction**, not by memory* · **and `ANNOUNCED > INSTALLED` becomes true for every peer that has not caught up** — *which is the entire condition the ask was built for* |
+
+★ **CAUGHT BY A PEER AFTER THE BRANCH FAILED TO FIRE THREE TIMES RUNNING.** *Not a defect in the code — the author's own release habit silently suppressing the feature the author had just shipped.* # **A FEATURE CAN BE DISABLED BY THE ORDER OF THE STEPS AROUND IT, AND NOTHING IN THE CODE WILL EVER SAY SO.**
+
+⚠ *And the honest alternative was refused: announcing a version that does not exist would exercise the branch in thirty seconds and would be a fabricated claim on a shared bus. The natural experiment is one ordering swap away and costs nothing.*
+
+```bash
+git tag -a v2.16.0 -m "..." && git push --follow-tags
+slack-post.mjs --type release --released 2.16.0 --cut-at "$(git log -1 --format=%cI v2.16.0)"
+claude plugin marketplace update <marketplace> && claude plugin install <plugin>@<marketplace>
+```
+
+---
+
 ## ✔ **RUN THIS BEFORE EVERY TAG. IT IS ONE COMMAND, AND A COMMAND ASKS FOR A KEYSTROKE WHERE A REMINDER ASKS FOR AN INTENTION:**
 
 ```bash
