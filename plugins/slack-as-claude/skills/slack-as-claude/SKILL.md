@@ -109,11 +109,21 @@ auth.test  ·  chat.postMessage  ·  conversations.history  ·  conversations.re
 
 ### **`--scope user` means ONE registration visible in EVERY repo.** *Add a second at project scope and repo B sees both — so a session in repo B can read workspace A as you.* # **That contradicts the one-repo-one-workspace rule the POSTING side enforces with a refusal**, *and nothing on the read side refuses anything.*
 
-## ✔ **THE END STATE: no user-scope Slack MCP at all. Each repo declares its own at `--scope project`,** *which writes `.mcp.json` into that checkout — no secret in it, just a URL.*
+## ✔ **THE END STATE: no user-scope Slack MCP at all. Each repo registers its own at `--scope local`** *(the DEFAULT), which lives in `~/.claude.json` under `projects/<dir>/mcpServers` — **per-project, private to the machine, and not committed.***
 
-⚠⚠ **DO NOT MIGRATE BEFORE YOU NEED IT.** ### *With one workspace there is nothing to leak, and the migration touches a WORKING OAuth to solve a problem you do not yet have.*
+# ⚠ **`local`, NOT `project`.** ### **`--scope project` writes `.mcp.json` INTO the checkout** — *so it is committed, shared with anyone who clones, and gated behind a per-project approval prompt.* **Same isolation, and it publishes your MCP config.** ⛔ *An earlier draft of this section said `project`. It was wrong.*
 
-# ⚠ **AND MEASURE THIS BEFORE ASSUMING IT IS FREE:** ### **the cached credential is keyed `<server-name>|<hash>`.** *Whether moving scope preserves that key — and therefore the authorisation — depends on what the hash covers.* **If it survives, the move costs nothing. If it does not, you re-run the OAuth flow on a connection that currently works.** ⛔ *Reason from the key format if you like, but CHECK IT: read `~/.claude/.credentials.json` before and after, on a machine you can afford to re-authorise.*
+## ★ **AND THE RE-AUTH RISK IS SMALL, BECAUSE THERE IS A COMMAND FOR IT:**
+
+```
+claude mcp remove slack --scope user
+claude mcp add --transport http slack https://mcp.slack.com/mcp    # local is the default
+claude mcp login slack                                             # only if the credential did not carry
+```
+
+### **The cached credential is keyed `<server-name>|<hash>`, and whether a scope move preserves that key is UNMEASURED.** *The key format invites the inference that the hash is over the URL and would survive — that is inference, so check `~/.claude/.credentials.json` before and after rather than trusting it.* ✔ **Either way the worst case is one `claude mcp login`.**
+
+# ★★ **DO IT BEFORE YOU ADD THE SECOND WORKSPACE, NOT AFTER.** ### *One server to move, one credential at risk, and the flow you might re-run is against the workspace you are already signed into.* ⚠ *Afterwards means untangling two.*
 
 ---
 
