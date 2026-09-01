@@ -113,10 +113,26 @@ function envFromRegistry(name) {
  * for an explicit override and wrong after a ROTATION, when the inherited value is the old
  * one and a restart is a silent no-op for any shell that still carries it.
  *
- * ⚠ It matters here for a different reason than in the watcher: this script's exit code IS
- * its answer. An auth failure from a stale token surfaces as exit 1, which is INDISTINGUISH-
- * ABLE FROM LOSING A CLAIM - so a credential problem would read as "stand down, someone else
- * holds it" and the work would silently not get done.
+ * ⛔⛔ WITHDRAWN, 1 Sep 2026 - THE PARAGRAPH THAT WAS HERE WAS FALSE, AND IT SHIPPED IN 2.18.1.
+ *
+ * It claimed: "an auth failure surfaces as exit 1, which is indistinguishable from LOSING A
+ * CLAIM, so a credential problem reads as stand down and the work silently does not happen."
+ * That was written from plausibility, never run, and a peer amplified it to "the worst thing
+ * either of us has turned up" before anybody spent the two seconds to check.
+ *
+ * ✅ MEASURED with a deliberately invalid token: EXIT 2, and it never reaches the claim logic
+ * at all - checkWorkspace() refuses first, saying "an unanswered question is not a match.
+ * Refusing rather than posting somewhere unverified."
+ *
+ * ★ Every exit(1) in this file is a VERDICT REACHED AFTER A SUCCESSFUL READ - already
+ * resolved, held by a live claimant, stale holder without --takeover, or a lower ts winning.
+ * threadClaims() exits 2 on a failed read, and livenessOf() returns `unknown` rather than
+ * `absent`. THE SEPARATION THIS FILE NEEDED WAS ALREADY BUILT, TWICE, BY EARLIER FIXES.
+ *
+ * ⚠ The correction is kept rather than deleted because the FALSE version is instructive: a
+ * consequence invented for a real defect is still an invention, and attaching it to a true
+ * finding (the precedence hazard IS real) is what made it credible enough to ship and to be
+ * escalated. VERIFY THE CONSEQUENCE SEPARATELY FROM THE CAUSE.
  *
  * ⛔ NEVER PRINT EITHER VALUE.
  */

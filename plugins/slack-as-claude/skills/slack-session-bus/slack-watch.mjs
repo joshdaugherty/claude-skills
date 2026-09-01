@@ -2226,7 +2226,13 @@ if (a['announce-install']) {
           // a baseline the reader never ran. This file's own text says the RESIDENT version
           // is uninspectable - so `from:` cannot be read, only inferred, and it must not be
           // stated in the same voice as `installed:`, which really is read off disk.
-          { type: 'mrkdwn', text: `baseline: \`${baselineSrc}\`` },
+          // ★★★ A PROVENANCE LABEL MUST NAME THE SOURCE WITHOUT IMPLYING THE VALUE WAS
+          // CHECKED. A peer's formulation, and it resolves a real tension: the label is what
+          // made a wrong `2.7.0` REPORTABLE, and the label is also why it read as
+          // authoritative enough to ship. Naming where a value came from is not a claim that
+          // anyone verified it arrived correctly.
+          // `ANNOUNCED … a CLAIM, not a reading` already had this right; `baseline:` did not.
+          { type: 'mrkdwn', text: `baseline: \`${baselineSrc}\` (source, not a verification)` },
           { type: 'mrkdwn', text: `restart: \`${code.length ? 'required' : 'not needed'}\`` },
           // ⚠ THE ONE MESSAGE TYPE WHOSE SUBJECT IS VERSIONS SHIPPED WITHOUT DECLARING ITS
           // OWN. Every other message carries `plugin:`, skew detection KEYS on it, and this
