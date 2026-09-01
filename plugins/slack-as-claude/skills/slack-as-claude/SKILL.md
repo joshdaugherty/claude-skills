@@ -107,7 +107,26 @@ node <plugin>/skills/slack-as-claude/slack-post.mjs --channel <CHANNEL_ID> --tex
 | **4** | **Get the token:** *Go to App Settings → **OAuth & Permissions** → under the **`OAuth Tokens`** heading → **Bot User OAuth Token** (`xoxb-…`).* ⚠ **NOT at the top of that page.** |
 | **5** | # **STASH IT — IN YOUR OWN TERMINAL, NEVER PASTED INTO A CHAT.** *(the two forms below are NOT variants of one command)* |
 | **6** | **In Slack, in the workspace, in the channel: `/invite @<APP NAME>`.** *Per-channel and permanent.* ⛔ **Ask which channel — do not assume a name.** |
-| **7** | **Verify with the §0 dry-run. Nothing is sent. Line 2 must say `[matches …]`.** |
+| **7** | # **NAME THE MACHINE — `setx CLAUDE_SLACK_MACHINE "josh-laptop"`** *(macOS/Linux: `export`, in the profile)*. ### **Skip this and every message from this machine is stamped with the raw OS hostname — `DESKTOP-HBNGBFQ`.** ⚠ *On a bus whose entire purpose is telling senders apart, that is noise, not signal* — **and §6 already says exactly this about container hostnames.** ★ *One value per machine, so an environment variable is genuinely the right home for it — unlike the session label.* |
+| **8** | **Verify with the §0 dry-run. Nothing is sent. Line 2 must say `[matches …]`.** |
+
+# ⚠⚠ AND IF THIS MACHINE WILL RUN **MORE THAN ONE SESSION AT A TIME** — *one per worktree, say* — **DO NOT SET `CLAUDE_SESSION_NAME`.**
+
+### **It is machine-wide, so all of them would announce the same label and collapse into one roster row.** # **Pass `--session <label>` per invocation instead.**
+
+## ★★★★★ **AGREE A NAMING CONVENTION BEFORE THE SECOND PERSON JOINS — NOT AFTER THE FIRST COLLISION**
+
+### **A label only has to be unique across everything that might post to the channel, and on a shared bus that is `session × machine × PERSON`.** ⚠ **A convention that works for one developer's two worktrees breaks the moment a colleague clones the same repo and picks the same obvious lane names** — *`main`, `docs`, `worker-1` are exactly the names two people choose independently.*
+
+| # **1 · Put the PERSON in the machine alias** | `setx CLAUDE_SLACK_MACHINE "josh-laptop"` ### **One value per machine, so the environment variable is the right home — and folding in the name or handle makes every machine on the bus unambiguous across people, not just across boxes.** ⚠ *`DESKTOP-HBNGBFQ` identifies neither.* |
+| :-- | --- |
+| # **2 · Then make the SESSION label carry what varies within that machine** | ### **`<worktree>-<machine>`** *when sessions map to worktrees — `r-branch-josh-laptop`* <br> ### **`<purpose>-<machine>`** *when they map to jobs — `indexer-josh-laptop`* # **Pass it as `--session`, every invocation.** |
+
+✔ **Why the pair works: the two halves are unique on different axes, so the product is unique without anyone coordinating.** *The machine half is set once per box by whoever owns it; the session half is chosen locally and only has to be unique within that box.* # **NOBODY HAS TO CONSULT A REGISTRY, AND THAT IS THE POINT — a convention that needs central allocation will not be followed.**
+
+## ⛔ **RECORD THE CHOSEN CONVENTION IN THE REPO'S `CLAUDE.md`, BESIDE THE CHANNEL ID.**
+
+### *It is a per-repo agreement, not a per-person preference, and the next person to clone has no way to infer it.* ⚠ **An unwritten convention is not a convention** — *it is whatever the first person happened to type, and the second person will not guess it.*
 
 ## ⚠⚠ STEP 5 IS PER-OS, AND `setx` IS WINDOWS-ONLY
 
@@ -512,11 +531,15 @@ node slack-post.mjs --channel C01234ABCDE --text "..." \
 
 | Variable | Sets | Example |
 | :-- | --- | --- |
-| `CLAUDE_SESSION_NAME` | **session** — a human label instead of the raw id | `hart-audit` |
+| `CLAUDE_SESSION_NAME` | **session** — a human label instead of the raw id. ⛔ **ONE SESSION PER MACHINE ONLY → see the warning below** | `hart-audit` |
 | `CLAUDE_SLACK_MACHINE` | **machine** — friendlier than a Windows default | `my-laptop` |
 | `CLAUDE_SLACK_USER_EMAIL` | **user** — include the address (`1`/`true`/`yes`) | `1` |
 
 *Windows* `setx NAME "value"` · *macOS/Linux* `export NAME="value"` *in the shell profile.*
+
+# ⛔⛔ **`CLAUDE_SESSION_NAME` IS MACHINE-WIDE. IF YOU RUN CONCURRENT SESSIONS, PASS `--session <label>` INSTEAD.**
+
+### **One variable, inherited at launch, so every session on the machine reads the SAME value and announces the SAME label.** ⚠ **Two sessions sharing a label collapse into ONE presence message and ONE roster row — neither individually addressable, neither `--ping`-able** *(measured; the full consequence list is in the bus skill).* # **The asymmetry is the point: `machine` is genuinely one value per machine, and `session` is many. An environment variable can express the first and structurally cannot express the second.**
 
 # ⚠⚠ THESE THREE DO NOT AFFECT THE RUNNING SESSION.
 
@@ -579,7 +602,7 @@ node -e 'fetch("https://slack.com/api/auth.test",{method:"POST",headers:{Authori
 
 ## **A branch CANNOT identify a session.** *It is shared by every session working on it, so two sessions on `main` in the same repo would be indistinguishable.* **`CLAUDE_CODE_SESSION_ID` is the only per-session handle that exists** — stable for the session's life, unique across sessions.
 
-⚠ # **Claude Code exposes NO session TITLE.** ### *Conversation summaries are written on compaction, not live — there is nothing to read at post time.* **Do not go looking for one; the id is what exists.** *Set `CLAUDE_SESSION_NAME` when a session deserves a human label — that is the whole point of the override.*
+⚠ # **Claude Code exposes NO session TITLE.** ### *Conversation summaries are written on compaction, not live — there is nothing to read at post time.* **Do not go looking for one; the id is what exists.** *Give a session a human label when it deserves one — that is the whole point of the override.* ⚠ **Via `--session` if the machine runs more than one at a time; `CLAUDE_SESSION_NAME` is machine-wide and would give them all the same name.**
 
 ★ *Three identities are easy to confuse, and they coincide on a personal machine:* **the CLAUDE ACCOUNT** *(`~/.claude.json` → `oauthAccount`, what the `user` element shows)*, **the OS LOGIN** *(`$env:USERNAME`, the fallback)*, and **the SLACK USER** *(the MCP user token's identity).* ⚠ **They diverge on a shared or remote box — say a build agent logged in as `svc-deploy` running under someone's personal Claude account.**
 

@@ -190,6 +190,31 @@ const USAGE =
       '              anything posted between stopping the old watcher and starting this\n' +
       '              one, and the two cases look identical from inside the script.';
 
+const STALE_AFTER = 2.5; // missed beats before a session is considered gone
+// ⚠ An ABSOLUTE FLOOR, because a threshold proportional to the claimant's own declared
+// rate is inverted: at every=5 a session went STALE in 12.5s while one declaring 60s got
+// 150s. THE SESSION PROVING ITSELF TWELVE TIMES MORE OFTEN GOT TWELVE TIMES LESS
+// TOLERANCE - a fast heartbeat is MORE evidence of life and was punished for it, and one
+// scheduler hiccup would kill it. Declaring an aggressive rate must not make you fragile.
+const STALE_FLOOR_SEC = 90;
+
+/**
+ * Is a presence message with MY label still being beaten by somebody else?
+ *
+ * ★ THE DISCRIMINATOR, AND IT NEEDS NO NEW DATA: a RESTART adopts a presence whose last
+ * beat is OLD, because the process that wrote it is gone. A COLLISION adopts one that is
+ * STILL BEATING, because another process is alive right now. Kept pure and above the
+ * self-test so the comparison the whole guard rests on is actually exercised.
+ *
+ * ⚠ Same absolute floor as staleness, and for the same reason: a purely rate-proportional
+ * window would let a fast heartbeat hide a live clash - at every=5 it would call a 20s-old
+ * beat "ancient" and say nothing while two sessions shared a name.
+ */
+function looksLikeCollision(age, every) {
+  if (!Number.isFinite(age) || age < 0) return false;
+  return age <= Math.max((every || 60) * 1.5, STALE_FLOOR_SEC);
+}
+
 /**
  * EVERY DECLARED FLAG MUST APPEAR IN USAGE - see the long note in slack-post.mjs.
  * Four flags shipped invisible before this check existed, and the audit meant to catch
@@ -199,10 +224,30 @@ function selfTest() {
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
+
+  /**
+   * The label-collision discriminator. A restart adopts a presence whose last beat is OLD;
+   * a collision adopts one that is STILL BEATING. Tested because the whole guard rests on
+   * this one comparison, and because a guard that has never fired has never been read.
+   */
+  const cases = [
+    ['still beating at its declared rate -> COLLISION', looksLikeCollision(3, 5), true],
+    ['beat one interval ago, within slack   -> COLLISION', looksLikeCollision(70, 60), true],
+    ['silent far past its window            -> restart', looksLikeCollision(600, 60), false],
+    // ⚠ THE FLOOR CASE. A fast heartbeat must not make you fragile: at every=5 a bare
+    // rate-proportional window would call 20s "old" and stay silent through a live clash.
+    ['fast beat, 20s old, floor holds       -> COLLISION', looksLikeCollision(20, 5), true],
+    ['no usable beat age                    -> silent', looksLikeCollision(NaN, 60), false],
+  ];
+  for (const [name, got, want] of cases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  ${name}`);
+  const bad = cases.filter(([, got, want]) => got !== want).length;
+
   console.log(
-    missing.length ? `\n${missing.length} FLAG(S) MISSING FROM USAGE: ${missing.join(', ')}` : '\nall pass',
+    missing.length || bad
+      ? `\n${missing.length} FLAG(S) MISSING FROM USAGE${missing.length ? `: ${missing.join(', ')}` : ''}${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}`
+      : '\nall pass',
   );
-  process.exit(missing.length ? 1 : 0);
+  process.exit(missing.length || bad ? 1 : 0);
 }
 
 if (a['self-test']) selfTest();
@@ -355,13 +400,6 @@ function parseMessage(msg) {
 // where double-execution is destructive.
 
 const PRESENCE_TYPE = 'x-presence';
-const STALE_AFTER = 2.5; // missed beats before a session is considered gone
-// ⚠ An ABSOLUTE FLOOR, because a threshold proportional to the claimant's own declared
-// rate is inverted: at every=5 a session went STALE in 12.5s while one declaring 60s got
-// 150s. THE SESSION PROVING ITSELF TWELVE TIMES MORE OFTEN GOT TWELVE TIMES LESS
-// TOLERANCE - a fast heartbeat is MORE evidence of life and was punished for it, and one
-// scheduler hiccup would kill it. Declaring an aggressive rate must not make you fragile.
-const STALE_FLOOR_SEC = 90;
 
 
 async function slackPost(method, body) {
@@ -602,6 +640,46 @@ function presenceBlocks(label, every) {
 
 let presenceTs = null;
 
+/**
+ * ⛔⛔ TWO SESSIONS SHARING A LABEL COLLAPSE INTO ONE, AND NOTHING USED TO SAY SO.
+ *
+ * beat() adopts any presence message whose session matches the label. That is CORRECT for
+ * a restart - it is what stops an orphan lingering as STALE - and it is indistinguishable,
+ * from inside, from a DIFFERENT session using the same name. So two watchers both adopt
+ * the same message, both chat.update it, and the channel shows ONE roster row for two live
+ * sessions: neither individually addressable, neither --ping-able, and a takeover decision
+ * reading that roster reasons about a session that does not exist.
+ *
+ * ⚠ IT PRESENTS AS "EVERYTHING LOOKS FINE" - one healthy `alive` row is exactly what a
+ * correctly-configured single session looks like. There is no error to notice.
+ *
+ * ★ BUT THE DISCRIMINATOR IS ALREADY IN THE DATA WE JUST READ, WHICH IS WHY THIS BELONGS
+ * HERE RATHER THAN IN A DOCUMENT:
+ *
+ *     a RESTART    adopts a presence whose last beat is OLD - the previous process is gone
+ *     a COLLISION  adopts one that is STILL BEATING - another process is alive right now
+ *
+ * `beat` is server-assigned (edited.ts, else ts) and the message declares its own interval,
+ * so "still beating" is measurable without trusting anyone's clock. A conventions document
+ * tells the second person what to type; this catches the case where they did not read it.
+ *
+ * ⚠ WARN, DO NOT REFUSE. A false positive here would kill a legitimate restart that
+ * happened to land inside the window, and being unable to start your watcher is worse than
+ * a duplicate label you were told about.
+ */
+function warnIfColliding(p, label) {
+  if (!p.beat) return;
+  const age = Math.max(0, Math.floor(Date.now() / 1000 - p.beat));
+  if (!looksLikeCollision(age, p.every)) return;
+  console.error(
+    `[watch] ⚠ A presence message labelled "${label}" beat ${age}s ago (every ${p.every || '?'}s) -\n` +
+      '        ANOTHER SESSION IS PROBABLY LIVE UNDER THIS NAME, and you are about to share its\n' +
+      '        presence message. The roster would then show ONE row for two sessions, and\n' +
+      `        neither could be --ping'd or addressed with --to.\n` +
+      '        Pass a distinct --session <label>. If this is your own restart, ignore this.',
+  );
+}
+
 async function beat(label, every) {
   // Reuse this session's existing presence message if there is one, so a restart does
   // not litter the channel with orphans that a roster would then report as dead.
@@ -615,6 +693,7 @@ async function beat(label, every) {
       const p = presenceOf(m);
       if (p && p.session === label) {
         presenceTs = p.ts;
+        warnIfColliding(p, label);
         break;
       }
     }

@@ -332,7 +332,31 @@ session: cea6f85a     <- the sender, emitted automatically
 
 ★ **`slack-watch` flags an unrecognised type as `type=foo!UNKNOWN`** *rather than letting it pass as noise, so a PEER's typo is visible to you too.*
 
-### **A session should set `CLAUDE_SESSION_NAME` to a stable lane name** *(`main`, `indexer`, `worker-2`)*. **A raw session id changes every restart, which makes it useless as an address.**
+### **A session needs a stable lane name** *(`main`, `indexer`, `worker-2`)*. **A raw session id changes every restart, which makes it useless as an address.**
+
+# ⛔⛔ PASS IT AS `--session <label>` ON EVERY INVOCATION. **`CLAUDE_SESSION_NAME` CANNOT NAME CONCURRENT SESSIONS, AND THIS FILE USED TO RECOMMEND IT.**
+
+### **It is ONE machine-wide environment variable, inherited at launch.** *Three sessions on one machine read the same value and announce the SAME label* — **which is precisely the case a bus exists for.**
+
+| `CLAUDE_SLACK_MACHINE` | genuinely **one value per machine** → ✔ an environment variable is the right home |
+| :-- | --- |
+| # `CLAUDE_SESSION_NAME` | # **MANY values per machine** → ⛔ **AN ENVIRONMENT VARIABLE STRUCTURALLY CANNOT EXPRESS IT** |
+
+★ *It remains fine for a machine that runs ONE session at a time, and it is still what makes self-recognition work across a restart. It is the concurrency case it cannot serve — and that is the case this skill is for.*
+
+## ⚠⚠ SHARING A LABEL IS NOT MERELY UNHELPFUL — **IT COLLAPSES TWO SESSIONS INTO ONE**
+
+### **`beat()` adopts ANY existing presence message whose `session:` matches the label and updates it in place.** *It cannot tell "my own restart" from "a different session using my name" — and that is the SAME mechanism that correctly stops a restart littering the channel with orphans.*
+
+✅ **MEASURED, not read off the code:** *two independent watcher processes launched with `--session dupe-probe` produced* # **ONE ROSTER ROW, NOT TWO.** *The second adopted the first's presence message.*
+
+| **The roster shows ONE entry for two live sessions** | *`seen` is keyed by the session label.* |
+| :-- | --- |
+| **Its `beat` is whichever watcher wrote last** | *so the age is true of neither in particular.* |
+| # **NEITHER SESSION IS ADDRESSABLE OR `--ping`-ABLE** | ### **`--to` and `--ping` take a label, and the label is now ambiguous.** |
+| **A takeover decision reading that roster** | **is reasoning about a session that does not exist.** |
+
+# ⚠ **AND IT PRESENTS AS "EVERYTHING LOOKS FINE."** ### *One healthy `alive` row is exactly what a correctly-configured single session looks like.* **No error, nothing anywhere reports the collapse.**
 
 ⚠ **`to:` is a CONVENTION, not a delivery mechanism.** *Every session sees every message in the channel. Filtering is the reader's job, and a reader that ignores `to:` will happily act on someone else's work.*
 
@@ -521,7 +545,7 @@ node slack-post.mjs --thread-ts "<ts>" --broadcast --type done --text "..."
 | # **Equal timestamps** | ### **TS ORDERING PROVEN. LEXICAL TIEBREAK UNREACHED.** *A race where the two rules DISAGREED — earlier `ts`, later name — was won by `ts`, as predicted before the verdict.* # ⚠ **But the tiebreak branch never executed and cannot: it fires only on EQUAL timestamps, and the claims differed by 10.3ms.** ## **Slack does not produce equal timestamps, so this branch is unreachable from the transport. UNIT-TEST IT OR DROP IT — do not call it covered.** ★ *An earlier changelog line said "tiebreak proven", which is how an unreachable branch acquires a reputation for being tested: two releases on, the distinction is gone and all anyone remembers is that it was proven.* |
 | # ⚠⚠ **The dead claimant** | ### **A session claims, then its process ends.** *The task is claimed and will never be done.* # **NOTHING IN SLACK DETECTS THIS.** → *see §6* |
 | # **Lost wakeup** | ### **PROMOTED TO §5 — it is the defining constraint, not one hazard among several.** |
-| # **Duplicate work from re-reads** | ### *A session restarting re-reads the channel and sees its OWN earlier request as new.* **Ignore messages whose `session:` is your own** — *and note that a raw session id CHANGES on restart, so a stable `CLAUDE_SESSION_NAME` is what makes self-recognition possible at all.* |
+| # **Duplicate work from re-reads** | ### *A session restarting re-reads the channel and sees its OWN earlier request as new.* **Ignore messages whose `session:` is your own** — *and note that a raw session id CHANGES on restart, so a STABLE label is what makes self-recognition possible at all.* ⚠ **Use the same `--session <label>` every time rather than `CLAUDE_SESSION_NAME`, which is machine-wide and would make two concurrent sessions mistake each other's messages for their own.** |
 | # ⛔⛔ **NEVER CORRECT BY EDITING. POST A NEW MESSAGE.** | ### ✅ **MEASURED: an edited message keeps its ORIGINAL `ts`.** *So `oldest=<cursor>` will never return it again, and an edit has exactly two fates decided by poll timing alone:* # **poll lands BEFORE the edit → the watcher emits v1 and NEVER sees v2. The correction is lost forever.** # **poll lands AFTER → the watcher emits v2 and never knows v1 existed.** ## **AN EDIT IS EITHER SEEN OR LOST, NEVER SEEN AS AN EDIT.** ⚠ *`slack-watch` now renders `(edited@ts)` so a revised message cannot pass as an original — but nothing polling on `ts` can recover the lost case.* ★★ **AND THE WORST PART IS THE HUMAN ONE: an edited channel is one where the human transcript and the agent transcript have SILENTLY DIVERGED, and the human has no way to tell.** *Every correction issued during this skill's development went out as a new message. That is the only reason any of them arrived.* |
 
 ---
