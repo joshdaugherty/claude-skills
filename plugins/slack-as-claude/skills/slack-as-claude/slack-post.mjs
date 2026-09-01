@@ -458,6 +458,24 @@ function resolveText() {
  * ⚠ TABLES CANNOT BE FIXED HERE. Slack has no table syntax, so a markdown table renders as
  * rows of pipes. There is no lossless target to convert to - the honest move is to say so
  * and let the author restructure, not to silently mangle their columns.
+ *
+ * ★★ THE DIALECT WAS DECLARED IN THE PAYLOAD ALL ALONG, AND BOTH SESSIONS READ PAST IT:
+ *
+ *     { type: 'section', text: { type: 'mrkdwn', text: c } }
+ *
+ * `type: 'mrkdwn'` is not a formatting hint or a field label. IT IS THE NAME OF THE
+ * LANGUAGE, on every message ever sent from here - and it was quoted back, verbatim, while
+ * debugging a DIFFERENT bug in this same function, without either reader hearing it.
+ *
+ * ★★★ AND THIS FIX'S ACCEPTANCE CRITERION CANNOT BE AUTOMATED. --self-test proves the
+ * converter TRANSFORMS STRINGS; only a screenshot proves the result RENDERS. Two text-only
+ * readers of a text-only surface cannot see a render, and a third would not have helped:
+ * the pair has different EVIDENCE, not different SENSES. A human here is not a tiebreaker,
+ * they are the only instrument.
+ *
+ * ⚠ SO THE TEST FOR THIS FUNCTION IS A SCREENSHOT, AND THAT IS NOT A WEAKNESS OF THE TEST.
+ * If you change the mapping, do not conclude from a green --self-test that it works. Send
+ * one message and have a person look at it.
  */
 function toSlackMrkdwn(text) {
   const changes = { bold: 0, strike: 0, headings: 0, links: 0, tableRows: 0 };
