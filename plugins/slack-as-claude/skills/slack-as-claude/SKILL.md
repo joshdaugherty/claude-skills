@@ -158,9 +158,19 @@ claude mcp add --transport http slack https://mcp.slack.com/mcp --scope user --c
 
 ## B2 · Turn on the toggle that actually matters
 
-# **Agents → "Slack Model Context Protocol (MCP) Server" → On.**
+# **Agents → "Slack Model Context Protocol (MCP) Server" → On.** *(sidebar → **Features** → **Agents**; the URL ends `/app-assistant`)*
 
-*Until this is on, every connection returns* `App is not enabled for Slack MCP server access`. # ⛔ **NOT the sidebar's "MCP Servers" page** → *trap 2*
+*Until this is on, every connection returns* `App is not enabled for Slack MCP server access` — *which reads like an auth failure rather than a missing switch.* # ⛔ **NOT the sidebar's "MCP Servers" page** → *trap 2*
+
+# ⚠⚠ AND THERE ARE **TWO TOGGLES ON THAT PAGE**. THE ONE YOU WANT IS THE **SECOND**.
+
+| **Agent experience** | *"power your app's conversational AI agents"* — **LEAVE IT OFF.** ⛔ *Nothing to do with MCP, sits directly ABOVE the one you want, and flipping it changes nothing you can see — so it fails silently and looks done.* |
+| :-- | --- |
+| # **Slack Model Context Protocol (MCP) Server** | ### **THIS ONE.** *"Enable your app to connect to the Slack MCP server…"* |
+
+✅ **A correct end state is `Agent experience` OFF and `MCP Server` ON.** *Verified against a working app.*
+
+⚠ **DO THIS BEFORE `claude mcp add` AND THE AUTHORIZE.** *Out of order, the OAuth completes and the connection still refuses — two surfaces disagreeing, one of them cheerful.*
 
 ## B3 · Register and authorize
 
