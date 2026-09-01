@@ -3,6 +3,12 @@
     "name": "Claude Code Bus",
     "description": "Lets concurrent Claude sessions post and read a Slack channel as an app"
   },
+  "features": {
+    "bot_user": {
+      "display_name": "Claude Code Bus",
+      "always_online": false
+    }
+  },
   "oauth_config": {
     "scopes": {
       "bot": [

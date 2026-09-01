@@ -3,19 +3,38 @@
     "name": "Claude Code MCP",
     "description": "Lets Claude Code read Slack as you and post as an app"
   },
+  "features": {
+    "bot_user": {
+      "display_name": "Claude Code MCP",
+      "always_online": false
+    }
+  },
   "oauth_config": {
-    "redirect_urls": ["http://localhost:8765/callback"],
+    "redirect_urls": [
+      "http://localhost:8765/callback"
+    ],
     "scopes": {
       "user": [
-        "channels:history", "channels:read",
-        "groups:history", "groups:read",
-        "im:history", "im:read",
-        "mpim:history", "mpim:read",
-        "search:read.public", "search:read.private", "search:read.files",
-        "search:read.im", "search:read.mpim", "search:read.users",
-        "users:read", "users:read.email",
-        "files:read", "emoji:read",
-        "reactions:read", "reactions:write",
+        "channels:history",
+        "channels:read",
+        "groups:history",
+        "groups:read",
+        "im:history",
+        "im:read",
+        "mpim:history",
+        "mpim:read",
+        "search:read.public",
+        "search:read.private",
+        "search:read.files",
+        "search:read.im",
+        "search:read.mpim",
+        "search:read.users",
+        "users:read",
+        "users:read.email",
+        "files:read",
+        "emoji:read",
+        "reactions:read",
+        "reactions:write",
         "chat:write"
       ],
       "bot": [

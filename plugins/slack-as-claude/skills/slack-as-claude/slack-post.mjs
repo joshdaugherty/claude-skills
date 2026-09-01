@@ -18,7 +18,7 @@
  * Node 18+ only (global fetch, node:util parseArgs). No dependencies.
  */
 import { execFileSync } from 'node:child_process';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { homedir, hostname, userInfo } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -444,14 +444,72 @@ const USAGE =
  * unchanged and raises NOTHING, so the script printed success twice and wrote a file
  * with no change in it. ASSERT THE ANCHOR, or verify the result afterwards.
  */
+/**
+ * ⛔⛔ A MANIFEST THAT HAS NEVER BEEN PASTED HAS NEVER BEEN VALIDATED.
+ *
+ * Both shipped manifests were REJECTED by Slack - `OAuth requires bot_user` - so PATH BUS
+ * step 1 and PATH B step B1 both failed at their first action. The bus-only path was the
+ * fix for a reported gap, and it could not be completed.
+ *
+ * Slack requires `features.bot_user` whenever `oauth_config.scopes.bot` is non-empty. The
+ * bot scopes and the files arrived in the SAME commit: before it, the manifest lived
+ * inline and declared USER scopes only, so no bot_user was required and the shape was
+ * valid. Adding bot scopes created a dependency nothing checked.
+ *
+ * ★ AND THE FILE ALREADY KNEW. §B4a says of adding the scope by hand: "Bot Token Scopes
+ * -> add chat:write. (CREATES THE BOT USER.)" The manifest route skips that click, so the
+ * manifest must declare the bot user itself - and the one sentence recording the
+ * dependency sat in the path that no longer needs it.
+ *
+ * Same class as the guards whose OUTPUT was never read: an artefact reviewed and shipped
+ * without being EXECUTED once. Manifests are files now, so this is checkable.
+ */
+function checkManifests() {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const out = [];
+  let files = [];
+  try {
+    files = readdirSync(here).filter((f) => f.startsWith('slack-app-manifest') && f.endsWith('.json'));
+  } catch {
+    return [['FAIL', 'could not read the skill directory to find manifests']];
+  }
+  if (!files.length) return [['FAIL', 'no slack-app-manifest*.json found beside this script']];
+  for (const f of files) {
+    let m;
+    try {
+      m = JSON.parse(readFileSync(join(here, f), 'utf8'));
+    } catch (e) {
+      out.push(['FAIL', `${f} is not valid JSON: ${e.message}`]);
+      continue;
+    }
+    const bot = m.oauth_config?.scopes?.bot ?? [];
+    const botUser = m.features?.bot_user;
+    if (bot.length && !botUser) {
+      out.push(['FAIL', `${f} declares ${bot.length} bot scope(s) but no features.bot_user - Slack REJECTS this`]);
+    } else if (bot.length) {
+      out.push(['pass', `${f}: ${bot.length} bot scope(s) with features.bot_user "${botUser.display_name}"`]);
+    } else {
+      out.push(['pass', `${f}: no bot scopes, so no bot_user required`]);
+    }
+  }
+  return out;
+}
+
 function selfTest() {
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
+  const man = checkManifests();
+  for (const [verdict, msg] of man) console.log(`  ${verdict}  ${msg}`);
+  const manFailed = man.filter(([v]) => v === 'FAIL').length;
+
+  const bad = missing.length + manFailed;
   console.log(
-    missing.length ? `\n${missing.length} FLAG(S) MISSING FROM USAGE: ${missing.join(', ')}` : '\nall pass',
+    bad
+      ? `\n${bad} FAILURE(S)${missing.length ? ` - flags missing from usage: ${missing.join(', ')}` : ''}`
+      : '\nall pass',
   );
-  process.exit(missing.length ? 1 : 0);
+  process.exit(bad ? 1 : 0);
 }
 
 if (a['self-test']) selfTest();
