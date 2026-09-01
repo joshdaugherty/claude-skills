@@ -105,6 +105,18 @@ auth.test  ·  chat.postMessage  ·  conversations.history  ·  conversations.re
 
 ### **`team_id` comes from `auth.test` on that workspace's token.** ✔ *Repo A keeps working untouched — it declares nothing, or declares A, and neither repo can post to the other's workspace: a mismatch REFUSES with exit 2.*
 
+# ★★★★ AND WHEN YOU DO ADD A SECOND READ WORKSPACE: **TAKE `slack` OFF `--scope user` FIRST**
+
+### **`--scope user` means ONE registration visible in EVERY repo.** *Add a second at project scope and repo B sees both — so a session in repo B can read workspace A as you.* # **That contradicts the one-repo-one-workspace rule the POSTING side enforces with a refusal**, *and nothing on the read side refuses anything.*
+
+## ✔ **THE END STATE: no user-scope Slack MCP at all. Each repo declares its own at `--scope project`,** *which writes `.mcp.json` into that checkout — no secret in it, just a URL.*
+
+⚠⚠ **DO NOT MIGRATE BEFORE YOU NEED IT.** ### *With one workspace there is nothing to leak, and the migration touches a WORKING OAuth to solve a problem you do not yet have.*
+
+# ⚠ **AND MEASURE THIS BEFORE ASSUMING IT IS FREE:** ### **the cached credential is keyed `<server-name>|<hash>`.** *Whether moving scope preserves that key — and therefore the authorisation — depends on what the hash covers.* **If it survives, the move costs nothing. If it does not, you re-run the OAuth flow on a connection that currently works.** ⛔ *Reason from the key format if you like, but CHECK IT: read `~/.claude/.credentials.json` before and after, on a machine you can afford to re-authorise.*
+
+---
+
 # ⛔⛔ THE MCP **READ** PATH REMAINS SINGLE-WORKSPACE, AND THAT IS NOT SOLVED
 
 ### **One `slack` MCP server at `--scope user` = one workspace you can read as yourself.** *Whether two `mcp.slack.com` registrations can hold different workspace authorizations at once is **UNVERIFIED** — stated rather than guessed.* # **Workspace B can be POSTED to correctly, or REFUSED. It cannot yet be READ.** ★ *For a bus-only second workspace this costs nothing, because the bus never reads as you.*
