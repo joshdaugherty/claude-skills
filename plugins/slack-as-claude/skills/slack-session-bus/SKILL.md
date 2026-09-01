@@ -742,6 +742,31 @@ UP TO DATE, AS FAR AS THIS CAN SEE.
 | :-- | --- |
 | # ⛔⛔ **THE INTERESTING CAUSE IS OVER-WEIGHTED *BECAUSE* IT IS THE ONE YOU HAVE BEEN THINKING ABOUT** | ### **An absence appeared in a thread an hour after shipping a guard, and was attributed to the guard.** *It was a harness that never ran the step, and an author omitting a flag — **both far commoner than a freshly-shipped check firing**.* # **The most AVAILABLE explanation was the least PROBABLE one.** ⚠ *Twice in one day the same shape: a correct conclusion resting on an example that did not demonstrate it.* ## ★ **SO CHECK THE DEMONSTRATION, NOT JUST THE CLAIM — INCLUDING YOUR OWN.** |
 
+# ★★★★★★ A GUARD THAT HAS NEVER FIRED HAS NEVER BEEN READ — **BECAUSE REVIEW READS CONDITIONS AND ONLY FIRING READS OUTPUT**
+
+### **A reviewer can check *does this fire at the right time* by reading the predicate. They structurally CANNOT check *is this text correct advice*** — *because the string is coherent in isolation and only becomes wrong **against a state**.*
+
+## ⛔ **TWO ASKS SHIPPED WITH CORRECT CONDITIONS AND WRONG ADVICE. BOTH PASSED TWO REVIEWS. ONE PRINTING CAUGHT BOTH.**
+
+| the hearsay ask | fired on `announced > installed` and said *"verify with an update"* — **right only while the CLONE is also behind.** *Run the update and stop, and it now recommends re-running a command that changes nothing and reports success.* |
+| :-- | --- |
+| its mirror | fired on `available > installed` — *which means the clone **already has it*** — **and named `/plugin marketplace update`, the one command that cannot help.** |
+
+# ★★ AND THE THREE-WAY STATE IS WHY THE SECOND ONE SURVIVED: **IT MADE THE ADVICE RIGHT FOR THE WRONG REASON**
+
+```
+running/installed 2.15.0   ·   clone 2.15.1   ·   announced 2.15.2
+ASK: /plugin marketplace update   (installed 2.15.0, available 2.15.1)
+```
+
+### **The command IS correct there** — *`announced > available`, so the clone genuinely has not heard.* # **But the parenthetical justifying it cites the OTHER gap, the one that command is useless for.** ## **So the action works, the reader is satisfied, and THE CITED EVIDENCE IS NEVER AUDITED BECAUSE NOTHING WENT WRONG.**
+
+⛔ **A WRONG JUSTIFICATION ATTACHED TO A CORRECT ACTION IS INVISIBLE IN EXACTLY THE WAY A WRONG ACTION IS NOT.** ★ *Found twice over on the same day — reasoned from reading the pair, and simultaneously PRINTED on a peer's screen because it happened to be two versions behind. Reasoned and observed independently, agreeing.*
+
+## ✔ **SO: MAKE EVERY GUARD PRINT AT LEAST ONCE BEFORE TRUSTING ITS WORDING.** *Not its condition — its **output**.*
+
+---
+
 # ★★★★ AND THE STRUCTURAL REASON BOTH SURVIVE: **A GUARD'S SUCCESS IS AN ABSENCE**
 
 ### **A refusal, a filter, an early return — every one of them is INVISIBLE in the artefact it protects.** ## **From a channel, *"the guard rejected a bad value"* and *"the harness never tried"* are the same picture.**
