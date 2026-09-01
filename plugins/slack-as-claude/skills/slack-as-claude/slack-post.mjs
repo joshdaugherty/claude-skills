@@ -124,9 +124,43 @@ function envFromRegistry(name) {
   }
 }
 
+/**
+ * ⛔⛔⛔ THE PRECEDENCE HAZARD: `process.env` WINS, AND IT CAN BE A STALE SNAPSHOT.
+ *
+ * Environment-first is RIGHT for the ordinary case - an explicit `VAR=x node …` override
+ * must beat the persistent store, and taking that away would be a worse bug. But after a
+ * credential ROTATION the two disagree, and the inherited value is the OLD one:
+ *
+ *   shell WITHOUT the variable   child reads the registry, gets the new value   ✔ restart works
+ *   shell WITH the old value     child inherits it, registry never consulted    ⛔ restart is a NO-OP
+ *
+ * ⚠⚠ AND THE SECOND CASE IS THE DANGEROUS ONE, BECAUSE IT IS A REMEDY THAT REPORTS SUCCESS.
+ * "Restart your watcher" is sound advice that silently does nothing for exactly the peer who
+ * has already taken the corrective action and believes it worked. The process starts, the
+ * token is accepted or refused for reasons that look unrelated, and nothing anywhere says
+ * the two sources disagreed.
+ *
+ * ★ So this does not GUESS which is authoritative - it says that they differ, which is the
+ * one fact neither source can report alone. Silent precedence is what turned a rotation into
+ * a mystery; a loud one costs a line and cannot be misread.
+ *
+ * ⛔ NEVER PRINT EITHER VALUE, NOT EVEN A PREFIX. A leaked token is what started this.
+ */
 function botToken() {
   const VAR = tokenVar();
-  return process.env[VAR] || envFromRegistry(VAR) || null;
+  const fromEnv = process.env[VAR];
+  const fromReg = envFromRegistry(VAR);
+  if (fromEnv && fromReg && fromEnv !== fromReg) {
+    console.error(
+      `[post] ⚠ ${VAR} DIFFERS between this process's environment and HKCU\\Environment.\n` +
+        '        The environment wins, and it is a SNAPSHOT taken when this process\n' +
+        '        launched - so after a rotation it is the OLD value, and restarting does\n' +
+        '        NOT help while the parent shell still carries it.\n' +
+        `        If you have just rotated: relaunch with the variable unset, e.g.\n` +
+        `          env -u ${VAR} node <script> …        (or open a fresh shell)`,
+    );
+  }
+  return fromEnv || fromReg || null;
 }
 
 // --- identity ---------------------------------------------------------------

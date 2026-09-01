@@ -109,22 +109,50 @@ function tokenVar() {
   }
 }
 
+function envFromRegistry(name) {
+  if (process.platform !== 'win32') return null;
+  try {
+    const out = execFileSync('reg', ['query', 'HKCU\\Environment', '/v', name], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const m = out.match(new RegExp(name + '\\s+REG_(?:EXPAND_)?SZ\\s+(\\S+)'));
+    return m ? m[1] : null;
+  } catch {
+    return null; /* not there either */
+  }
+}
+
+/**
+ * ⛔⛔⛔ THE PRECEDENCE HAZARD - AND THIS IS THE FILE WHERE IT BITES HARDEST, because the
+ * watcher is the LONG-RUNNING process everyone is told to restart after a rotation.
+ *
+ * `process.env` wins, which is right for an explicit `VAR=x node …` override and wrong
+ * after a rotation, when the inherited value is the OLD one:
+ *
+ *   shell WITHOUT the variable   child reads the registry, gets the new value  ✔ restart works
+ *   shell WITH the old value     child inherits it, registry never consulted   ⛔ restart is a NO-OP
+ *
+ * ⚠⚠ THE SECOND CASE IS A REMEDY THAT REPORTS SUCCESS. "Restart your watcher" silently does
+ * nothing for exactly the peer who has already taken the corrective action and believes it
+ * worked - found by a peer whose own restart succeeded only because its shell happened to
+ * have the variable unset. Full note in slack-post.mjs.
+ *
+ * ⛔ NEVER PRINT EITHER VALUE. A leaked token is what started this.
+ */
 function botToken() {
   const VAR = tokenVar();
-  if (process.env[VAR]) return process.env[VAR];
-  if (process.platform === 'win32') {
-    try {
-      const out = execFileSync('reg', ['query', 'HKCU\\Environment', '/v', VAR], {
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'ignore'],
-      });
-      const m = out.match(new RegExp(VAR + '\\s+REG_(?:EXPAND_)?SZ\\s+(\\S+)'));
-      if (m) return m[1];
-    } catch {
-      /* not there either */
-    }
+  const fromEnv = process.env[VAR];
+  const fromReg = envFromRegistry(VAR);
+  if (fromEnv && fromReg && fromEnv !== fromReg) {
+    console.error(
+      `[watch] ⚠ ${VAR} DIFFERS between this process's environment and HKCU\\Environment.\n` +
+        '        The environment wins and is a SNAPSHOT from launch, so after a rotation it\n' +
+        '        is the OLD value and RESTARTING DOES NOT HELP while the parent shell holds\n' +
+        `        it. Relaunch with it unset:  env -u ${VAR} node <script> …`,
+    );
   }
-  return null;
+  return fromEnv || fromReg || null;
 }
 
 const OPTIONS = {
