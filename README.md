@@ -30,6 +30,10 @@ does not move. **After any update, check the installed version rather than the t
 `~/.claude/plugins/cache/claude-skills/slack-as-claude/`. The `/plugin marketplace update`
 slash command appears to do both.
 
+⚠ **A freshly installed plugin's skills are not active yet.** If the install summary ends with
+`Run /reload-plugins to activate.`, do that — otherwise the invocations below are not there to be
+called. This applies to installing any plugin from this marketplace, not just `slack-as-claude`.
+
 <details>
 <summary>Manual install, if you'd rather not use the plugin system</summary>
 
@@ -63,20 +67,50 @@ name.
 
 Lets a Claude session post into Slack under the app's own identity instead of as you.
 
+Two skills ship in this plugin, and both are slash-invocable:
+
+```
+/slack-as-claude:slack-as-claude     # setup: connect, build from scratch, or join a repo
+                                     # someone else already configured
+/slack-as-claude:slack-session-bus   # the bus protocol between concurrent sessions
+```
+
+**Reach for the first one.** It is the intended entry point — it works out which state you are
+already in rather than making you pick a path, and it holds the traps and the per-OS steps. Invoke
+the second when you have a working bus and want the addressing, claiming and liveness protocol
+that runs over it.
+
 Slack's official MCP server (`mcp.slack.com`) is **user-token-only** — bot tokens are refused with
 `invalid_token_type` — so everything sent through the MCP tools is attributed to the signed-in
 human with no "via app" marker. The skill sets up a deliberate split: **read** through the MCP
 tools as yourself, **post** through a bundled script on the app's bot token, which lands with an
 `APP` badge.
 
-Covers connecting to an existing Slack app, building one from scratch, and the five traps that
-reliably waste time — including that Slack's "Create and Install" button can never succeed from a
-browser, that reinstalling from the yellow banner silently does not do the job, and that `/mcp`
-reports a server's state from a cache: it will say `connected` when the token has expired, and has
-also reported a server unauthorized while its token was demonstrably live.
+Covers connecting to an existing Slack app, building one from scratch, joining a repo that already
+uses it, and the traps that reliably waste time — that reinstalling from the yellow banner silently
+does not do the job; that Slack's "Create and Install" button cannot succeed from a browser **when
+the manifest declares `redirect_urls`** (it ends in an OAuth redirect to `localhost`, which only
+Claude Code can answer — the bus-only manifest declares none and installs first click); and that
+`/mcp` reports a server's state from a cache: it will say `connected` when the token has expired,
+and has also reported a server unauthorized while its token was demonstrably live.
 
-Setup is machine-wide (`--scope user` plus a user environment variable), so **the first repo to
-run it is the only one that has to** — every later repo inherits the connection.
+**If all you want is the bus between concurrent sessions, none of the MCP setup applies.** That
+route — PATH BUS in the skill — is three bot scopes and a channel invite: no MCP server, no user
+token, no OAuth flow, and it sidesteps the most expensive trap in the file. The skill's scripts
+call four bot-token endpoints and nothing else.
+
+What is machine-wide and what is not:
+
+- **Machine-wide** — the `slack` MCP registration (`--scope user`) and the OAuth authorize behind
+  it. Done once.
+- **Per repo** — the *destination*. `<git root>/.claude/slack-workspace.json` names the workspace
+  a repo may post to, is committed, and carries no secret; posting to the wrong workspace
+  otherwise returns `ok: true` and lands where nobody is reading. That file also names the
+  *credential* via `token_env`, so a second repo pointing at a second workspace has neither the
+  binding nor the variable until someone sets them.
+
+So a second repo on the same machine is not automatically ready, and the skill detects which of
+those states you are in before asking you anything.
 
 The plugin also bundles **`slack-session-bus`**: using a Slack channel as a message bus between
 concurrent Claude sessions, with a claim protocol that makes races deterministic by sorting on
