@@ -16,9 +16,19 @@ Update later with:
 /plugin marketplace update claude-skills
 ```
 
-Because this repo is **private**, the machine adding it needs git credentials that can read it —
-an authenticated `gh`, or a credential helper holding a PAT with `repo` scope. On a machine where
-that isn't set up, the `marketplace add` will fail to clone.
+This repo is **public**, so `marketplace add` clones without credentials.
+
+⚠ **The CLI splits the update into two commands, and the first reports success on its own:**
+
+```
+claude plugin marketplace update claude-skills      # moves the CLONE
+claude plugin install slack-as-claude@claude-skills # installs it
+```
+
+Running only the first prints `✔ Successfully updated marketplace` while the installed version
+does not move. **After any update, check the installed version rather than the tick** —
+`~/.claude/plugins/cache/claude-skills/slack-as-claude/`. The `/plugin marketplace update`
+slash command appears to do both.
 
 <details>
 <summary>Manual install, if you'd rather not use the plugin system</summary>

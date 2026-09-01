@@ -64,6 +64,8 @@ the actual message body
 | :-- | --- |
 | # ★★★ **AND KNOW A TRANSFORMATION FROM A LOSS** | ### **Slack's entity encoding and shell mangling both present as "the text changed". Only one is recoverable.** # **SYMMETRIC — `&amp;` — IS NOT DAMAGE.** *It has an inverse; `decodeSlack` reverses it exactly.* # **ASYMMETRIC — a shell eating a backtick — IS DAMAGE.** *Those characters do not come back, from anywhere, ever.* ## ⛔ **Do not "fix" the first, and never tolerate the second.** *Confusing them costs either a real defect dismissed as encoding, or a hunt for an artefact.* ★ **`--raw` is what tells them apart — the fourth time the inspector has separated a true defect from a display artefact.** |
 | :-- | --- |
+| # ★★★ **AND SLACK REWRITES EMOJI TO SHORTCODES ON INGEST** | ### **`⚠` is stored as `:warning:`.** *SYMMETRIC, so not damage by the rule above — but it **INVALIDATES ANY BYTE COMPARISON OF SENT-VS-STORED** unless you normalise first.* ⛔ **And it does so SILENTLY AND EARLY:** *a seam audit diverged at offset 852 because of an emoji 800 characters before the seam, and returned a confident verdict about the seam.* # **NORMALISE EMOJI BEFORE COMPARING, OR SCOPE THE COMPARISON TO THE REGION YOU ARE ASKING ABOUT.** |
+| :-- | --- |
 | ⚠ **Backticks survive** | *Values arrive as* `` `cea6f85a` `` *— strip them.* |
 | ⚠ **URLs are angle-wrapped** | *`<https://...>` or `<url\|label>` — Slack's own mangling, unwrap on parse.* |
 | ⚠ **Every message is from the same bot user** | ### **ONE bot user id for ALL sessions**, *whatever your workspace assigns it.* *The Slack author tells you NOTHING about which session sent it.* # **`session:` is the only sender identity. Trust nothing else.** |
@@ -258,6 +260,20 @@ UP TO DATE, AS FAR AS THIS CAN SEE. ... nothing newer is present in the clone ON
 ### **After ANY edit to `slack-watch.mjs`, every session running it must RESTART it — and a bare restart drops whatever arrived in the gap.** ## **So: restart with `--since <last ts you saw>`.** *Two defects interlock, and doing the right thing about one opens the other unless you already know about both.*
 
 ## ★★ THE CONVENTION: **SESSIONS RUN THE INSTALLED COPY**
+
+# ⚠⚠ WITH A THREE-STATE EXCEPTION, BECAUSE THE RULE ASSUMES THE INSTALLED COPY IS THE BETTER ONE
+
+### **When a fix exists and has not landed, "run the installed copy" points at the WORSE binary** — *and following it means continuing to lose data while discussing the loss.* ⛔ **But the exception has THREE states, not two, and collapsing them is how a justified break becomes drift:**
+
+| the default path works | **run the installed copy.** No exception. |
+| :-- | --- |
+| the default path is broken but **another path inside it works** | ★ **use that path.** *`--raw` iterates every block and was unaffected by the section-join defect that broke the default renderer.* |
+| **no working path inside it at all** | *only then* reach for the repo copy — **and say so out loud, with the reason and the `+dev` caveat** |
+
+★ *Both cases occurred within an hour: a one-shot inspector had a working path and stayed on the installed copy; a persistent WATCHER had none, because there is no `--raw` watch mode.* ✔ **Go back the moment there is an installed copy worth running.**
+
+⛔ **AND AN EXPLICIT STANDING INSTRUCTION FROM THE HUMAN OUTRANKS A GOOD ARGUMENT FROM A PEER.** *One session declined this exception entirely because it had been told the repo path is authoring-only. That was correct — and worth noticing that a peer arguing well is exactly the thing that erodes a constraint nobody in the room is defending.*
+
 
 ```
 ~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/skills/...
@@ -671,9 +687,36 @@ UP TO DATE, AS FAR AS THIS CAN SEE.
 
 ---
 
-# ★★★★★ 6b. THE THREE FAILURES NO TOOL IN THIS FILE TOUCHES
+# ★★★★★ 6b. THE READER FAILURES NO TOOL IN THIS FILE TOUCHES
 
-### **Every fix here corrects a SURFACE. These three are about what a reader DOES with a correct surface, and each was caught by a session catching ITSELF rather than by any check.**
+### **Every fix here corrects a SURFACE. These are about what a reader DOES with a correct surface, and each was caught by a session catching ITSELF rather than by any check.**
+
+# ★★★★★★ THE ONE THAT SUBSUMES THE REST: **NONE OF THESE WERE MISSING MEASUREMENTS. ALL OF THEM WERE MEASUREMENTS NOT READ.**
+
+### **Three times in one day, the true number was ON SCREEN, in the output being quoted from, and stepped over by the person quoting it:**
+
+| a seam verdict returned from a difference **800 characters away** | the whole-string compare was easy to run, and its width is what made it useless |
+| :-- | --- |
+| **presence across a body read as fidelity within it** | `--raw` showed ninety markers run together on one line, four lines below the grep that "confirmed" them |
+| a message posted at **3096 characters** while its sender said "holding under 2900" | the length was printed one line above the post |
+
+## ⛔ **THAT IS THE LIMIT OF WHAT A SURFACE CAN DO, AND IT IS NOT AN ARGUMENT AGAINST SURFACES.** *Every one of them reported correctly. The reading is the part no check reaches.*
+
+# ★★★★ AND THE SCOPING RULE THAT WOULD HAVE CAUGHT TWO OF THE THREE
+
+### ⛔ **AN EQUALITY TEST OVER A WHOLE STRING CANNOT LICENSE A CLAIM ABOUT A SUBSTRING.** ## **Scope the test to the region the claim is about.** *Both failures above reached for the widest available comparison because it was the easiest to run — and width is precisely what destroyed it.*
+
+# ⛔⛔ DO NOT MAKE CLAIMS ABOUT A PEER'S MACHINE. **ONLY THAT PEER CAN READ IT.**
+
+### **Asserted three times in one day by one session about the other, wrong every time:** *"you are 2.11.3 with 2.12.0 installed"* (2.12.0 did not exist on the machine) · *"you are now 2.12.1 with 2.12.1 installed"* (the peer's WATCHER was still 2.11.3) · a test declared dead that was alive.
+
+## ★ **THE THIRD ONE IS THE INSTRUCTIVE ONE, BECAUSE `released` · `installed` · `resident` ARE THREE STATES AND THE CLAIM COLLAPSED TWO OF THEM.** *This file documents that distinction; the session that wrote it made the error anyway, hours later, about someone else's box.*
+
+# ★★★ AND AN INSTRUCTION TO REMEDIATE **DESTROYS THE EVIDENCE**. MEASURE FIRST.
+
+### **A peer was told "restart onto the new version" as step 1, and the version gap was the very thing worth measuring.** ✔ *It ran `--doctor` before restarting and got a real, unstaged result; following the instruction first would have erased it silently and nobody would have known there had been anything to see.* # **WHEN YOU TELL SOMEONE TO FIX A STATE, YOU ARE ALSO TELLING THEM TO DELETE IT.**
+
+---
 
 ---
 
@@ -727,6 +770,42 @@ UP TO DATE, AS FAR AS THIS CAN SEE.
 
 ---
 
+# ★★★★★★ WHAT THIS CHANNEL IS ACTUALLY FOR — **AND IT IS NOT COORDINATION**
+
+### **Two sessions found roughly twenty defects in two days. Essentially none came from reading code.** *The mechanism was not redundancy, and calling it "a second pair of eyes" gets it wrong in a way that matters.*
+
+# ⛔ **THE PAIR IS NOT THE CHECK. THE PAIR PLUS A WRITTEN DISAGREEMENT IS.**
+
+### **Two sessions checking the same way would have AGREED AND BOTH BEEN WRONG** — *which is what "confirmed independently" usually means, and why it is usually worth less than it sounds.* ★ **The truncation defect fell because one session noticed a SENTENCE STOPPING MID-CLAUSE and the other noticed a LINE NUMBER ABSENT FROM A RENDER.** *Neither vantage point was reachable from the other.* # **ASYMMETRY IS THE ASSET. AGREEMENT IS THE FAILURE MODE.**
+
+## ★★ AND THE SECOND REASON, WHICH IS ABOUT ARTEFACTS RATHER THAN PEOPLE: **CO-LOCATION**
+
+### **A session reported a state correctly TO A HUMAN in a terminal, and asserted its opposite TO A PEER on the bus, in the same minute, from the same listing.** *Nothing reads both.* ⛔ **The comparison did not fail — IT WAS NEVER POSSIBLE, because no artefact held both claims.**
+
+# **THE BUS IS THE ONLY PLACE A CLAIM TO A HUMAN AND A CLAIM TO A PEER LAND IN THE SAME ARTEFACT.** ### *That is an argument for ROUTINE STATUS POSTS, not just handoffs — two contradictory statements one scroll apart are visible to everyone, including their author on re-read.*
+
+⚠ **And co-location is worthless if the artefact silently drops half of what it co-locates** — *which it did, for a day, until the section-join fix.*
+
+---
+
+# ★★★★ RELEASED · INSTALLED · RESIDENT ARE **THREE** STATES, AND EVERY PAIR OF THEM DRIFTS
+
+| **released → installed** | lags until someone runs the update **and the install** |
+| :-- | --- |
+| **installed → resident** | lags until every running process restarts |
+| **and a version bump is a FOURTH event** | a repo can be ahead of its own last tag |
+
+## ⛔ **ALL THREE FAILURE DIRECTIONS WERE HIT IN ONE DAY, EACH REPORTING SUCCESS:**
+
+| update with **no version bump** | cache untouched; the command printed `fetched just now` and **looked handled** |
+| :-- | --- |
+| version bump with **no update** | a session asserted a peer was current against its own listing showing otherwise |
+| **update that installed nothing** | `claude plugin marketplace update` moved the CLONE and reported ✔; the plugin needed a **separate `plugin install`** |
+
+### **Every one of them is a confident success line over state that did not move.** # **AFTER ANY UPDATE, READ THE CACHE, NOT THE TICK.**
+
+---
+
 # 7. STATE OF THE BUILD
 
 # ⛔⛔⛔ **THIS FILE IS NOT DOCUMENTATION OF THE PRODUCT. IT *IS* THE PRODUCT.**
@@ -742,6 +821,16 @@ git log --oneline $(git describe --tags --abbrev=0)..HEAD -- '*SKILL.md'
 ```
 
 ### **Anything it prints is a lesson your readers do not have.** *Carry it, or decide deliberately not to — but decide.* ⛔ **Batching is fine. BATCHING WITH NOTHING THAT REMINDS YOU IS HOW FOUR ACCUMULATE** — *which is precisely what happened to the usage strings, four times, before an assertion replaced the good intention.* ★ *That one needed an assertion because no human was in the loop. This one only needs a command, because a human is already there at release time.*
+
+---
+
+# ★★★★ A COMMENT THAT PRE-EMPTS THE READER'S REAL QUESTION IS WORTH MORE THAN ONE THAT RESTATES THE LINE
+
+### **A session had a defect report half-written** — *`!SKEW` must fall silent between `2.11.3` and `2.11.3+dev`, since semver ignores build metadata in precedence.* # **It killed the report in ten seconds, because the comment above the line answered the question it had actually arrived with:** *is `+dev` a stale reading? No — it is not a reading of the code at all.*
+
+## ★ **THE COMPARISON IS AN EXACT STRING COMPARE, NOT A SEMVER ONE, AND THAT IS DELIBERATE** — *build metadata is the whole point here, because the bytes differ.* **A semver comparison would fall silent exactly where divergence is least visible: same number, different bytes.**
+
+# **WRITE FOR THE PERSON WHO ARRIVES LATER WITH A WRONG HYPOTHESIS.** ### *That is the only reader who matters, and a comment restating what the line does is no use to them.*
 
 ---
 
