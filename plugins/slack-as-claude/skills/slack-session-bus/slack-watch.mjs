@@ -32,6 +32,15 @@ const HISTORY = 'https://slack.com/api/conversations.history';
 // the sender believes it claimed. Flag it loudly rather than letting it pass as noise.
 const KNOWN_TYPES = ['request', 'reply', 'claim', 'done', 'fail', 'status', 'release'];
 
+/**
+ * How much of a body goes on the event line before it becomes an explicit excerpt.
+ *
+ * ⚠ Chosen to sit UNDER the notification layer's cut, not at it. The point is not to fit
+ * more in - it is that whatever arrives is COMPLETE AS AN ARTIFACT. A line the harness
+ * truncates further still reads as a summary; a line that merely got longer would not.
+ */
+const BUS_EXCERPT = 240;
+
 // ⚠ A BUS ACCUMULATES IDENTITIES AND NEVER RETIRES THEM. Every label that ever spoke is
 // a peer forever: dead sessions, one-off test fixtures, a name used once by mistake.
 //
@@ -132,6 +141,7 @@ const OPTIONS = {
     'gone-after': { type: 'string' },
     retire: { type: 'boolean', default: false },
     'announce-install': { type: 'boolean', default: false },
+    show: { type: 'string' },
     from: { type: 'string' },
     audit: { type: 'string' },
     releases: { type: 'string' },
@@ -152,7 +162,12 @@ const USAGE =
       '       [--ignore-session <label>]... [--include-self] [--once]\n' +
       '\n' +
       '       [--heartbeat <sec>] [--retire] [--releases <ts,ts>] [--all]\n' +
-      '       [--announce-install] [--from <version>]\n' +
+      '       [--announce-install] [--from <version>] [--show <ts>]\n' +
+      '\n' +
+      '  --show <ts>  ONE message, in full, by ts - the command the [bus] excerpt line\n' +
+      '              names. Needed because --since is EXCLUSIVE and so cannot fetch the\n' +
+      '              ts you are holding, --audit takes a THREAD ts, and --raw dumps the\n' +
+      '              whole window to answer a question about one message.\n' +
       '\n' +
       '  --announce-install  after YOU install an update, tell peers what it means for\n' +
       '              THEM. Diffs the newest installed version against the previous one\n' +
@@ -1016,7 +1031,7 @@ async function poll() {
     // whitelist, and excluding known subtypes rather than including known ones.
     if (m.subtype === 'channel_join' || m.subtype === 'channel_leave') continue;
 
-    const { meta, body, bareSeams } = parseMessage(m);
+    const { meta, body, seams, bareSeams } = parseMessage(m);
     // ⚠ SURFACED, NOT SWALLOWED - same rule as !UNKNOWN. The join is a guess at these
     // seams and nothing else on this line would say so. It is not a repair: those
     // separators are gone, and the marker only stops a guess being read as a reading.
@@ -1060,8 +1075,49 @@ async function poll() {
     // report a version it is not running, which is strictly worse.
     else if (OWN_PLUGIN && meta.plugin !== OWN_PLUGIN) plugin = ` plugin=${meta.plugin}!SKEW(reader=${OWN_PLUGIN})`;
 
-    // One line per message: each becomes a single Monitor event.
-    console.log(`[bus] ts=${m.ts} from=${from}${to}${type}${thread}${plugin}${edited}${seamWarn} :: ${body.replace(/\s+/g, ' ')}`);
+    /**
+     * ⛔⛔⛔ BOUNDED BY CONSTRUCTION, BECAUSE THE NOTIFICATION LAYER TRUNCATES AND WE DO
+     * NOT CONTROL WHERE IT CUTS - BUT WE DO CONTROL WHAT IT IS GIVEN TO CUT.
+     *
+     * This used to emit the whole body flattened onto one line. Measured over an afternoon
+     * of real traffic: FOUR DELIVERIES OUT OF FOUR were truncated, and every cut landed
+     * PAST THE CLAIM AND BEFORE THE EVIDENCE -
+     *
+     *     a version notice   kept the file diff, cut the restart command and --since
+     *     a status reply     kept "restarted onto 2.17.1", cut how it verified
+     *     a correction       kept "the variable is absent", cut the probe output
+     *     a scope note       kept "my grep found one site", cut which were confirmed
+     *
+     * ⛔ The first is not merely lossy, it INVERTS THE MESSAGE: the notification carried
+     * the diagnosis and cut the remedy, so a reader trusting it is convinced of the problem,
+     * unaware of the fix, and performs the bare re-arm the full message exists to prevent.
+     *
+     * ★ AND IT IS WORSE ON THIS CHANNEL THAN IT WOULD BE ANYWHERE ELSE. The standing rules
+     * here are "check the demonstration, not the claim" and "a right finding can rest on a
+     * wrong worked example". A truncated notification is precisely AN ASSERTION STRIPPED OF
+     * ITS EVIDENCE - the exact artifact those rules tell a reader to distrust, manufactured
+     * by the delivery layer on every single message.
+     *
+     * ⚠ THE OLD LINE WAS INDISTINGUISHABLE FROM A SHORT MESSAGE. That is the whole defect:
+     * an arbitrary prefix reads as a complete body, so nothing prompts the reader to fetch.
+     * A bounded line ANNOUNCES THAT IT IS A SUMMARY, and carries the command to get the
+     * rest with the ts already in it - so the cheap correct action needs no recall.
+     */
+    const flat = body.replace(/\s+/g, ' ').trim();
+    const bytes = Buffer.byteLength(flat, 'utf8');
+    const size = bytes >= 1024 ? `${(bytes / 1024).toFixed(1)}kB` : `${bytes}B`;
+    const head = `[bus] ts=${m.ts} from=${from}${to}${type}${thread}${plugin}${edited}${seamWarn}`;
+    if (flat.length <= BUS_EXCERPT) {
+      // Short enough to survive intact: deliver it whole rather than making the reader
+      // fetch something they already have. No excerpt marker, because it is not one.
+      console.log(`${head} (${size}, complete) :: ${flat}`);
+    } else {
+      console.log(
+        `${head} (${size}, ${seams + 1} block(s), EXCERPT — NOT THE FULL MESSAGE)\n` +
+          `      ${flat.slice(0, BUS_EXCERPT)}…\n` +
+          `      → full text: node "${fileURLToPath(import.meta.url)}" --channel ${a.channel} --show ${m.ts}`,
+      );
+    }
   }
   return true;
 }
@@ -2059,6 +2115,51 @@ if (a['announce-install']) {
     `Announced ${prev.version} -> ${now.version}: ${code.length} executable file(s) changed, ` +
       `${docs.length} doc/manifest file(s). Restart ${code.length ? 'REQUIRED' : 'NOT needed'}. ts ${res.ts}`,
   );
+  process.exit(0);
+}
+
+/**
+ * ONE message, in full, by ts. The command the excerpt line names.
+ *
+ * ⛔ NEITHER EXISTING MODE COULD DO THIS, WHICH IS WHY THE BOUNDED LINE NEEDED A NEW ONE:
+ *   --since is EXCLUSIVE (`m.ts <= since` is skipped), so it cannot fetch the message whose
+ *           ts you are holding - and decrementing a 16-significant-digit ts is the float
+ *           trap this file spends a whole section on.
+ *   --audit  takes a THREAD ts and lists replies. It answers a different question, and says
+ *           nothing at all about a top-level message.
+ *   --raw    dumps the window. It works, but it hands back everything to answer "what did
+ *           THIS one say", which is how a reader ends up skimming instead of reading.
+ *
+ * ★ A pointer to a command that does not quite do the job is worse than no pointer: it gets
+ * followed once, produces something adjacent, and teaches the reader that fetching is
+ * expensive - which is the exact belief the excerpt line exists to remove.
+ */
+if (a.show) {
+  if (!/^\d{10,}\.\d{6}$/.test(a.show)) {
+    die(`--show ${a.show}: not a Slack ts. Quote it exactly as printed - 1788293713.927319.`, 2);
+  }
+  const read = await recentMessages(200);
+  if (!read.ok) die(`could not read the channel: ${read.error}`, 1);
+  // STRING comparison, never Number(). A ts has 16 significant digits and coercing it
+  // rounds - the same defect that makes --thread-ts silently post to the channel instead.
+  const hit = read.messages.find((m) => m.ts === a.show);
+  if (!hit) {
+    die(
+      `no message with ts ${a.show} in the recent window.\n` +
+        '  It may have aged out of the fetch, or the ts may be from another channel.\n' +
+        '  ⚠ This is "not in the window", NOT "does not exist" - do not read it as deleted.',
+      1,
+    );
+  }
+  const { meta, body, seams, bareSeams } = parseMessage(hit);
+  const facets = Object.entries(meta).map(([k, v]) => `${k}: ${v}`).join('  ');
+  console.log(`ts ${hit.ts}${hit.thread_ts && hit.thread_ts !== hit.ts ? `  (reply in thread ${hit.thread_ts})` : ''}`);
+  if (facets) console.log(facets);
+  if (bareSeams) {
+    console.log(`⚠ ${bareSeams} block seam(s) joined with no stored separator - the original spacing is GONE, not recovered.`);
+  }
+  console.log(`${seams + 1} block(s), ${Buffer.byteLength(body, 'utf8')} bytes\n`);
+  console.log(body);
   process.exit(0);
 }
 
