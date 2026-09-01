@@ -30,9 +30,17 @@ does not move. **After any update, check the installed version rather than the t
 `~/.claude/plugins/cache/claude-skills/slack-as-claude/`. The `/plugin marketplace update`
 slash command appears to do both.
 
-⚠ **A freshly installed plugin's skills are not active yet.** If the install summary ends with
-`Run /reload-plugins to activate.`, do that — otherwise the invocations below are not there to be
-called. This applies to installing any plugin from this marketplace, not just `slack-as-claude`.
+⚠ **A freshly installed plugin's skills are not active in a session that was already running.** Try
+`/reload-plugins` first — it is cheap. **If the skill still does not resolve, restart the session.**
+A session builds its skill registry at startup, and reloading does not always retro-fit into it: on
+one observed environment (VSCode extension, Windows 11) neither `/reload-plugins` nor
+`/reload-skills` worked and only reopening the session did.
+
+**`claude plugin list` reporting `✔ enabled` is not evidence the skills are registered.** It is
+true of the *installation* — right version on disk, `enabledPlugins` set — and says nothing about
+whether a running session can see it. When every surface reports success and the invocation still
+returns `Unknown skill`, the session is the thing that has not caught up. This applies to any
+plugin from this marketplace, not just `slack-as-claude`.
 
 <details>
 <summary>Manual install, if you'd rather not use the plugin system</summary>
