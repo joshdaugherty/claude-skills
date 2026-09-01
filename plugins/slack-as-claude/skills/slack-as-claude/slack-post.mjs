@@ -372,6 +372,7 @@ const OPTIONS = {
     'cut-at': { type: 'string' },
     project: { type: 'string' },
     worktree: { type: 'string' },
+    'raw-markdown': { type: 'boolean', default: false },
     user: { type: 'string' },
     machine: { type: 'string' },
     session: { type: 'string' },
@@ -426,6 +427,69 @@ function resolveText() {
   return a.text;
 }
 
+/**
+ * ⛔⛔⛔ SLACK MRKDWN IS NOT MARKDOWN - AND EVERY CLIENT THIS SCRIPT HAS DEFAULTS TO MARKDOWN.
+ *
+ * So the wrong dialect is not an occasional slip. It is the DEFAULT OUTPUT of the only kind
+ * of author this tool has, which makes it a property of the tool rather than of the writer.
+ *
+ * ⚠ AND IT FAILS IN THE ONE DIRECTION NOTHING LOCAL CAN SEE. Slack STORES what you send and
+ * renders in the CLIENT: the API returns ok: true, --raw shows exactly what you wrote, the
+ * text reads perfectly in every tool here, and the damage is visible ONLY on a human's
+ * screen. Hundreds of messages shipped before a human said "those are just printed
+ * asterisks". No error, no warning, and no surface to check.
+ *
+ * Verified against docs.slack.dev/messaging/formatting-message-text rather than memory:
+ *
+ *     **bold**     -> *bold*        Slack bold is ONE asterisk
+ *     __bold__     -> *bold*
+ *     ~~strike~~   -> ~strike~      Slack strike is ONE tilde
+ *     # Heading    -> *Heading*     SLACK HAS NO HEADINGS AT ALL
+ *     [text](url)  -> <url|text>    Slack links are angle-bracketed
+ *
+ * ★ CONVERT, DO NOT WARN. A warning on every message is noise that gets ignored, and every
+ * mapping above is unambiguous - a dialect translation, not a judgement call. But REPORT
+ * what changed, so a surprising render is traceable to this function rather than mysterious.
+ *
+ * ⛔ CODE SPANS ARE SACRED. `**kwargs`, a regex full of asterisks, a diff OF markdown - all
+ * legitimate content. Fenced blocks and inline code pass through untouched, which is why
+ * this splits on them instead of running a global replace.
+ *
+ * ⚠ TABLES CANNOT BE FIXED HERE. Slack has no table syntax, so a markdown table renders as
+ * rows of pipes. There is no lossless target to convert to - the honest move is to say so
+ * and let the author restructure, not to silently mangle their columns.
+ */
+function toSlackMrkdwn(text) {
+  const changes = { bold: 0, strike: 0, headings: 0, links: 0, tableRows: 0 };
+  if (!text) return { text, changes };
+  // Fenced blocks first, so a stray backtick inside one cannot open an inline span. The
+  // capture group keeps delimiters in the array, so odd indices are exactly the code spans.
+  const parts = String(text).split(/(```[\s\S]*?```|`[^`\n]*`)/g);
+  const out = parts.map((seg, i) => {
+    if (i % 2 === 1) return seg;
+    let s = seg;
+    s = s.replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, (_m, inner) => { changes.bold += 1; return `*${inner}*`; });
+    s = s.replace(/__(?=\S)([\s\S]*?\S)__/g, (_m, inner) => { changes.bold += 1; return `*${inner}*`; });
+    s = s.replace(/~~(?=\S)([\s\S]*?\S)~~/g, (_m, inner) => { changes.strike += 1; return `~${inner}~`; });
+    // Headings carry EMPHASIS rather than losing the line's rank silently. Closed ATX form
+    // (trailing #s) handled too.
+    s = s.replace(/^[ \t]{0,3}#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$/gm, (_m, inner) => {
+      changes.headings += 1;
+      return `*${inner.trim()}*`;
+    });
+    // Not an image (leading !). An empty label degrades to a bare <url>, which Slack renders.
+    s = s.replace(/(^|[^!])\[([^\]]*)\]\((\S+?)\)/g, (_m, pre, label, url) => {
+      changes.links += 1;
+      return `${pre}<${url}${label ? `|${label}` : ''}>`;
+    });
+    for (const line of s.split('\n')) {
+      if (/^\s*\|.*\|\s*$/.test(line)) changes.tableRows += 1;
+    }
+    return s;
+  });
+  return { text: out.join(''), changes };
+}
+
 function die(msg, code = 1) {
   console.error(msg);
   process.exit(code);
@@ -434,7 +498,7 @@ function die(msg, code = 1) {
 const USAGE =
   'usage: node slack-post.mjs --channel <id> --text "..." [--thread-ts <ts>]\n' +
       '       [--text-file <path>] [--to X] [--type X] [--project X] [--session X]\n' +
-      '       [--worktree X]\n' +
+      '       [--worktree X] [--raw-markdown]\n' +
       '       [--user X] [--machine X] [--closes <ts>] [--broadcast] [--no-broadcast]\n' +
       '       [--user-email] [--username X] [--icon-emoji :x:] [--unsafe-claim]\n' +
       '       [--no-context] [--as-app] [--dry-run] [--self-test]\n' +
@@ -555,7 +619,31 @@ function selfTest() {
   for (const [verdict, msg] of man) console.log(`  ${verdict}  ${msg}`);
   const manFailed = man.filter(([v]) => v === 'FAIL').length;
 
-  const bad = missing.length + manFailed;
+  /**
+   * The dialect translation. Every case here was a real render defect on a human's screen,
+   * and the CODE-SPAN cases are the ones that would rot silently: a converter that eats
+   * `**kwargs` inside backticks corrupts content while every local surface still looks fine
+   * - which is the exact failure this function exists to end.
+   */
+  const md = [
+    ['bold  **x** -> *x*', toSlackMrkdwn('a **b** c').text, 'a *b* c'],
+    ['bold  __x__ -> *x*', toSlackMrkdwn('a __b__ c').text, 'a *b* c'],
+    ['strike ~~x~~ -> ~x~', toSlackMrkdwn('a ~~b~~ c').text, 'a ~b~ c'],
+    ['heading -> bold line', toSlackMrkdwn('## Title').text, '*Title*'],
+    ['closed ATX heading', toSlackMrkdwn('## Title ##').text, '*Title*'],
+    ['link -> <url|label>', toSlackMrkdwn('see [docs](http://x.y)').text, 'see <http://x.y|docs>'],
+    ['image left alone', toSlackMrkdwn('![alt](http://x.y)').text, '![alt](http://x.y)'],
+    ['INLINE CODE UNTOUCHED', toSlackMrkdwn('use `**kwargs` here').text, 'use `**kwargs` here'],
+    ['FENCED BLOCK UNTOUCHED', toSlackMrkdwn('```\n**x** # y\n```').text, '```\n**x** # y\n```'],
+    ['a lone * is not bold', toSlackMrkdwn('2 * 3 * 4').text, '2 * 3 * 4'],
+    ['# without space is not a heading', toSlackMrkdwn('#nothashtag').text, '#nothashtag'],
+  ];
+  for (const [name, got, want] of md) console.log(`  ${got === want ? 'pass' : 'FAIL'}  mrkdwn: ${name}`);
+  const mdFailed = md.filter(([, got, want]) => got !== want).length;
+  const tbl = toSlackMrkdwn('| a | b |\n| - | - |').changes.tableRows;
+  console.log(`  ${tbl === 2 ? 'pass' : 'FAIL'}  mrkdwn: table rows counted (${tbl}), warned not converted`);
+
+  const bad = missing.length + manFailed + mdFailed + (tbl === 2 ? 0 : 1);
   console.log(
     bad
       ? `\n${bad} FAILURE(S)${missing.length ? ` - flags missing from usage: ${missing.join(', ')}` : ''}`
@@ -572,7 +660,25 @@ if (a.help || !a.channel || (a.text === undefined && a['text-file'] === undefine
 }
 
 // Resolved once, here, so every downstream use is the real body.
-const TEXT = resolveText();
+const RAW_TEXT = resolveText();
+const { text: TEXT, changes: MRKDWN_FIXES } = a['raw-markdown']
+  ? { text: RAW_TEXT, changes: null }
+  : toSlackMrkdwn(RAW_TEXT);
+if (MRKDWN_FIXES) {
+  const fixed = Object.entries(MRKDWN_FIXES)
+    .filter(([k, v]) => v && k !== 'tableRows')
+    .map(([k, v]) => `${v} ${k}`);
+  if (fixed.length) console.error(`[post] converted Markdown to Slack mrkdwn: ${fixed.join(', ')} (--raw-markdown to disable)`);
+  // Not convertible, so this one is a WARNING rather than a fix. Slack has no table syntax
+  // and the rows will render as literal pipes.
+  if (MRKDWN_FIXES.tableRows) {
+    console.error(
+      `[post] ⚠ ${MRKDWN_FIXES.tableRows} line(s) look like a Markdown table. SLACK HAS NO TABLES -\n` +
+        '       these will render as rows of pipe characters. Restructure as a list, or put\n' +
+        '       the table inside a code fence so it at least lines up.',
+    );
+  }
+}
 
 const token = botToken();
 if (!token) {
