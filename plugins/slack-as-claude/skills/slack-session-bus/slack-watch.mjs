@@ -303,10 +303,35 @@ function parseMessage(msg) {
    * THE PATH THAT MOTIVATED IT LEAVES ITS COUNTERPART BROKEN.
    */
   const sections = (msg.blocks ?? []).filter((b) => b.type === 'section');
-  const body = sections.length
-    ? sections.map((s) => s.text?.text ?? '').join('')
-    : (msg.text ?? '');
-  return { meta, body: decodeSlack(body).trim() };
+  const parts = sections.map((s) => s.text?.text ?? '');
+  const body = parts.length ? parts.join('') : (msg.text ?? '');
+
+  /**
+   * ★ COUNT THE SEAMS WHERE NOTHING WAS STORED, AND SAY SO.
+   *
+   * Joining is exact only where the writer KEPT the separator. A writer before this fix
+   * stripped it, so `A\n\nB`, `A\nB`, `A B` and `AB` all stored as `[A][B]` with nothing
+   * on either side - a many-to-one map with no inverse. Those seams cannot be repaired by
+   * anyone who does not still hold the pre-send original, and for most of an archive
+   * nobody does.
+   *
+   * ⚠ THE READER CANNOT RECOVER THEM, BUT IT CAN ALWAYS TELL. The discriminator is a
+   * property of the STORED MESSAGE - no version lookup, no metadata: does the NEXT block
+   * begin with whitespace? Present means the separator survived and the join is exact.
+   * Absent means nothing was stored there and the join is a guess.
+   *
+   * ★ THE TEST ASKS ABOUT THE PROPERTY, NOT THE ERA, DELIBERATELY. "Nothing is stored at
+   * this seam" is true both for an old writer that stripped a separator AND for a
+   * post-fix hard cut at 2900 where there was none to keep. Those two are exactly the
+   * pair that cannot be distinguished - so a marker that declines to distinguish them is
+   * CORRECT rather than imprecise. It reports only what is knowable.
+   *
+   * This repairs nothing. It stops the reader handing back a guess as a reading.
+   */
+  let bareSeams = 0;
+  for (let i = 1; i < parts.length; i += 1) if (!/^\s/.test(parts[i])) bareSeams += 1;
+
+  return { meta, body: decodeSlack(body).trim(), seams: Math.max(0, parts.length - 1), bareSeams };
 }
 
 // --- presence / liveness ----------------------------------------------------
@@ -836,7 +861,11 @@ async function poll() {
     // whitelist, and excluding known subtypes rather than including known ones.
     if (m.subtype === 'channel_join' || m.subtype === 'channel_leave') continue;
 
-    const { meta, body } = parseMessage(m);
+    const { meta, body, bareSeams } = parseMessage(m);
+    // ⚠ SURFACED, NOT SWALLOWED - same rule as !UNKNOWN. The join is a guess at these
+    // seams and nothing else on this line would say so. It is not a repair: those
+    // separators are gone, and the marker only stops a guess being read as a reading.
+    const seamWarn = bareSeams ? ` !JOINED(${bareSeams} seam${bareSeams > 1 ? 's' : ''} with no stored separator)` : '';
     const from = meta.session ?? '?';
     if (ignored.has(from)) continue;
 
@@ -877,7 +906,7 @@ async function poll() {
     else if (OWN_PLUGIN && meta.plugin !== OWN_PLUGIN) plugin = ` plugin=${meta.plugin}!SKEW(reader=${OWN_PLUGIN})`;
 
     // One line per message: each becomes a single Monitor event.
-    console.log(`[bus] ts=${m.ts} from=${from}${to}${type}${thread}${plugin}${edited} :: ${body.replace(/\s+/g, ' ')}`);
+    console.log(`[bus] ts=${m.ts} from=${from}${to}${type}${thread}${plugin}${edited}${seamWarn} :: ${body.replace(/\s+/g, ' ')}`);
   }
   return true;
 }
