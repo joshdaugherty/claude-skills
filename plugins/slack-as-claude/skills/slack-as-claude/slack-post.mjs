@@ -20,7 +20,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { homedir, hostname, userInfo } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
@@ -128,9 +128,59 @@ function gitRoot() {
   }
 }
 
+/**
+ * The root of the MAIN worktree, which is the repo - not whichever worktree you
+ * happen to be standing in.
+ *
+ * ⚠⚠ A LINKED WORKTREE MADE ONE REPO READ AS THREE PROJECTS. `--show-toplevel` returns
+ * the WORKTREE directory, so a repo with a primary plus two fixed slots announced itself
+ * as `repo`, `repo-a` and `repo-b` from the same codebase - to a peer routing on
+ * `project:`, three unrelated projects. Reported from real use, and worked around at the
+ * call site with --project before it was fixed here.
+ *
+ * ⛔ AND `--git-common-dir` ALONE IS NOT THE FIX - IT IS A SECOND BUG. It returns a
+ * path RELATIVE TO THE CWD in the main worktree (`.git` at the root, `../.git` one level
+ * down), so dirname() of it yields `..` and the project label becomes literally "..".
+ * MEASURED, from a subdirectory of a real repo, before writing this.
+ *
+ * Resolving it against --show-toplevel fixes that on EVERY git version: a linked
+ * worktree's common dir comes back absolute (resolve() then ignores the base), and the
+ * main worktree's relative one resolves against its own root rather than the cwd.
+ * `--path-format=absolute` would also work but needs git >= 2.31.
+ */
+function mainWorktreeRoot() {
+  const top = gitRoot();
+  if (!top) return null;
+  try {
+    const common = execFileSync('git', ['rev-parse', '--git-common-dir'], {
+      cwd: top,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (!common) return top;
+    return dirname(resolve(top, common));
+  } catch {
+    return top;
+  }
+}
+
 function projectLabel() {
-  const root = gitRoot();
-  return basename(root || process.cwd());
+  return basename(mainWorktreeRoot() || gitRoot() || process.cwd());
+}
+
+/**
+ * The worktree slot, when you are standing in a linked one - `null` in the main worktree.
+ *
+ * ★ The slot name is genuinely useful ("which lane posted this"), it just must not be the
+ * field peers FILTER on. So it gets its own facet instead of being folded into `project:`,
+ * and the reader parses context elements with a generic key regex, so this is additive:
+ * nothing that predates it breaks on seeing it.
+ */
+function worktreeLabel() {
+  const top = gitRoot();
+  if (!top) return null;
+  const main = mainWorktreeRoot();
+  return main && resolve(main) !== resolve(top) ? basename(top) : null;
 }
 
 function sessionLabel() {
@@ -321,6 +371,7 @@ const OPTIONS = {
     released: { type: 'string' },
     'cut-at': { type: 'string' },
     project: { type: 'string' },
+    worktree: { type: 'string' },
     user: { type: 'string' },
     machine: { type: 'string' },
     session: { type: 'string' },
@@ -383,6 +434,7 @@ function die(msg, code = 1) {
 const USAGE =
   'usage: node slack-post.mjs --channel <id> --text "..." [--thread-ts <ts>]\n' +
       '       [--text-file <path>] [--to X] [--type X] [--project X] [--session X]\n' +
+      '       [--worktree X]\n' +
       '       [--user X] [--machine X] [--closes <ts>] [--broadcast] [--no-broadcast]\n' +
       '       [--user-email] [--username X] [--icon-emoji :x:] [--unsafe-claim]\n' +
       '       [--no-context] [--as-app] [--dry-run] [--self-test]\n' +
@@ -759,6 +811,7 @@ let contextLine = '';
 
 if (!a['as-app']) {
   const project = a.project ?? projectLabel();
+  const worktree = a.worktree ?? worktreeLabel();
   const session = a.session ?? sessionLabel();
   const machine = a.machine ?? process.env.CLAUDE_SLACK_MACHINE ?? hostname();
   const wantEmail =
@@ -819,6 +872,9 @@ if (!a['as-app']) {
   if (a['cut-at']) elements.push({ type: 'mrkdwn', text: `cut: \`${a['cut-at']}\`` });
 
   if (project) elements.push({ type: 'mrkdwn', text: `project: \`${project}\`` });
+  // Only present when you are standing in a linked worktree. `project:` stays the REPO so
+  // peers filtering on it see one project; the slot rides alongside rather than inside it.
+  if (worktree) elements.push({ type: 'mrkdwn', text: `worktree: \`${worktree}\`` });
   if (session) elements.push({ type: 'mrkdwn', text: `session: \`${session}\`` });
   if (user) elements.push({ type: 'mrkdwn', text: `user: ${user}` });
   if (machine) elements.push({ type: 'mrkdwn', text: `machine: ${machine}` });

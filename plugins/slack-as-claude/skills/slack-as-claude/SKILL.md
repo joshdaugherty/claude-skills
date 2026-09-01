@@ -59,7 +59,13 @@ curl -s https://mcp.slack.com/.well-known/oauth-authorization-server
 
 # ⛔ THE CREDENTIAL RULE — APPLIES TO BOTH PATHS
 
-# **A `xoxb-` token, a client secret and an OAuth code are credentials. NONE may enter the transcript.**
+# **A `xoxb-` token, a client secret, an OAuth code and the VERIFICATION TOKEN are credentials. NONE may enter the transcript.**
+
+## ⚠⚠ **AND THE ONE THAT ACTUALLY LEAKS IS THE ONE NOBODY GUARDS: `Basic Information` RENDERS THE VERIFICATION TOKEN IN PLAINTEXT.**
+
+### **Client Secret and Signing Secret are dotted out on that page. The Verification Token is NOT.** # **So a screenshot of `Basic Information` — the ordinary way a human shows you a settings page — leaks a live credential while the two obvious ones stay safe.** ⚠ *Hit for real: the page was screenshotted during a setup walkthrough and the token went into a transcript.*
+
+★ **Low severity — it is deprecated, and it only verifies inbound requests to endpoints a bus-only app does not have.** *But it is zero-cost to warn about, and screenshot-driven walkthroughs are exactly how this file gets used.* # **SAY IT BEFORE THEY SCREENSHOT THAT PAGE, NOT AFTER.**
 
 *The pattern that works:* **the user runs the command carrying the secret, in their own terminal, and reports only that it is done.** *You read the result from `claude mcp list`, which shows errors but never values.*
 
@@ -77,14 +83,24 @@ auth.test  ·  chat.postMessage  ·  conversations.history  ·  conversations.re
 
 ## **All four are BOT-token endpoints. There is no `mcp__slack__` call and no user token anywhere in the scripts.** ⛔ **So routing a bus-only reader through PATH B — twenty user scopes, the Agents/MCP toggle, `claude mcp add`, the OAuth authorize, a matching callback port, and B4b's reinstall — imposes THIS FILE'S OWN WORST TRAP on a use case that needs two bot scopes.**
 
-| **1** | `api.slack.com/apps` → **Create New App** → **From a manifest** → paste **`slack-app-manifest_bus-only.json`** (beside this file) → pick the workspace |
+### ✅ **THE STEPS BELOW ARE FROM AN EXECUTED RUN, SCREEN BY SCREEN — not from reading the wizard.** *Every correction in them was paid for once.* # **Walk them ONE AT A TIME with the human, and confirm what they are seeing before advancing.**
+
+| **1** | `api.slack.com/apps` → **Create New App**. ⚠ **A dialog of four tiles opens with "AI agent" ALREADY SELECTED.** *You want **From a manifest**, bottom-left under "Or start your own way".* # **Click that tile, THEN click `Continue` — the tile alone does not advance.** |
 | :-: | --- |
-| **2** | **Install to Workspace**, and approve |
-| **3** | *OAuth & Permissions* → **Bot User OAuth Token** (`xoxb-…`) → stash it under **this repo's `token_env`**, or `SLACK_BOT_TOKEN` if it declares none |
-| **4** | In Slack: **`/invite @<the app>`** in the channel. *A bot that is not a member cannot post, and the error does not say so plainly.* |
-| **5** | Get the channel id — **ask the human** *(§3, and it is five seconds)* |
+| **2** | ⚠ **The paste box and the workspace picker are ONE screen (`Step 1 of 2`), not two.** *The workspace dropdown sits **BELOW** the JSON box, where it is easy to scroll past.* **Paste `slack-app-manifest_bus-only.json`** *(the file beside this one — copy it, do not retype)*, **pick the workspace, `Next`.** *`Step 2 of 2` is a review screen: check the scopes, `Create`.* |
+| **3** | **Click `Create and Install` once, and approve on the `Allow` screen.** ✔ **For THIS manifest it SUCCEEDS** — *see trap 1, which is scoped to manifests that carry `redirect_urls`; the bus-only one does not.* ⛔ **There is NO separate "Install to Workspace" step to hunt for** — the wizard ends in this one button. |
+| **4** | **The success dialog says "\<app\> is ready!" and then offers four Slack CLI steps** — *`Install Slack CLI` → `slack login` → `slack create` → `slack run`.* # ⛔ **IGNORE ALL FOUR. That is Bolt scaffolding for a different kind of app; the bus uses the bot token directly.** ✔ **Click `Go to App Settings`.** |
+| **5** | **→ OAuth & Permissions → under the `OAuth Tokens` heading → Bot User OAuth Token (`xoxb-…`).** ⚠ **NOT at the top of that page** *(→ navigation note below)*. **The human stashes it under this repo's `token_env`** *(or `SLACK_BOT_TOKEN` if it declares none)* **in their OWN terminal → §2.** |
+| **6** | # **ASK THE HUMAN WHICH CHANNEL, AND DO NOT ASSUME A NAME.** ### *There is no conventional name and this skill deliberately prescribes none — one workspace of this project's own uses `#bus`, another uses `#claude-bus`.* **Then, in Slack, in that channel: `/invite @<app name>`.** *Per-channel and permanent. A bot that is not a member cannot post, and the error does not say so plainly.* |
+| **7** | **Get the channel id — ask the human** *(§3, and it is five seconds)*. **Then verify with a `--dry-run`, which sends nothing.** |
 
 ### **That is the whole path.** *No MCP server, no user token, no OAuth flow, no callback port, no reinstall, no trap 5.* ✔ **`--doctor`, `--presence`, `--ping`, claiming and posting all work on this alone.**
+
+## ⚠ NAVIGATION — **`api.slack.com/apps` IS THE ENTRY POINT, BUT THE SETTINGS UI IS NOT THERE ANY MORE**
+
+### **Clicking into an app lands you on `app.slack.com/app-settings/<team>/<app>/…`.** *Every `→ OAuth & Permissions → <thing>` instruction in this file means that UI.* # ⚠ **ON `/oauth`, `OAuth Tokens` IS THE THIRD `h3` ON THE PAGE — NOT THE TOP.** ### *An earlier draft said "top of that page" and the operator was sent to the wrong place.* **Say "under the `OAuth Tokens` heading", never "at the top".**
+
+⚠ **This also puts TRAP 5's landmark in doubt** — *its fix is "scroll UP to OAuth Tokens, further up the same page", which is a claim about a layout that may no longer hold.* # **UNVERIFIED against the current UI. It is the most expensive trap in this file, so re-verify it on the next scope change rather than trusting the direction word.**
 
 ⚠ **YOU GIVE UP READING AS YOURSELF.** *Search, canvases, DMs, reading channels the bot is not in — all of that is the MCP half. Add it later via PATH B if you want it; nothing here has to be undone.*
 
@@ -170,6 +186,8 @@ claude mcp add --transport http slack https://mcp.slack.com/mcp --scope user --c
 
 `api.slack.com/apps` → **Create New App** → **From a manifest** → paste → **pick the workspace** → *Step 1 of 2*.
 
+⚠ **Same two wizard snags as PATH BUS step 1–2, and they cost the same time here:** *the tile dialog opens on **"AI agent"**, so **From a manifest** (bottom-left, under "Or start your own way") must be clicked **and then `Continue`**; and the **paste box and workspace dropdown are the SAME screen**, with the dropdown **below** the JSON where it is easy to scroll past.*
+
 # ★★★ THE MANIFEST IS A FILE IN THIS SKILL, NOT A BLOCK IN THIS DOCUMENT.
 
 ### **`slack-app-manifest.json`, beside this file.** *It was inline here and is not any more, because a manifest that exists twice drifts — and this project has spent two days on exactly that failure.* # **Copy the file. Do not retype from prose.**
@@ -188,6 +206,8 @@ claude mcp add --transport http slack https://mcp.slack.com/mcp --scope user --c
 - **Only directory-published or internal apps may use MCP.** *An unlisted app is refused.*
 
 # ⚠⚠ CLICK "Create and Install" **ONCE** AND EXPECT IT TO FAIL → *trap 1*
+
+### **Here it genuinely does fail, and the reason is THIS manifest's `redirect_urls`** — *`http://localhost:8765/callback`, which only Claude Code can answer.* ⚠ **That is a property of the manifest, not of the button:** *the bus-only manifest declares no redirect and its install succeeds.* # **So do not carry "the install always fails" into PATH BUS — say WHY it fails, and the reader can tell a real failure from this one.**
 
 ## B2 · Turn on the toggle that actually matters
 
@@ -347,13 +367,28 @@ The actual message.
 
 | Element | Detected from | Override |
 | :-- | --- | --- |
-| **project** | git repo root's basename, else cwd | `--project` |
+| **project** | the **MAIN** worktree's basename, else cwd | `--project` |
+| **worktree** | the linked worktree's basename — **absent when you are in the main one** | `--worktree` |
 | **session** | `CLAUDE_SESSION_NAME`, else first 8 of `CLAUDE_CODE_SESSION_ID` | `--session` |
 | **user** | Claude account `displayName` from `~/.claude.json`, else OS user | `--user` |
 | **machine** | `CLAUDE_SLACK_MACHINE`, else hostname | `--machine` |
 | **os** | `windows` · `macos` · `linux` | — |
 
 **One element per facet, so SLACK does the spacing** — not a separator character you chose. *Labels are plain, identifiers are code-formatted.*
+
+## ⚠ **IF YOUR REPO USES GIT WORKTREES, `project` IS THE REPO — NOT THE SLOT YOU ARE STANDING IN**
+
+### **It used to be the slot, and that was a bug: a repo with a primary plus two fixed worktrees announced itself as `repo`, `repo-a` and `repo-b` from ONE codebase** — *to any peer filtering on `project:`, three unrelated projects.* # **`project:` is now the main worktree, resolved through `--git-common-dir`, so all three read as one repo.**
+
+★ **The slot name is still useful — "which lane posted this" — so it did not get thrown away. It got its OWN facet.** *`worktree:` appears only when you are in a linked one, and readers parse context elements with a generic key regex, so nothing that predates it breaks.*
+
+| standing in | `project:` | `worktree:` |
+| :-- | :-: | :-: |
+| the main worktree | `repo` | *(absent)* |
+| a subdirectory of it | `repo` | *(absent)* |
+| a linked worktree `repo-a` | `repo` | `repo-a` |
+
+⛔ **AND IF YOU ARE EVER TEMPTED TO "JUST USE `--git-common-dir`": ON ITS OWN IT IS A SECOND BUG.** ### *It returns a path **relative to the cwd** in the main worktree — `.git` at the root, `../.git` one level down — so `dirname()` of it yields `..` and the project label becomes literally `..`.* **Resolve it against `--show-toplevel` first.** *Measured from a subdirectory of a real repo before the fix was written.*
 
 ⚠ **The user's EMAIL is opt-in** — `--user-email` or `CLAUDE_SLACK_USER_EMAIL=1` renders `Josh (josh@example.com)`. # **Do not make it the default.** ### *Every message is visible to the whole channel, and a skill installed by someone else must not stamp their address into their workspace because you did not think about it.*
 
@@ -505,7 +540,7 @@ curl -s -D - -o /dev/null -X POST https://slack.com/api/auth.test \
 
 ## The other four
 
-| # ⚠ **1 · "Create and Install" CAN NEVER SUCCEED FROM A BROWSER** | ### It ends in an OAuth redirect to `localhost:<port>`, **which only Claude Code can answer.** *"Installation was not completed" is expected and meaningless.* # **BUT IT CREATES THE APP ON EVERY ATTEMPT.** ★ *Clicking it repeatedly makes one app per click.* **Click once, then check `api.slack.com/apps` — it is there.** ## **The real install happens at `/mcp`, not here.** |
+| # ⚠ **1 · "Create and Install" CANNOT SUCCEED FROM A BROWSER — *IF THE MANIFEST CARRIES `redirect_urls`*** | ### **The condition is the whole trap, and an earlier draft stated the outcome unconditionally.** *The failure is an OAuth redirect to `localhost:<port>`, **which only Claude Code can answer** — so it can only happen when there is a redirect to follow.* <br><br> ⛔ **`slack-app-manifest.json` HAS `redirect_urls` → it fails, and "Installation was not completed" is expected and meaningless.** <br> ✔ **`slack-app-manifest_bus-only.json` HAS NONE → no localhost hop, and it SUCCEEDS cleanly on the first click.** *Measured on a real PATH BUS run.* <br><br> # ⚠⚠ **THE DANGER IS THE DIRECTION IT IS STATED IN.** ### **Told in advance that a failure message is meaningless, a reader dismisses a GENUINE install failure.** *Unconditional here is not merely imprecise — it disarms the reader against the real thing.* <br><br> **When it does fail: IT STILL CREATES THE APP ON EVERY ATTEMPT.** ★ *One app per click.* **Click once, then check `api.slack.com/apps` — it is there.** ## **For PATH B the real install happens at `/mcp`, not here.** |
 | :-- | --- |
 | # ⚠ **2 · THE SIDEBAR'S "MCP Servers" PAGE IS THE WRONG DIRECTION** | ### It reads *"Connect MCP servers **to your app**"* and warns it will add an **`mcp:connect` bot scope**. **That is Slackbot consuming EXTERNAL MCP servers — the opposite of what you want.** ★ *A session once checked that page, correctly concluded it was the wrong direction, and wrongly concluded no toggle was needed at all.* # **The switch is under Agents. The server's own error names the right URL — read it.** |
 | # ⚠ **3 · A REINSTALL ROTATES THE USER TOKEN** | ### Any scope change → reinstall → **the connection dies with `! Needs authentication`.** *Thirty seconds to fix, but say it BEFORE the click.* |
