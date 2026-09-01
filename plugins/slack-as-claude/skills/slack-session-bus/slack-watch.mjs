@@ -1531,7 +1531,12 @@ if (a.doctor) {
         const d = join(insRoot, skill);
         if (!existsSync(d)) continue;
         for (const f of readdirSync(d)) {
-          if (!f.endsWith('.mjs')) continue;
+          // ⚠ .md TOO, NOT JUST .mjs. On a plugin whose payload is INSTRUCTIONS the
+          // SKILL.md IS the behaviour - a session follows what it says. Excluding it put
+          // the protocol document in the blind spot of the very check meant to report
+          // what changed, and a release whose entire delta was SKILL.md reported as
+          // nothing differing at all.
+          if (!f.endsWith('.mjs') && !f.endsWith('.md')) continue;
           const mine = join(runRoot, skill, f);
           if (!existsSync(mine)) { differing.push(`${skill}/${f} (absent in yours)`); continue; }
           if (sameCode(mine, join(d, f)) === false) differing.push(`${skill}/${f}`);
@@ -1542,9 +1547,12 @@ if (a.doctor) {
     }
     if (differing.length) {
       asks.push(
-        `SCRIPTS THAT DIFFER from the installed ${installed.version}: ${differing.join(', ')}\n` +
+        `FILES THAT DIFFER from the installed ${installed.version}: ${differing.join(', ')}\n` +
           '  Listed because "the watcher is unchanged" says nothing about the others, and\n' +
-          '  a stale slack-claim is the one that can double-execute a finished task.',
+          '  a stale slack-claim is the one that can double-execute a finished task.\n' +
+          '  SKILL.md is included deliberately: on this plugin the instructions ARE the\n' +
+          '  behaviour, and a release whose whole delta was SKILL.md previously reported\n' +
+          '  as nothing differing at all.',
       );
     }
   }
@@ -1593,8 +1601,15 @@ if (a.doctor) {
       `⚠ That clone is a CACHE (${available?.fetched ?? 'age unknown'}). A release pushed since then is`,
     );
     console.log('invisible here. This tool cannot see origin. Run /plugin marketplace update to be sure.');
-    console.log('Note a version DIFFERENCE alone would not have meant anything: a docs-only release bumps');
-    console.log('the number without changing behaviour. This check compares bytes, not version strings.');
+    // ⛔ THIS NOTE USED TO SAY a docs-only release bumps the number WITHOUT CHANGING
+    // BEHAVIOUR - reassurance, in the reassuring branch, and FALSE on this plugin.
+    // Release 2.12.2 changed exactly one file, slack-session-bus/SKILL.md, which is the
+    // protocol every session follows. Its contents ARE the behaviour. So a "docs-only"
+    // release altered how every peer acts while moving zero executable bytes, and the
+    // old sentence told the reader that was nothing to worry about.
+    console.log('⚠ A version difference alone is NOT nothing here. This plugin\'s payload is');
+    console.log('INSTRUCTIONS: a release changing only SKILL.md changes how every session behaves');
+    console.log('while moving zero executable bytes. Release 2.12.2 was exactly that.');
   } else {
     const behind = asks.some((x) => x.startsWith('ASK') || x.startsWith('RESTART'));
     console.log(behind ? 'THIS SESSION IS BEHIND, and cannot fix it itself - updating a plugin is the human\'s call.' : 'ACTION SUGGESTED:');
