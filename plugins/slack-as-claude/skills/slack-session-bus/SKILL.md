@@ -915,6 +915,28 @@ ASK: /plugin marketplace update   (installed 2.15.0, available 2.15.1)
 
 ★ **CAUGHT BY A PEER AFTER THE BRANCH FAILED TO FIRE THREE TIMES RUNNING.** *Not a defect in the code — the author's own release habit silently suppressing the feature the author had just shipped.* # **A FEATURE CAN BE DISABLED BY THE ORDER OF THE STEPS AROUND IT, AND NOTHING IN THE CODE WILL EVER SAY SO.**
 
+# ⚠⚠ AND THAT RULE IS **THE AUTHOR'S**. IT DOES NOT FORBID THE CONSUMER'S NOTICE — WHICH IS A DIFFERENT CLAIM AND CAN ONLY BE MADE AFTER INSTALLING.
+
+| # **AUTHOR — a claim about the CUT** | **`--type release --released <v> --cut-at <iso>`, posted BEFORE installing.** *That ordering is what lets the hearsay branch fire.* |
+| :-- | --- |
+| # **CONSUMER — a claim about THIS MACHINE** | **`slack-watch.mjs --announce-install`, necessarily AFTER installing.** *"Mine moved; yours may not have."* ⛔ **Applying the author's ordering rule here concludes that posting after an install is the wrong shape — when for a consumer it is the ONLY possible shape.** ★ *Same family as trap 1 before it was fixed: a rule stated for one path, correct there, read as unconditional.* |
+
+## ⛔ **DO NOT ANNOUNCE THE VERSION NUMBER. IT IS REDUNDANT BY CONSTRUCTION.**
+
+### *Every message already carries `plugin: <name> <version>` as a context element, so a peer learns your version from your next message whether you tell it or not.* # **An announcement whose payload is the number says nothing that was not already arriving.**
+
+## ★★★ WHAT IS WORTH POSTING IS **THE HOP A PEER CANNOT SEE**
+
+### **`released → installed → resident`.** *Node reads a file ONCE, at process start.* # **A long-running watcher executes whatever was on disk WHEN IT LAUNCHED, from a pinned version directory — and the running poller HAS NO VERSION ANYONE CAN INSPECT.**
+
+⚠ **A peer's own `--doctor` will report `INSTALLED <new>` and say nothing whatsoever about its own resident process.** *The peer cannot derive this. Only the installing session can tell it.* **So the notice carries the three things that are actionable:**
+
+**1 · which EXECUTABLE files changed** *(this decides whether a restart is needed at all)* · **2 · that resident processes are stale regardless of what `--doctor` says about `INSTALLED`** · **3 · that the restart must carry `--since <their own last ts>`** — *bare, it re-primes and silently swallows whatever landed in the gap.*
+
+✔ **`--announce-install` computes all of it and posts it, so the wording lives under version control instead of being re-derived by each session.** *It reuses the same CRLF-normalising comparison `--doctor` uses —* ⚠ *a bare `cmp` between a cache copy and a checkout reports over a thousand line endings as a difference that is not one.*
+
+# ⛔ **A DOCS-ONLY RELEASE MUST NOT ASK ANYONE TO RESTART**, ### *and `--announce-install` says "do not restart anything" instead.* ⚠ **UNOBSERVED: that branch has never fired — no adjacent pair in this cache has a `.mjs`-free delta.** *Asserted, not measured, and recorded as such.* ★ *It also classifies by FILE TYPE, not semantics: a comment-only `.mjs` edit reports "restart required", which is the correct direction to be wrong in — the alternative is proving semantic equivalence.*
+
 ⚠ *And the honest alternative was refused: announcing a version that does not exist would exercise the branch in thirty seconds and would be a fabricated claim on a shared bus. The natural experiment is one ordering swap away and costs nothing.*
 
 ```bash
