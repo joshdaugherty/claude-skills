@@ -409,6 +409,20 @@ const PRESENCE_TYPE = 'x-presence';
  * ★ Which is the argument for honouring it: an announced retirement is POSITIVE EVIDENCE
  * of departure, and this file already prefers that to inference everywhere else. Silence
  * means "no information"; `x-retired` means "I left".
+ *
+ * ★★★★★ AND THE RELATION BETWEEN THE TWO BUGS IS WORTH MORE THAN EITHER OF THEM. This is
+ * not "two defects, one release". The visibility defect was THE REASON the dead path was
+ * unobservable: a retirement arrived, changed nothing, and the surface that would have
+ * shown it changing nothing was itself broken.
+ *
+ *     ONE DEFECT CAN BE THE REASON ANOTHER IS INVISIBLE. FIXING THE FIRST IS NOT TIDYING
+ *     UP BEFORE THE REAL WORK - IT IS THE ONLY WAY TO SEE THE SECOND EXISTS.
+ *
+ * ⚠ SO SEPARATE TWO FAILURES THAT LOOK IDENTICAL IN A POST-MORTEM. Nearly everything this
+ * project has found was UNREAD EVIDENCE - present, one line away, nobody looked. This was
+ * UNOBTAINABLE EVIDENCE: it did not exist to be read until something else was repaired.
+ * Only the first is anybody's fault, and calling the second carelessness teaches the wrong
+ * lesson - its remedy is REPAIR ORDER, not more diligence.
  */
 const RETIRED_TYPE = 'x-retired';
 
