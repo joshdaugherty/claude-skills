@@ -372,7 +372,12 @@ function parseMessage(msg) {
   const ctx = (msg.blocks ?? []).find((b) => b.type === 'context');
   for (const el of ctx?.elements ?? []) {
     const m = (el.text ?? '').match(/^([a-z][a-z0-9_-]*):\s*(.*)$/i);
-    if (m) meta[m[1].toLowerCase()] = decodeSlack(m[2]).replace(/^`|`$/g, '').trim();
+    // ⚠ STRIP BACKTICKS ONLY WHEN THEY ACTUALLY WRAP THE WHOLE VALUE. The alternation
+    // `/^`|`$/g` removed a LEADING or a TRAILING one independently, so a value that merely
+    // CONTAINS a code span - `given` (source, not a verification) - lost its opener and kept
+    // its closer, rendering a dangling backtick. Cosmetic, and a reader-side misreading of a
+    // correctly-emitted message, which is the harder kind to attribute.
+    if (m) meta[m[1].toLowerCase()] = decodeSlack(m[2]).replace(/^`([\s\S]*)`$/, '$1').trim();
   }
   /**
    * ⛔⛔⛔ EVERY section BLOCK, NOT THE FIRST ONE. `.find()` SILENTLY TRUNCATED.
@@ -2045,6 +2050,7 @@ if (a['announce-install']) {
         versions.push({
           version: v,
           root: join(dir, v, 'skills'),
+          marketplace: mkt,
           orphaned: existsSync(join(dir, v, '.orphaned_at')),
         });
       }
@@ -2155,8 +2161,29 @@ if (a['announce-install']) {
    * the code was read twice without any of them being noticed - because reading the code
    * cannot show you the message it produces.
    */
+  /**
+   * ⛔⛔ THE SENDER'S ABSOLUTE PATH IS NOT THE READER'S, AND IT WAS PUBLISHED FOR ONE RELEASE.
+   *
+   * The fix for #36 replaced a `<cache>/…` placeholder with the sender's RESOLVED path -
+   * which works on the sender's machine, fails on any other, and puts the sender's home
+   * directory (and OS username) into a shared channel on every notice.
+   *
+   * ★ That is #36 ITEM 4's OWN LESSON, ONE FIELD OVER - "the delta is the sender's, and
+   * every reader has a different one" - committed two paragraphs above the label written to
+   * express it. A lesson can be understood, stated, and shipped, and still not generalise
+   * one field sideways in the same edit.
+   *
+   * ⚠ AND IT FAILS IN THE DIRECTION THIS FILE KEEPS WARNING ABOUT: a resolved path LOOKS
+   * more complete and more specific than a placeholder, so a reader has LESS reason to
+   * inspect it, not more. The authoritative-looking form is the dangerous one.
+   *
+   * ✔ `$HOME` is the resolution: portable across users and shells, discloses nothing, and
+   * is directly runnable rather than a placeholder somebody has to interpret. The default
+   * cache location is an assumption, so it is stated rather than hidden.
+   */
   const cmd =
-    `node "${join(now.root, 'slack-session-bus', 'slack-watch.mjs')}" --channel ${a.channel} ` +
+    `node "$HOME/.claude/plugins/cache/${now.marketplace}/${pluginName}/${now.version}` +
+    `/skills/slack-session-bus/slack-watch.mjs" --channel ${a.channel} ` +
     '--session <your label> --heartbeat 60 --since <THE LAST ts YOU SAW>';
   const lines = [`*${a.session} is now on ${pluginName} ${now.version}* (was ${prev.version}).`, ''];
   if (code.length) {
@@ -2232,7 +2259,11 @@ if (a['announce-install']) {
           // authoritative enough to ship. Naming where a value came from is not a claim that
           // anyone verified it arrived correctly.
           // `ANNOUNCED … a CLAIM, not a reading` already had this right; `baseline:` did not.
-          { type: 'mrkdwn', text: `baseline: \`${baselineSrc}\` (source, not a verification)` },
+          // ⚠ The qualifier goes INSIDE the code span. Split across it, the value neither
+          // wraps nor doesn't: the reader's strip is correct to leave both backticks, and
+          // they then render as literal punctuation. Emitter and parser have to agree about
+          // where the value ends, and the value is the whole thing.
+          { type: 'mrkdwn', text: `baseline: \`${baselineSrc} (source, not a verification)\`` },
           { type: 'mrkdwn', text: `restart: \`${code.length ? 'required' : 'not needed'}\`` },
           // ⚠ THE ONE MESSAGE TYPE WHOSE SUBJECT IS VERSIONS SHIPPED WITHOUT DECLARING ITS
           // OWN. Every other message carries `plugin:`, skew detection KEYS on it, and this
