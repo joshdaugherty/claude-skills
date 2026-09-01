@@ -121,7 +121,18 @@ claude mcp add --transport http slack https://mcp.slack.com/mcp    # local is th
 claude mcp login slack                                             # only if the credential did not carry
 ```
 
-### **The cached credential is keyed `<server-name>|<hash>`, and whether a scope move preserves that key is UNMEASURED.** *The key format invites the inference that the hash is over the URL and would survive — that is inference, so check `~/.claude/.credentials.json` before and after rather than trusting it.* ✔ **Either way the worst case is one `claude mcp login`.**
+### ✅ **MEASURED, ON A REAL MIGRATION:** *the credential key is `<server-name>|<hash>` and it came back **BYTE-IDENTICAL** across a user → local move.* **So the hash covers the NAME and URL, not the scope — a scope change does not invalidate it.**
+
+# ⛔ **WHAT ACTUALLY COSTS YOU IS `remove`, NOT THE SCOPE CHANGE.** ### **`claude mcp remove` clears BOTH the access token AND the stored client config** — *and `mcp.slack.com` does not support dynamic client registration, so re-adding needs the Client ID and Secret again:*
+
+```
+claude mcp add --transport http slack https://mcp.slack.com/mcp   --client-id <id> --client-secret --callback-port 8765     # prompts for the secret
+claude mcp login slack
+```
+
+⚠ **`--client-secret` TAKES NO VALUE — IT PROMPTS.** *Which is why an agent cannot run this step: a non-interactive shell reads EOF and the add fails.* ⚠ **And `--callback-port` must match the manifest's redirect URL**, *or Claude Code picks a random port and the redirect will not match.*
+
+★ **SO ADD THE NEW REGISTRATION BEFORE REMOVING THE OLD ONE** — *the key survives, and never being without it is free.* ⛔ *Three estimates of this cost were published before it was measured: "probably survives", then "always costs a full re-add", then the measurement. The first two were inference and the file said so; only the third is worth following.*
 
 # ★★ **DO IT BEFORE YOU ADD THE SECOND WORKSPACE, NOT AFTER.** ### *One server to move, one credential at risk, and the flow you might re-run is against the workspace you are already signed into.* ⚠ *Afterwards means untangling two.*
 

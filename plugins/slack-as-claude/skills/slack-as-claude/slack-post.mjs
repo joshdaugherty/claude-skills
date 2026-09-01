@@ -319,6 +319,7 @@ const OPTIONS = {
     type: { type: 'string' },
     closes: { type: 'string' },
     released: { type: 'string' },
+    'cut-at': { type: 'string' },
     project: { type: 'string' },
     user: { type: 'string' },
     machine: { type: 'string' },
@@ -399,6 +400,10 @@ const USAGE =
       '  --to / --type   routing for a session bus, emitted as context elements so a\n' +
       '                  reader can parse them. Putting them in the body does not work.\n' +
       '                  type: request reply claim done fail status, or an x- prefix.\n' +
+      '  --cut-at <iso>  WHEN the release was cut, which is not when it was announced.\n' +
+      '                  Without it, a late announcement is indistinguishable from a\n' +
+      '                  prompt one and the lateness is unrecoverable. Adds resolution,\n' +
+      '                  not trust.   git log -1 --format=%cI <tag>\n' +
       '  --released <v>  the version a --type release announces, as a context element.\n' +
       '                  A CLAIM ON A BUS, NOT A READING OF A DISK - --doctor reports it\n' +
       '                  and never acts on it. Required with --type release, and refused\n' +
@@ -601,6 +606,22 @@ if (a.type === 'release' && !a.released) {
     2,
   );
 }
+if (a['cut-at'] && a.type !== 'release') {
+  die(
+    `--cut-at was given with --type ${a.type ?? '(none)'}.
+` +
+      '  It records when a RELEASE was cut, and is only read on a release announcement.',
+    2,
+  );
+}
+if (a['cut-at'] && Number.isNaN(Date.parse(a['cut-at']))) {
+  die(
+    `--cut-at "${a['cut-at']}" is not a parsable date.
+` +
+      '  Use ISO 8601. The tag knows it:  git log -1 --format=%cI <tag>',
+    2,
+  );
+}
 if (a.released && a.type !== 'release') {
   die(
     `--released was given with --type ${a.type ?? '(none)'}.\n` +
@@ -717,6 +738,27 @@ if (!a['as-app']) {
   // version existed on this machine was inside a Slack message body, which is the one
   // surface --doctor could not read.
   if (a.released) elements.push({ type: 'mrkdwn', text: `released: \`${a.released}\`` });
+  /**
+   * ★ WHEN IT WAS CUT, WHICH IS NOT WHEN IT WAS ANNOUNCED.
+   *
+   * ⛔ WITHOUT THIS, A LATE ANNOUNCEMENT ERASES THE EVIDENCE THAT IT WAS LATE. Observed:
+   * 2.14.0 shipped and went unannounced for 4790 seconds; the announcement then rendered
+   * as `ANNOUNCED 2.14.0 (56s ago)` - INDISTINGUISHABLE from having announced promptly.
+   * The window left no trace at all.
+   *
+   * That made `announced < installed` a LIVE-ONLY signal: true only inside the gap, and
+   * destroyed by the very act that closes it. The third such signal found in one day,
+   * after the version-gap doctor state and the hearsay branch - and a finding visible
+   * only to someone who happened to look in the right minute is barely a finding.
+   *
+   * ⚠ IT ADDS NO TRUST. Same claimant, still a claim, still not a reading of a disk. It
+   * adds RESOLUTION, which is the honest thing a claim can offer: with a cut time,
+   * "announced 80 minutes after the release" becomes a fact in the record forever,
+   * instead of an inference available for one window to one observer.
+   *
+   * Get it from the tag rather than typing it:  git log -1 --format=%cI v2.15.0
+   */
+  if (a['cut-at']) elements.push({ type: 'mrkdwn', text: `cut: \`${a['cut-at']}\`` });
 
   if (project) elements.push({ type: 'mrkdwn', text: `project: \`${project}\`` });
   if (session) elements.push({ type: 'mrkdwn', text: `session: \`${session}\`` });

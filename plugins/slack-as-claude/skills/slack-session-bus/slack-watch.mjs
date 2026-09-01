@@ -1374,12 +1374,22 @@ if (a.doctor) {
     const mm = parseMessage(m).meta;
     if (mm.type !== 'release' || !mm.released) continue;
     if (!announced || cmpVer(mm.released, announced.version) > 0) {
-      announced = { version: mm.released, by: mm.session ?? '?', ts: m.ts };
+      announced = { version: mm.released, by: mm.session ?? '?', ts: m.ts, cut: mm.cut ?? null };
     }
   }
   if (announced) {
     const age = Math.max(0, Math.round(now - Number(announced.ts)));
-    console.log(`ANNOUNCED  ${announced.version}   (${announced.by} said so, ${age}s ago - a CLAIM, not a reading)`);
+    // Lateness, when the announcement carried a cut time. Without it a late announcement
+    // is indistinguishable from a prompt one - the window leaves no trace once closed.
+    let late = '';
+    if (announced.cut) {
+      const cutSec = Date.parse(announced.cut) / 1000;
+      if (Number.isFinite(cutSec)) {
+        const delay = Math.max(0, Math.round(Number(announced.ts) - cutSec));
+        late = delay > 120 ? `, announced ${Math.round(delay / 60)}m after it was cut` : ', announced promptly';
+      }
+    }
+    console.log(`ANNOUNCED  ${announced.version}   (${announced.by} said so, ${age}s ago${late} - a CLAIM, not a reading)`);
   }
 
   const live = new Map();
@@ -1519,6 +1529,35 @@ if (a.doctor) {
   // version exists here - the clone may not have it, and nothing on this side has
   // checked. So this prompts a HUMAN to look; it never asserts the version is real and
   // never tells anyone to install it. Reported, not acted on.
+  /**
+   * ⛔ AN INSTALLED RELEASE THAT WAS NEVER ANNOUNCED IS A FINDING, NOT A BLANK.
+   *
+   * The ANNOUNCED line showed an OLDER version for 4790 seconds after 2.14.0 shipped
+   * unannounced, and nothing distinguished those two readings:
+   *
+   *     nobody announced 2.14.0            (what happened)
+   *     2.14.0 was never announced because it does not exist
+   *
+   * ★ THE FAILURE MODE OF AN ANNOUNCEMENT CHANNEL IS SILENCE, AND SILENCE RENDERED AS A
+   * STALE POSITIVE. The field was argued for on the grounds that a release element which
+   * never arrives turns a no-op into a VISIBLE ABSENCE. It did not - it displayed an old
+   * number, confidently, on its own line. The presence case was specified and the absence
+   * case was left to look after itself, which is the exact failure the field exists to
+   * remove.
+   *
+   * Every other surface here already carries its own caveat - AVAILABLE its fetch age,
+   * PEERS its beat age, !JOINED a seam with nothing stored. This one shipped without.
+   */
+  if (announced && installed && cmpVer(announced.version, installed.version) < 0) {
+    asks.push(
+      `THE INSTALLED ${installed.version} WAS NEVER ANNOUNCED - newest announcement is ${announced.version}.\n` +
+        '  A gap in the record, not evidence the release is unreal: an announcement is a\n' +
+        '  claim someone has to make, and nobody made this one. Post it with:\n' +
+        `    slack-post.mjs --type release --released ${installed.version} --cut-at <iso>\n` +
+        '  Without --cut-at, announcing late is indistinguishable from announcing promptly.',
+    );
+  }
+
   if (announced && installed && cmpVer(announced.version, installed.version) > 0) {
     asks.push(
       `A PEER ANNOUNCED ${announced.version}, newer than the installed ${installed.version}.\n` +
