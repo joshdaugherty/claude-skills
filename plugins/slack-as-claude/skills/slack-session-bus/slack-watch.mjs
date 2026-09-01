@@ -131,6 +131,8 @@ const OPTIONS = {
     all: { type: 'boolean', default: false },
     'gone-after': { type: 'string' },
     retire: { type: 'boolean', default: false },
+    'announce-install': { type: 'boolean', default: false },
+    from: { type: 'string' },
     audit: { type: 'string' },
     releases: { type: 'string' },
     ping: { type: 'string' },
@@ -150,6 +152,15 @@ const USAGE =
       '       [--ignore-session <label>]... [--include-self] [--once]\n' +
       '\n' +
       '       [--heartbeat <sec>] [--retire] [--releases <ts,ts>] [--all]\n' +
+      '       [--announce-install] [--from <version>]\n' +
+      '\n' +
+      '  --announce-install  after YOU install an update, tell peers what it means for\n' +
+      '              THEM. Diffs the newest installed version against the previous one\n' +
+      '              (or --from <version>) and posts which EXECUTABLE files changed.\n' +
+      '              The version number alone is not worth posting - every message\n' +
+      '              already carries plugin: <name> <version>. What a peer cannot see is\n' +
+      '              that its RUNNING watcher is pinned to the code it launched with.\n' +
+      '              A docs-only release posts "do not restart" instead.\n' +
       '       [--ping <session>] [--wait <sec>] [--gone-after <sec>]\n' +
       '\n' +
       '  --heartbeat <sec>  publish liveness for --session, refreshed in place. Match the\n' +
@@ -1885,6 +1896,156 @@ if (a.doctor) {
     asks.forEach((x) => console.log(`  ${x.replace(/\n/g, '\n  ')}`));
   }
   if (!a.session) console.log('\n(Pass --session <label> so your own messages are not counted as peers.)');
+  process.exit(0);
+}
+
+/**
+ * ★★★★★ THE CONSUMER'S UPDATE NOTICE — THE OTHER HALF OF §7, AND IT WAS MISSING.
+ *
+ * §7 prescribes the AUTHOR's announcement: a claim about the CUT, posted BEFORE installing,
+ * so the hearsay branch can fire. There was no equivalent for the CONSUMER - a session that
+ * has just installed, on a bus where peers may still be running the old code - so everyone
+ * invented one or posted nothing.
+ *
+ * ⛔ AND THE ORDERING RULE ARGUED AGAINST POSTING AT ALL. "install -> announce ... the
+ * hearsay branch can NEVER fire" is correct ABOUT THE AUTHOR'S CLAIM. A consumer's notice
+ * is a different claim - "my machine moved, yours may not have" - and can ONLY be made
+ * after installing. A reader applying the author's rule outside its scope concludes that
+ * posting after an install is the wrong shape, when for them it is the only possible shape.
+ * Same family as trap 1: a rule stated for one path, correct there, read as unconditional.
+ *
+ * ⛔ THE VERSION NUMBER IS NOT WORTH ANNOUNCING. Every message already carries
+ * `plugin: <name> <version>`, so a peer learns it from your next message either way. An
+ * announcement whose payload is the number is redundant by construction.
+ *
+ * ★ WHAT IS WORTH POSTING IS THE HOP A PEER CANNOT SEE. Node reads a file ONCE, at process
+ * start: a long-running watcher executes whatever was on disk WHEN IT LAUNCHED, from a
+ * PINNED version directory, and THE RUNNING POLLER HAS NO VERSION ANYONE CAN INSPECT. A
+ * peer's own --doctor will happily report INSTALLED <new> and say nothing about its own
+ * resident process. The peer cannot derive this. Only the installing session can tell it.
+ *
+ * ⚠ AND THE DOCS-ONLY GUARD IS THE POINT, NOT A DETAIL: if no executable file changed,
+ * this says so and does NOT ask anybody to restart. Telling every peer to restart for a
+ * SKILL.md edit is a correct-looking action whose justification does not reach it.
+ *
+ * ⛔ STATED LIMIT, BECAUSE IT WOULD OTHERWISE READ AS A STRONGER CLAIM THAN IT IS:
+ * this classifies by FILE TYPE, not by semantic change. A comment-only edit to a .mjs is
+ * reported as "executable file changed, restart required" - which is over-eager and is the
+ * correct direction to be wrong in. Saying "comments only, do not bother" would require
+ * PROVING SEMANTIC EQUIVALENCE, which nothing here can do; the docs-only guard is safe
+ * precisely because .md and .json cannot alter a running process at all.
+ */
+if (a['announce-install']) {
+  if (!a.session) die('--announce-install needs --session <label>: the notice says who moved.', 2);
+  const selfFile = fileURLToPath(import.meta.url);
+  const skillDir = dirname(selfFile);
+  const runningManifest = readJson(join(skillDir, '..', '..', '.claude-plugin', 'plugin.json'));
+  const pluginName = runningManifest?.name ?? 'slack-as-claude';
+
+  const cacheRoot = join(homedir(), '.claude', 'plugins', 'cache');
+  const versions = [];
+  try {
+    for (const mkt of readdirSync(cacheRoot)) {
+      const dir = join(cacheRoot, mkt, pluginName);
+      if (!existsSync(dir)) continue;
+      for (const v of readdirSync(dir)) {
+        if (existsSync(join(dir, v, '.orphaned_at'))) continue;
+        versions.push({ version: v, root: join(dir, v, 'skills') });
+      }
+    }
+  } catch {
+    /* no cache */
+  }
+  versions.sort((x, y) => cmpVer(x.version, y.version));
+  const now = versions[versions.length - 1];
+  if (!now) die('no installed copy found in the plugin cache - nothing to announce.', 2);
+  const prev = a.from
+    ? versions.find((v) => v.version === a.from)
+    : versions[versions.length - 2];
+  if (a.from && !prev) die(`--from ${a.from}: no such version in the cache. Present: ${versions.map((v) => v.version).join(', ') || 'none'}`, 2);
+  if (!prev) die(`only one version (${now.version}) is installed, so there is no delta to report.`, 2);
+
+  // ⚠ sameCode() NORMALISES CRLF. A bare byte compare between a cache copy and anything
+  // checked out reports 1000+ line endings as a difference that is not one - measured.
+  const code = [];
+  const docs = [];
+  try {
+    for (const skill of readdirSync(now.root)) {
+      const dNow = join(now.root, skill);
+      const dPrev = join(prev.root, skill);
+      if (!existsSync(dNow)) continue;
+      for (const f of readdirSync(dNow)) {
+        if (!f.endsWith('.mjs') && !f.endsWith('.md') && !f.endsWith('.json')) continue;
+        const older = join(dPrev, f);
+        const changed = !existsSync(older) ? true : sameCode(join(dNow, f), older) === false;
+        if (!changed) continue;
+        (f.endsWith('.mjs') ? code : docs).push(`${skill}/${f}`);
+      }
+    }
+  } catch (e) {
+    die(`could not compare ${prev.version} against ${now.version}: ${e.message}`, 2);
+  }
+
+  const lines = [
+    `*${a.session} is now on ${pluginName} ${now.version}* (was ${prev.version}).`,
+    '',
+    '_Posted because the installed→resident hop is invisible from the wire: a running watcher_',
+    '_executes the code that was on disk when it launched, from a pinned version directory,_',
+    '_and the running process has no version anyone can inspect — including your own `--doctor`._',
+    '',
+  ];
+  if (code.length) {
+    lines.push(
+      `*EXECUTABLE FILES CHANGED — ${code.length}:*`,
+      ...code.map((f) => `• \`${f}\``),
+      '',
+      '*If you have a watcher armed, it is running the OLD code regardless of what your*',
+      '*`--doctor` says about INSTALLED.* Restart it from the installed copy:',
+      '```',
+      `node "<cache>/${now.version}/skills/slack-session-bus/slack-watch.mjs" \\`,
+      `  --channel ${a.channel} --session <your label> --since <THE LAST ts YOU SAW>`,
+      '```',
+      '⚠ *Pass `--since` with your own last-seen ts. A bare restart re-primes and silently*',
+      '*swallows anything that landed during the handover.*',
+    );
+  } else {
+    lines.push(
+      '*NO EXECUTABLE FILE CHANGED — do not restart anything.*',
+      '_Your running watcher is already executing identical code. A restart would cost you_',
+      '_the `--since` handover risk and buy nothing._',
+    );
+  }
+  if (docs.length) {
+    lines.push(
+      '',
+      `*Instructions/manifests changed — ${docs.length}:*`,
+      ...docs.map((f) => `• \`${f}\``),
+      '_On this plugin the instructions ARE behaviour, so re-read rather than restart._',
+    );
+  }
+
+  const res = await slackPost('chat.postMessage', {
+    channel: a.channel,
+    text: `${a.session} installed ${pluginName} ${now.version}`,
+    blocks: [
+      { type: 'section', text: { type: 'mrkdwn', text: lines.join('\n') } },
+      {
+        type: 'context',
+        elements: [
+          { type: 'mrkdwn', text: 'type: `x-update`' },
+          { type: 'mrkdwn', text: `session: \`${a.session}\`` },
+          { type: 'mrkdwn', text: `installed: \`${now.version}\`` },
+          { type: 'mrkdwn', text: `from: \`${prev.version}\`` },
+          { type: 'mrkdwn', text: `restart: \`${code.length ? 'required' : 'not needed'}\`` },
+        ],
+      },
+    ],
+  });
+  if (!res.ok) die(`could not post the update notice: ${res.error}`, 1);
+  console.log(
+    `Announced ${prev.version} -> ${now.version}: ${code.length} executable file(s) changed, ` +
+      `${docs.length} doc/manifest file(s). Restart ${code.length ? 'REQUIRED' : 'NOT needed'}. ts ${res.ts}`,
+  );
   process.exit(0);
 }
 
