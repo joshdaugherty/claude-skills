@@ -215,6 +215,18 @@ claude mcp add --transport http slack https://mcp.slack.com/mcp --scope user --c
 
 **a.** *OAuth & Permissions → **Bot** Token Scopes → add `chat:write`.* (Creates the bot user. If refused, set a Display Name under **App Home** first.)
 
+# ⚠⚠ **AND A MANIFEST MUST DECLARE THAT BOT USER ITSELF — THE PASTE SKIPS THE CLICK THAT CREATES IT**
+
+### **Slack rejects any manifest carrying `oauth_config.scopes.bot` with no `features.bot_user`:** `OAuth requires bot_user`. *Both shipped manifests failed validation, so **PATH BUS step 1 could not be completed at all** — the bus-only path was the fix for a reported gap, and its very first action did not work.*
+
+```json
+  "features": { "bot_user": { "display_name": "Claude Code Bus", "always_online": false } },
+```
+
+★ **THE DEPENDENCY WAS ALREADY IN THIS FILE, ONE LINE ABOVE** — *"add `chat:write`. **Creates the bot user.**"* # **It sat in the CLICK path, which is the one that no longer needs it.** *The manifest route was added later and inherited the requirement without the sentence.*
+
+⛔ **AND THE MANIFEST WAS REVIEWED, NEVER EXECUTED.** *Same class as a guard whose condition is read and whose output never prints:* # **A MANIFEST THAT HAS NEVER BEEN PASTED HAS NEVER BEEN VALIDATED.** ✔ *Enforced statically now — `slack-post.mjs --self-test` fails if any manifest beside it declares bot scopes without a `bot_user`.*
+
 **b.** # ⛔ **DO NOT CLICK THE YELLOW BANNER.** ### **Scroll UP to *OAuth Tokens* and click "Reinstall to \<workspace\>" there.** → *trap 5 — this is the single most expensive trap in this file.*
 
 # ⚠ **THE REINSTALL ROTATES THE USER TOKEN AND BREAKS THE WORKING CONNECTION** → *trap 3.* ### **Warn BEFORE the click, not after.**
