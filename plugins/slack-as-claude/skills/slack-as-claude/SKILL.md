@@ -1,30 +1,131 @@
 ---
 name: slack-as-claude
-description: Use when a repo needs Claude to post into Slack — whether connecting to a Slack app that already exists or building one from scratch. Covers the read-as-human / post-as-app identity split, the one-time machine-wide setup that every later repo inherits for free, and the five traps that reliably cost time.
+description: Use when a repo needs Claude to post into Slack, or to join one that already does — connecting to an existing Slack app, building one from scratch, or onboarding onto a clone someone else configured. Detects which of those states you are in before asking anything, covers the read-as-human / post-as-app identity split, and walks the human-only steps one at a time with the trap for each attached to it.
 ---
 
 # Slack from a Claude session
 
 **Goal: a Claude session in any repo can post into Slack under the app's own identity, and read the workspace as the human.**
 
-# ★★ START HERE — MOST OF THE TIME THERE IS NOTHING TO SET UP.
+# § 0. START HERE — **WORK OUT WHICH STATE YOU ARE IN. DO NOT ASK THE READER TO.**
 
-### **The Slack MCP server is registered at `--scope user`, and the bot token lives in a user environment variable. Both are MACHINE-WIDE.** *Once one repo has done the setup, every other repo on that machine already has it.*
+## ★★★★★ **THIS SKILL IS INVOKED, NOT READ.** ### **So its first act is a PROBE, not a table someone has to match themselves against.**
+
+# ⛔⛔ AND BE CLEAR ABOUT WHOSE JOB THIS IS: **YOU CANNOT PERFORM MOST OF THESE STEPS.**
+
+### **Creating a Slack app, copying a token, running `setx`/`export`, and `/invite` are all HUMAN actions, outside the repo, in a browser and a terminal you do not drive.** # **Your job is: DIAGNOSE THE STATE, THEN WALK THE HUMAN THROUGH WHAT REMAINS, WITH CONCRETE VALUES ALREADY SUBSTITUTED.**
+
+⚠ *Stating this stops the other failure — an agent trying to script around a step it cannot take.* ★ **"Run this command" is not delegation if you are the one who cannot run it.**
+
+## THE PROBE — in this order, and it sends NOTHING
+
+| **1** | **Does `<git root>/.claude/slack-workspace.json` exist?** ⛔ **If yes, this repo is bus-configured — DO NOT CONSULT `claude mcp list` AT ALL.** *It answers a question about the MCP half that a bus-only repo does not have.* **Read `token_env` and `team_id` out of it now; every placeholder below resolves from this file.** |
+| :-: | --- |
+| **2** | **Run the dry-run and read line 2.** *It resolves declaration → `token_env` → env/registry → `auth.test` → binding in ONE pass, and sends nothing.* |
+| **3** | **Optionally, confirm the invite without posting:** `slack-watch.mjs --channel <CHANNEL_ID> --once`. ✔ **A bot that was never invited returns `not_in_channel`; a bad id returns `channel_not_found`; a member returns history.** *Measured across all three — so a missing `/invite` is detectable read-only.* |
 
 ```
-claude mcp list
+node <plugin>/skills/slack-as-claude/slack-post.mjs --channel <CHANNEL_ID> --text x --dry-run
 ```
+
+### **THE VERDICT LINE, AND WHAT EACH ONE MEANS:**
+
+| `[matches <path>]` | ✔ **Configured and enforced. Nothing to do → §3 POSTING.** |
+| :-- | --- |
+| # ⚠ **`[no repo declaration - unenforced]`** | ### **THE TOKEN WORKS AND NOTHING IS PROTECTING IT.** *The repo declares no binding, so it will post to whatever workspace the machine's token belongs to and report `ok: true` doing it.* # **This is not "set up" — it is "set up and unguarded", and it LOOKS like success.** ✔ *Fix: write the declaration → §2. One file, no secret in it.* |
+| **`[DOES NOT MATCH <path>]`** / **`WORKSPACE MISMATCH - refusing to send.`** | **Bound, and the token belongs to a different workspace.** *Fix whichever is wrong — the declaration or the variable. It REFUSES, so nothing has leaked.* |
+| **`<TOKEN_VAR> is not set.`** | **No credential on this machine** *(or, on macOS/Linux, the session has not restarted)* **→ the stash step in SECTION A · 5.** |
+| **plugin reported not installed** | `claude plugin install slack-as-claude@claude-skills` **→ SECTION A · 2.** |
+
+## ⛔ **ONLY IF STEP 1 FOUND NO BINDING FILE AND THE READER WANTS THE MCP HALF** does `claude mcp list` mean anything:
 
 | # **You only want the SESSION BUS** *(post · watch · claim between concurrent sessions)* | # **→ PATH BUS.** ### **Two bot scopes and an invite. Skip everything else in this file.** ★ *The scripts call four bot-token endpoints and nothing else — measured, not assumed.* |
 | :-- | --- |
+| # **You cloned a repo that ALREADY uses this** | # **→ SECTION A.** *Plugin install, your own app, token, invite, verify.* |
+| # **New session in a clone that is already set up** | # **→ SECTION B. Nothing to do.** |
 | # **Already working here, adding a SECOND WORKSPACE** | # **→ PATH SECOND.** *A second app, a distinct token variable, and a binding file. `claude mcp add` and the OAuth authorize are NOT repeated.* |
 | **`slack … ✓ Connected`** | # **→ Nothing to install. Go to §3 POSTING.** *You need one thing only: the channel id.* ⚠ **`✓ Connected` does NOT guarantee the `mcp__slack__*` tools are exposed to your session** — *if they are absent, §3's human route gets you the id anyway.* |
-| :-- | --- |
-| **Listed but `! Needs authentication`** | → **§6 WHEN IT BREAKS.** *Thirty seconds, not a rebuild.* |
+| **Listed but `! Needs authentication`** | → **§7 WHEN IT BREAKS.** *Thirty seconds, not a rebuild.* |
 | **Not listed, but the workspace already has the Slack app** | → **PATH A.** *New machine, existing app. Two commands.* |
 | **Not listed, no app anywhere** | → **PATH B.** *First time in this workspace. ~20 minutes, mostly clicking.* |
 
-# ⛔ **DO NOT run PATH B because a new repo "doesn't have Slack yet."** *A repo never has Slack. The machine does.*
+# ⛔ **DO NOT run PATH B because a new repo "doesn't have Slack yet."** *The MCP registration and the OAuth authorize are machine-wide.*
+
+## ⚠⚠ BUT "MACHINE-WIDE" IS NO LONGER TRUE OF THE WHOLE THING, AND THE OLD HEADER SAID IT WAS
+
+### **It used to read: *"Both are MACHINE-WIDE — once one repo has done the setup, every other repo on that machine already has it."* # THAT PREDATES THE BINDING, AND IT POINTS A READER AWAY FROM THE SETUP THEY NEED.**
+
+| **MACHINE-WIDE** *(still true)* | The `slack` MCP registration at `--scope user`, and the OAuth authorize behind it. |
+| :-- | --- |
+| # **PER REPO** *(the part that changed)* | ### **The DESTINATION — `.claude/slack-workspace.json`, committed, in the checkout.** ### **And with `token_env`, the CREDENTIAL too: a second repo naming `SLACK_BOT_TOKEN_B` has neither the destination nor the variable until someone sets them.** |
+
+★ **So a second repo on the same machine is NOT automatically ready, and a reader told otherwise goes looking for a problem instead of doing the four steps in SECTION A.**
+
+---
+
+# § 0b. HOW TO WALK THE HUMAN STEPS — **ONE AT A TIME, WITH A CHECKPOINT**
+
+## ★★★★★ **THE EIGHT GAPS IN THIS FILE'S PATH BUS WERE NOT FOUND BY READING IT. THEY WERE FOUND BY EXECUTING IT** — *one screen at a time, the human reporting what was actually there.*
+
+### **And every one of them had the SAME SHAPE: the information existed somewhere in this file, and was not delivered at the moment it was needed.**
+
+- *"AI agent is preselected"* — **useful BEFORE the click. Useless after.**
+- *Trap 1 says the install fails* — **as a blanket warning it created the wrong expectation; at that screen, scoped to the manifest being pasted, it would have been right.**
+- *The Verification Token sits unmasked* — **worth knowing BEFORE a screenshot.**
+- *"OAuth Tokens is the third `h3`"* — **matters only in the second someone is scanning that page.**
+
+# **A TRAP TABLE 400 LINES BELOW THE STEP IT APPLIES TO IS DOCUMENTATION. THE SAME SENTENCE DELIVERED ONE SCREEN EARLY IS A SAVE.**
+
+| # **Present ONE step, then WAIT.** | *Do not dump the list. The human's report — a screenshot, an error string, "it says X" — is the input that advances the walkthrough.* |
+| :-- | --- |
+| # **Say what SUCCESS looks like.** | ### **After each action there is something observable: a dialog, a URL, an error, a token page. Name it, so a wrong turn surfaces AT THE STEP instead of three steps later.** ⚠ *Several of the eight gaps are exactly "the file never says what success looks like here".* |
+| # **Attach the trap to ITS step.** | **In addition to the trap table, not instead of it.** |
+| # **Say what to send back** | *when a step does not go as described.* |
+| # **Substitute REAL VALUES.** | **You read `token_env` in the probe, so the instruction is `setx SLACK_BOT_TOKEN_ACME …`, never `setx <TOKEN_VAR> …`.** |
+
+## ⚠ THE SKILL MUST HARD-CODE NO WORKSPACE'S VALUES — **BUT A PLACEHOLDER IS NOT A USABLE INSTRUCTION EITHER**
+
+### **So every placeholder has a documented source, and the step before it says how to get it:**
+
+| `<TEAM_ID>` · `<WORKSPACE>` | the repo's `.claude/slack-workspace.json`; else `auth.test` once a token exists |
+| :-- | --- |
+| `<TOKEN_VAR>` | that same file's `token_env` — **else `SLACK_BOT_TOKEN`** |
+| `<CHANNEL_ID>` | the repo's own `CLAUDE.md` note *(§3 prescribes recording it)*; else **ask the human** |
+| # `<CHANNEL NAME>` | # ⛔ **ASK. THERE IS NO CONVENTION AND THIS SKILL PRESCRIBES NONE.** *This project's own two workspaces use **different names** — `#bus` in one, `#claude-bus` in the other.* **Guessing produces a confident instruction to invite a bot to a channel that does not exist.** |
+| `<APP NAME>` | chosen by whoever creates the app — **and in SECTION A that is the human you are talking to** |
+
+---
+
+# § A. **"I JUST CLONED A REPO THAT ALREADY USES THIS. WHAT DO I DO ON MY MACHINE?"**
+
+### **Verified end to end, with the operator's corrections folded in.** ⚠ **Walk it one step at a time — §0b — and substitute the real `token_env`, app name and channel as you go.**
+
+| **1** | **Open the repo in Claude Code.** *Trust is per-folder, persistent and one-time: a repo you have opened before needs no re-trust, and a committed `extraKnownMarketplaces` is picked up on the next session start regardless.* |
+| :-: | --- |
+| **2** | **In your terminal, FROM THE REPO ROOT:** `claude plugin install slack-as-claude@claude-skills` ### *From the root, because the marketplace is registered by the repo's own `.claude/settings.json`.* |
+| **3** | # **CREATE YOUR OWN APP — → PATH BUS.** ### **So the bus can tell people apart.** ⛔ *A shared token gives everyone ONE identity, collective rotation, and no way to revoke a single person.* ⚠ **Edit TWO manifest fields to your own name before pasting — `display_information.name` AND `features.bot_user.display_name` — and make them distinct from every teammate's.** |
+| **4** | **Get the token:** *Go to App Settings → **OAuth & Permissions** → under the **`OAuth Tokens`** heading → **Bot User OAuth Token** (`xoxb-…`).* ⚠ **NOT at the top of that page.** |
+| **5** | # **STASH IT — IN YOUR OWN TERMINAL, NEVER PASTED INTO A CHAT.** *(the two forms below are NOT variants of one command)* |
+| **6** | **In Slack, in the workspace, in the channel: `/invite @<APP NAME>`.** *Per-channel and permanent.* ⛔ **Ask which channel — do not assume a name.** |
+| **7** | **Verify with the §0 dry-run. Nothing is sent. Line 2 must say `[matches …]`.** |
+
+## ⚠⚠ STEP 5 IS PER-OS, AND `setx` IS WINDOWS-ONLY
+
+| # **Windows** | `setx <TOKEN_VAR> "xoxb-..."` ### ✔ **Effective immediately**, *because the scripts fall back to reading `HKCU\Environment` when `process.env` does not have it.* |
+| :-- | --- |
+| # **macOS / Linux** | # ⛔ **`setx` DOES NOT EXIST.** ### **Add `export <TOKEN_VAR>="xoxb-..."` to `~/.zshrc` or `~/.bashrc`, THEN RESTART THE SESSION.** ⚠ *There is no registry fallback on these platforms, so a fresh `export` is invisible to an already-running process — see §2.* |
+
+★ **`<TOKEN_VAR>` is not a placeholder you leave in.** *You read it from the repo's `token_env` during the probe, so what you present is `setx SLACK_BOT_TOKEN_ACME "xoxb-..."`.*
+
+---
+
+# § B. **"NEW SESSION, IN A CLONE THAT IS ALREADY SET UP. IS THERE ANYTHING TO DO?"**
+
+# ✔ **NO. NOTHING.** ### **Say so plainly, because the routing table used to imply otherwise.**
+
+### **The app exists, the bot is already in the channel, the channel id is recorded in the repo, and the token is on the machine.** **One dry-run confirms it** *(§0 — it sends nothing)*, **and §0's verdict table covers every way it can come back wrong.**
+
+# ⛔ **DO NOT RUN PATH A OR PATH B HERE.** ### *Both create or connect an app that already exists.* ⚠ **This is the single most likely wrong turn in the whole file, because the old triage keyed on `claude mcp list` — which shows NOTHING for a bus-only setup, and so routed a perfectly configured repo to "set it up from scratch".**
 
 ---
 
