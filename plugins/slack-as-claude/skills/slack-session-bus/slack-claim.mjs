@@ -94,22 +94,45 @@ function tokenVar() {
   }
 }
 
+function envFromRegistry(name) {
+  if (process.platform !== 'win32') return null;
+  try {
+    const out = execFileSync('reg', ['query', 'HKCU\\Environment', '/v', name], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const m = out.match(new RegExp(name + '\\s+REG_(?:EXPAND_)?SZ\\s+(\\S+)'));
+    return m ? m[1] : null;
+  } catch {
+    return null; /* not there either */
+  }
+}
+
+/**
+ * ⛔ THE PRECEDENCE HAZARD - full note in slack-post.mjs. `process.env` wins, which is right
+ * for an explicit override and wrong after a ROTATION, when the inherited value is the old
+ * one and a restart is a silent no-op for any shell that still carries it.
+ *
+ * ⚠ It matters here for a different reason than in the watcher: this script's exit code IS
+ * its answer. An auth failure from a stale token surfaces as exit 1, which is INDISTINGUISH-
+ * ABLE FROM LOSING A CLAIM - so a credential problem would read as "stand down, someone else
+ * holds it" and the work would silently not get done.
+ *
+ * ⛔ NEVER PRINT EITHER VALUE.
+ */
 function botToken() {
   const VAR = tokenVar();
-  if (process.env[VAR]) return process.env[VAR];
-  if (process.platform === 'win32') {
-    try {
-      const out = execFileSync('reg', ['query', 'HKCU\\Environment', '/v', VAR], {
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'ignore'],
-      });
-      const m = out.match(new RegExp(VAR + '\\s+REG_(?:EXPAND_)?SZ\\s+(\\S+)'));
-      if (m) return m[1];
-    } catch {
-      /* not there either */
-    }
+  const fromEnv = process.env[VAR];
+  const fromReg = envFromRegistry(VAR);
+  if (fromEnv && fromReg && fromEnv !== fromReg) {
+    console.error(
+      `[claim] ⚠ ${VAR} DIFFERS between this process's environment and HKCU\\Environment.\n` +
+        '        The environment wins and is a SNAPSHOT from launch, so after a rotation it is\n' +
+        '        the OLD value. ⛔ An auth failure here exits 1, which is indistinguishable\n' +
+        `        from losing a claim. Relaunch with it unset:  env -u ${VAR} node <script> …`,
+    );
   }
-  return null;
+  return fromEnv || fromReg || null;
 }
 
 function ownPlugin() {
