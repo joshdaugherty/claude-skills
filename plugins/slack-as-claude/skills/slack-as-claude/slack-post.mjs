@@ -318,6 +318,7 @@ const OPTIONS = {
     to: { type: 'string' },
     type: { type: 'string' },
     closes: { type: 'string' },
+    released: { type: 'string' },
     project: { type: 'string' },
     user: { type: 'string' },
     machine: { type: 'string' },
@@ -398,6 +399,11 @@ const USAGE =
       '  --to / --type   routing for a session bus, emitted as context elements so a\n' +
       '                  reader can parse them. Putting them in the body does not work.\n' +
       '                  type: request reply claim done fail status, or an x- prefix.\n' +
+      '  --released <v>  the version a --type release announces, as a context element.\n' +
+      '                  A CLAIM ON A BUS, NOT A READING OF A DISK - --doctor reports it\n' +
+      '                  and never acts on it. Required with --type release, and refused\n' +
+      '                  on any other type, because a version element nobody reads is a\n' +
+      '                  field that posts successfully and is counted by no one.\n' +
       '  --closes <ts>   which CLAIM a done/fail discharges - NOT the task. Mirrors\n' +
       '                  supersedes: on a takeover; without it a thread records what was\n' +
       '                  overridden but not what was fulfilled. Passing the thread parent\n' +
@@ -520,7 +526,7 @@ function sectionBlocks(text) {
  * `x-` prefixed values pass unchecked, so extending the vocabulary stays possible and
  * a custom type is VISIBLY custom rather than indistinguishable from a typo.
  */
-const KNOWN_TYPES = ['request', 'reply', 'claim', 'done', 'fail', 'status'];
+const KNOWN_TYPES = ['request', 'reply', 'claim', 'done', 'fail', 'status', 'release'];
 
 /**
  * ⛔⛔ POSTING A CLAIM IS NOT WINNING A CLAIM - AND THIS IS THE TOOL THAT MAKES IT
@@ -576,6 +582,30 @@ if (a.closes && a['thread-ts'] && a.closes === a['thread-ts']) {
       '\n' +
       '  The value you want is the ts of the CLAIM being discharged - slack-claim.mjs\n' +
       '  prints it when it posts one.',
+    2,
+  );
+}
+
+/**
+ * ⚠ THE TWO HALVES OF A RELEASE ANNOUNCEMENT TRAVEL TOGETHER OR NOT AT ALL.
+ *
+ * A `type: release` with no version announces nothing a reader can use, and a `released:`
+ * on any other type puts a version where no reader looks for one. Both fail the same way
+ * this project keeps finding: posted successfully, counted by nobody.
+ */
+if (a.type === 'release' && !a.released) {
+  die(
+    '--type release needs --released <version>.\n' +
+      '  A release announcement with no version announces nothing a reader can act on,\n' +
+      '  and --doctor reads the version off the context element, never the body.',
+    2,
+  );
+}
+if (a.released && a.type !== 'release') {
+  die(
+    `--released was given with --type ${a.type ?? '(none)'}.\n` +
+      '  The version element is only read on a release announcement; anywhere else it is\n' +
+      '  a field no reader looks at.',
     2,
   );
 }
@@ -676,6 +706,17 @@ if (!a['as-app']) {
   // ts, then done - but in a thread where a takeover happened it is NOT, and that is
   // precisely the thread where you need to know which claim actually did the work.
   if (a.closes) elements.push({ type: 'mrkdwn', text: `closes: \`${a.closes}\`` });
+  // ★ THE VERSION OF A RELEASE, AS A CONTEXT ELEMENT - a peer's design, and the whole
+  // point is that it is a CLAIM ON A BUS, NOT A READING OF A DISK. It says "someone said
+  // they cut this", never "this is installable here". --doctor reports it and never acts
+  // on it, in the same vocabulary it uses for PEERS.
+  //
+  // Why it exists: `released` `installed` and `resident` drift, and all three directions
+  // were hit in one day, each reporting success. The gap between CUTTING and INSTALLING
+  // is currently visible only to whoever cut - and at one point the only place a released
+  // version existed on this machine was inside a Slack message body, which is the one
+  // surface --doctor could not read.
+  if (a.released) elements.push({ type: 'mrkdwn', text: `released: \`${a.released}\`` });
 
   if (project) elements.push({ type: 'mrkdwn', text: `project: \`${project}\`` });
   if (session) elements.push({ type: 'mrkdwn', text: `session: \`${session}\`` });
