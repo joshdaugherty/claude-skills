@@ -2036,7 +2036,20 @@ if (a['announce-install']) {
           { type: 'mrkdwn', text: `session: \`${a.session}\`` },
           { type: 'mrkdwn', text: `installed: \`${now.version}\`` },
           { type: 'mrkdwn', text: `from: \`${prev.version}\`` },
+          // ⛔ WHETHER `from:` IS A FACT OR A GUESS, SAID ON THE MESSAGE ITSELF. Without
+          // --from it is the second-newest directory IN THE CACHE, which is NOT "what you
+          // were running before": a machine that jumped 2.12 -> 2.17 still has the
+          // intermediate directories sitting there, and the notice would confidently name
+          // a baseline the reader never ran. This file's own text says the RESIDENT version
+          // is uninspectable - so `from:` cannot be read, only inferred, and it must not be
+          // stated in the same voice as `installed:`, which really is read off disk.
+          { type: 'mrkdwn', text: `baseline: \`${a.from ? 'given' : 'inferred from cache'}\`` },
           { type: 'mrkdwn', text: `restart: \`${code.length ? 'required' : 'not needed'}\`` },
+          // ⚠ THE ONE MESSAGE TYPE WHOSE SUBJECT IS VERSIONS SHIPPED WITHOUT DECLARING ITS
+          // OWN. Every other message carries `plugin:`, skew detection KEYS on it, and this
+          // one omitted it - so an x-update could never be skew-flagged. A version
+          // announcement is the last place that facet should be optional.
+          ...(OWN_PLUGIN ? [{ type: 'mrkdwn', text: `plugin: \`${OWN_PLUGIN}\`` }] : []),
         ],
       },
     ],
