@@ -400,6 +400,17 @@ function parseMessage(msg) {
 // where double-execution is destructive.
 
 const PRESENCE_TYPE = 'x-presence';
+/**
+ * ⛔ THIS WAS WRITTEN AND NEVER READ. `--retire` announced a departure that no reader
+ * honoured - and the bug above hid it, because a non-beater vanished from the roster after
+ * 90s anyway. Fixing the age-out exposed it immediately: a retired session started
+ * LINGERING as STALE, so the clean-exit command made you MORE visible, not less.
+ *
+ * ★ Which is the argument for honouring it: an announced retirement is POSITIVE EVIDENCE
+ * of departure, and this file already prefers that to inference everywhere else. Silence
+ * means "no information"; `x-retired` means "I left".
+ */
+const RETIRED_TYPE = 'x-retired';
 
 
 async function slackPost(method, body) {
@@ -757,6 +768,21 @@ async function roster() {
     const p = presenceOf(m);
     if (p && (!seen.has(p.session) || seen.get(p.session).beat < p.beat)) seen.set(p.session, p);
   }
+  // An ANNOUNCED departure, which beats anything inferred from silence. Kept as the ts of
+  // the retirement so it can be compared against later activity: a session that retires
+  // and then speaks again has plainly come back, and the newer evidence wins.
+  const retired = new Map();
+  for (const m of msgs) {
+    const { meta } = parseMessage(m);
+    if (meta.type !== RETIRED_TYPE || !meta.session) continue;
+    const ts = Number(m.ts) || 0;
+    if (ts > (retired.get(meta.session) ?? 0)) retired.set(meta.session, ts);
+  }
+  for (const [label, ts] of retired) {
+    const p = seen.get(label);
+    if (p && p.beat <= ts) seen.delete(label);
+  }
+
   // Sessions that have SPOKEN but publish no presence. Formerly invisible here entirely.
   const spoke = new Map();
   for (const m of msgs) {
@@ -765,13 +791,38 @@ async function roster() {
     const ts = Number(m.ts) || 0;
     if (ts > (spoke.get(meta.session) ?? 0)) spoke.set(meta.session, ts);
   }
+  // ⚠ The retirement announcement is ITSELF a message from that session, so it lands in
+  // `spoke` and would render the retiree as freshly "active" - the clean-exit command
+  // making you look MORE alive than saying nothing. Drop a session whose last word was
+  // goodbye; keep one that spoke again afterwards.
+  for (const [label, ts] of retired) {
+    if (!a.all && (spoke.get(label) ?? 0) <= ts) spoke.delete(label);
+  }
   // Rendered AFTER the beating sessions, below - a roster is read top-down for "who is
-  // working", and a non-beater is the weaker answer. Only recent ones are shown by
-  // default: a label that neither beats NOR has spoken lately is gone, and listing every
-  // one-off that ever posted is precisely the graveyard the age-out exists to prevent.
+  // working", and a non-beater is the weaker answer. Aged out at GONE_AFTER_SEC, the same
+  // bound the beating list uses, so listing every one-off that ever posted does not turn
+  // the roster into the graveyard the age-out exists to prevent.
+  //
+  // ⛔⛔ THIS FILTER USED STALE_FLOOR_SEC, AND IT DELETED LIVE SESSIONS FROM THE DEFAULT
+  // VIEW. Ninety seconds. A peer that had posted 10 minutes earlier and was working RIGHT
+  // THEN did not appear at all - not stale, ABSENT - while a session DEAD for three hours
+  // stayed listed, because the beating list ages out at four. The weaker signal was held
+  // to a threshold 160x stricter than the stronger one.
+  //
+  // ★ ONE CONSTANT WAS ANSWERING TWO DIFFERENT QUESTIONS:
+  //     STALE_FLOOR_SEC  is this beat fresh enough to call the session ALIVE?
+  //     GONE_AFTER_SEC   has this label been silent long enough to stop LISTING it?
+  // Reusing the first for the second reads as a tidy shared threshold and is a category
+  // error. ABSENCE is the worst possible rendering of it, too: a roster that omits a
+  // session says "nobody is there" in exactly the voice it uses when nobody is.
+  //
+  // ⚠ AND IT MADE THE LINE BELOW UNREACHABLE. `age <= STALE_FLOOR_SEC ? 'active' : 'STALE'`
+  // could never take its STALE branch by default, because this filter had already dropped
+  // every row that would have used it. THE DEAD BRANCH IS THE TELL: the renderer knew
+  // about a state the filter had made impossible, and neither half looked wrong alone.
   const active = [...spoke]
     .map(([label, ts]) => [label, Math.max(0, Math.floor(now - ts))])
-    .filter(([, age]) => a.all || age <= STALE_FLOOR_SEC)
+    .filter(([, age]) => a.all || age <= GONE_AFTER_SEC)
     .sort((x, y) => x[1] - y[1]);
 
   if (!seen.size && !active.length) {
@@ -1212,7 +1263,7 @@ if (a.retire) {
   // Broadcast, because it changes what a peer should DO (a held claim just became free).
   const rel = (a.releases ?? '').split(',').map((x) => x.trim()).filter(Boolean);
   const elements = [
-    { type: 'mrkdwn', text: 'type: `x-retired`' },
+    { type: 'mrkdwn', text: `type: \`${RETIRED_TYPE}\`` },
     { type: 'mrkdwn', text: `session: \`${selfLabel}\`` },
   ];
   if (rel.length) elements.push({ type: 'mrkdwn', text: `releases: \`${rel.join(' ')}\`` });
