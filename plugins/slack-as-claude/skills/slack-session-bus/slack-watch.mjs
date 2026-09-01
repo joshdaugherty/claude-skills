@@ -30,7 +30,7 @@ const HISTORY = 'https://slack.com/api/conversations.history';
 // Kept in step with slack-post.mjs. A type outside this set is either a deliberate
 // custom one (x- prefixed) or a TYPO - and a typo'd claim is counted by nobody while
 // the sender believes it claimed. Flag it loudly rather than letting it pass as noise.
-const KNOWN_TYPES = ['request', 'reply', 'claim', 'done', 'fail', 'status'];
+const KNOWN_TYPES = ['request', 'reply', 'claim', 'done', 'fail', 'status', 'release'];
 
 // ⚠ A BUS ACCUMULATES IDENTITIES AND NEVER RETIRES THEM. Every label that ever spoke is
 // a peer forever: dead sessions, one-off test fixtures, a name used once by mistake.
@@ -1330,6 +1330,26 @@ if (a.doctor) {
     }`,
   );
 
+  /**
+   * ★ ANNOUNCED - THE NEWEST VERSION ANY PEER SAYS IT CUT.
+   *
+   * ⛔⛔ THIS IS A CLAIM ON A BUS, NOT A READING OF A DISK, AND IT MUST NEVER RENDER AS AN
+   * INSTALL TARGET. It says only "someone said they cut this" - never "this exists here",
+   * never "install it". A peer proposed it and raised that objection against their own
+   * idea, which is why the constraint is in the design rather than bolted on: a release
+   * element that read as an install target would be one more confident surface over state
+   * it did not check, which is the failure this whole channel keeps producing.
+   *
+   * WHY IT EXISTS: `released` `installed` and `resident` drift, and all three directions
+   * were hit in one day, each reporting success - update with no bump, bump with no
+   * update, and an update that installed nothing. The gap between CUTTING and INSTALLING
+   * is otherwise visible only to whoever cut. At one point the only place a released
+   * version existed on this machine was inside a Slack message body, which is the one
+   * surface this tool could not read.
+   *
+   * It installs nothing and authorises nothing. It makes the gap legible from the end
+   * that did not cut it.
+   */
   // Peers, from the wire.
   // Count peers by SESSION, not by message. Messages arrive newest-first, so the first
   // sighting of a session is its most recent word: take that and ignore its history.
@@ -1345,6 +1365,23 @@ if (a.doctor) {
   const readable = read.ok;
   const msgs = read.messages;
   const now = Math.floor(Date.now() / 1000);
+
+  // The newest version any peer SAYS it cut. Placed here, below `msgs` and `now`, because
+  // it was first written above them - where it read an undefined binding, printed nothing,
+  // and threw nothing. A silent no-output is exactly what this whole file is about.
+  let announced = null;
+  for (const m of msgs) {
+    const mm = parseMessage(m).meta;
+    if (mm.type !== 'release' || !mm.released) continue;
+    if (!announced || cmpVer(mm.released, announced.version) > 0) {
+      announced = { version: mm.released, by: mm.session ?? '?', ts: m.ts };
+    }
+  }
+  if (announced) {
+    const age = Math.max(0, Math.round(now - Number(announced.ts)));
+    console.log(`ANNOUNCED  ${announced.version}   (${announced.by} said so, ${age}s ago - a CLAIM, not a reading)`);
+  }
+
   const live = new Map();
   for (const m of msgs) {
     const p = presenceOf(m);
@@ -1476,6 +1513,20 @@ if (a.doctor) {
           '\n  Arm a watcher with:  --session <label> --heartbeat 60',
       );
     }
+  }
+
+  // ⚠ HEARSAY, AND LABELLED AS SUCH. A peer announcing a version is not evidence the
+  // version exists here - the clone may not have it, and nothing on this side has
+  // checked. So this prompts a HUMAN to look; it never asserts the version is real and
+  // never tells anyone to install it. Reported, not acted on.
+  if (announced && installed && cmpVer(announced.version, installed.version) > 0) {
+    asks.push(
+      `A PEER ANNOUNCED ${announced.version}, newer than the installed ${installed.version}.\n` +
+        `  ${announced.by} said so on the bus. THAT IS HEARSAY - nothing here has verified\n` +
+        '  the version exists, and the marketplace clone may not have it either. It is\n' +
+        '  worth a look precisely because cutting and installing are separate events that\n' +
+        '  drift. Verify with an update, and read the installed version, not the tick.',
+    );
   }
 
   if (available && installed && cmpVer(available.version, installed.version) > 0) {
