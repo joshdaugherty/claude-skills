@@ -1587,7 +1587,9 @@ if (a.doctor) {
           // the protocol document in the blind spot of the very check meant to report
           // what changed, and a release whose entire delta was SKILL.md reported as
           // nothing differing at all.
-          if (!f.endsWith('.mjs') && !f.endsWith('.md')) continue;
+          // .json too: the app manifests are product, not build metadata - a reader
+          // pastes them into Slack, so a change to one changes what gets installed.
+          if (!f.endsWith('.mjs') && !f.endsWith('.md') && !f.endsWith('.json')) continue;
           const mine = join(runRoot, skill, f);
           if (!existsSync(mine)) { differing.push(`${skill}/${f} (absent in yours)`); continue; }
           if (sameCode(mine, join(d, f)) === false) differing.push(`${skill}/${f}`);
