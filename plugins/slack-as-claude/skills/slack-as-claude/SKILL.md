@@ -15,7 +15,10 @@ description: Use when a repo needs Claude to post into Slack — whether connect
 claude mcp list
 ```
 
-| **`slack … ✓ Connected`** | # **→ Nothing to install. Go to §3 POSTING.** *You need one thing only: the channel id.* |
+| # **You only want the SESSION BUS** *(post · watch · claim between concurrent sessions)* | # **→ PATH BUS.** ### **Two bot scopes and an invite. Skip everything else in this file.** ★ *The scripts call four bot-token endpoints and nothing else — measured, not assumed.* |
+| :-- | --- |
+| # **Already working here, adding a SECOND WORKSPACE** | # **→ PATH SECOND.** *A second app, a distinct token variable, and a binding file. `claude mcp add` and the OAuth authorize are NOT repeated.* |
+| **`slack … ✓ Connected`** | # **→ Nothing to install. Go to §3 POSTING.** *You need one thing only: the channel id.* ⚠ **`✓ Connected` does NOT guarantee the `mcp__slack__*` tools are exposed to your session** — *if they are absent, §3's human route gets you the id anyway.* |
 | :-- | --- |
 | **Listed but `! Needs authentication`** | → **§6 WHEN IT BREAKS.** *Thirty seconds, not a rebuild.* |
 | **Not listed, but the workspace already has the Slack app** | → **PATH A.** *New machine, existing app. Two commands.* |
@@ -64,6 +67,50 @@ curl -s https://mcp.slack.com/.well-known/oauth-authorization-server
 
 ---
 
+# ★★★★★★ PATH BUS — **YOU ONLY WANT THE SESSION BUS. YOU NEED NONE OF THE MCP SETUP.**
+
+### **MEASURED, not assumed. The complete set of Slack endpoints all three scripts call:**
+
+```
+auth.test  ·  chat.postMessage  ·  conversations.history  ·  conversations.replies
+```
+
+## **All four are BOT-token endpoints. There is no `mcp__slack__` call and no user token anywhere in the scripts.** ⛔ **So routing a bus-only reader through PATH B — twenty user scopes, the Agents/MCP toggle, `claude mcp add`, the OAuth authorize, a matching callback port, and B4b's reinstall — imposes THIS FILE'S OWN WORST TRAP on a use case that needs two bot scopes.**
+
+| **1** | `api.slack.com/apps` → **Create New App** → **From a manifest** → paste **`slack-app-manifest_bus-only.json`** (beside this file) → pick the workspace |
+| :-: | --- |
+| **2** | **Install to Workspace**, and approve |
+| **3** | *OAuth & Permissions* → **Bot User OAuth Token** (`xoxb-…`) → stash it under **this repo's `token_env`**, or `SLACK_BOT_TOKEN` if it declares none |
+| **4** | In Slack: **`/invite @<the app>`** in the channel. *A bot that is not a member cannot post, and the error does not say so plainly.* |
+| **5** | Get the channel id — **ask the human** *(§3, and it is five seconds)* |
+
+### **That is the whole path.** *No MCP server, no user token, no OAuth flow, no callback port, no reinstall, no trap 5.* ✔ **`--doctor`, `--presence`, `--ping`, claiming and posting all work on this alone.**
+
+⚠ **YOU GIVE UP READING AS YOURSELF.** *Search, canvases, DMs, reading channels the bot is not in — all of that is the MCP half. Add it later via PATH B if you want it; nothing here has to be undone.*
+
+---
+
+# ★★★★★ PATH SECOND — **SAME MACHINE, ALREADY WORKING, ADDING ANOTHER WORKSPACE**
+
+### **PATH A is *existing app, NEW machine*. This is the inverse, and 2.13.0's binding exists for it.** ⚠ *A Slack app is bound to ONE workspace — Slack says so at creation: **"This can't be changed later."** So a second workspace means a second app, from the same manifest file.*
+
+| **NOT needed** | *`claude mcp add`* · *the OAuth authorize* · *the callback port* — **all machine-wide and already done.** ⛔ **Do not re-run them: `--scope user` is one registration, and a second authorize would move it, not add one.** |
+| :-- | --- |
+| **Needed** | **1.** New app in workspace B from the manifest file · **2.** Install · **3.** Stash its bot token under a **DISTINCT** variable, e.g. `SLACK_BOT_TOKEN_B` · **4.** `/invite` the bot · **5.** Declare the binding in repo B |
+
+```json
+// <repo-B>/.claude/slack-workspace.json
+{ "team_id": "T0…B", "team": "B", "token_env": "SLACK_BOT_TOKEN_B" }
+```
+
+### **`team_id` comes from `auth.test` on that workspace's token.** ✔ *Repo A keeps working untouched — it declares nothing, or declares A, and neither repo can post to the other's workspace: a mismatch REFUSES with exit 2.*
+
+# ⛔⛔ THE MCP **READ** PATH REMAINS SINGLE-WORKSPACE, AND THAT IS NOT SOLVED
+
+### **One `slack` MCP server at `--scope user` = one workspace you can read as yourself.** *Whether two `mcp.slack.com` registrations can hold different workspace authorizations at once is **UNVERIFIED** — stated rather than guessed.* # **Workspace B can be POSTED to correctly, or REFUSED. It cannot yet be READ.** ★ *For a bus-only second workspace this costs nothing, because the bus never reads as you.*
+
+---
+
 # PATH A — CONNECT (existing app, new machine)
 
 **You need from the user: the app's Client ID, its Client Secret, and the Bot User OAuth Token.** *All three are on `api.slack.com/apps/<app id>` — Client ID and Secret under **Basic Information**, the bot token under **OAuth & Permissions**.*
@@ -78,7 +125,7 @@ claude mcp add --transport http slack https://mcp.slack.com/mcp --scope user --c
 
 **A2.** `/mcp` → `slack` → authenticate. # **Then RESTART the session** *(→ trap 4).*
 
-**A3.** The user stashes the bot token — *`setx` on Windows, `export` in the profile elsewhere* → **§2**.
+**A3.** The user stashes the bot token — *`setx` on Windows, `export` in the profile elsewhere* → **§2**. ⚠ **UNDER THE NAME THE REPO DECLARES**, *not `SLACK_BOT_TOKEN` by reflex — see the box in §2.*
 
 # ✔ **Done. No Slack UI needed at all.**
 
@@ -88,39 +135,19 @@ claude mcp add --transport http slack https://mcp.slack.com/mcp --scope user --c
 
 ## B1 · Create the app from a manifest
 
-`api.slack.com/apps` → **Create an App** → **From a manifest** → pick the workspace.
+`api.slack.com/apps` → **Create New App** → **From a manifest** → paste → **pick the workspace** → *Step 1 of 2*.
 
-```json
-{
-  "display_information": {
-    "name": "Claude Code MCP",
-    "description": "Lets Claude Code connect to the Slack MCP server"
-  },
-  "oauth_config": {
-    "redirect_urls": ["http://localhost:8765/callback"],
-    "scopes": {
-      "user": [
-        "channels:history", "channels:read",
-        "groups:history", "groups:read",
-        "im:history", "im:read",
-        "mpim:history", "mpim:read",
-        "search:read.public", "search:read.private", "search:read.files",
-        "search:read.im", "search:read.mpim", "search:read.users",
-        "users:read", "users:read.email",
-        "files:read", "emoji:read",
-        "reactions:read", "reactions:write",
-        "chat:write"
-      ]
-    }
-  },
-  "settings": {
-    "org_deploy_enabled": false,
-    "socket_mode_enabled": false,
-    "is_hosted": false,
-    "token_rotation_enabled": false
-  }
-}
-```
+# ★★★ THE MANIFEST IS A FILE IN THIS SKILL, NOT A BLOCK IN THIS DOCUMENT.
+
+### **`slack-app-manifest.json`, beside this file.** *It was inline here and is not any more, because a manifest that exists twice drifts — and this project has spent two days on exactly that failure.* # **Copy the file. Do not retype from prose.**
+
+⚠ **IT NOW CARRIES BOT SCOPES AS WELL AS USER SCOPES, AND THAT IS THE FIX FOR A TRAP THE ORIGINAL CAUSED.** ### *The first version had 21 user scopes and **zero** bot scopes — so posting as the app did not work, the bot scopes were added by hand afterwards, and that edit is a scope change, which forces a reinstall and **rotates both tokens** (→ trap 3).* # **A NEW app created from this manifest gets them at install time, in one pass, with no reinstall.**
+
+| `user` | 21 read-leaning scopes plus `chat:write` — what the **MCP server** uses, acting as you |
+| :-- | --- |
+| `bot` | `chat:write` · `channels:history` · `groups:history` — what **`slack-post` / `slack-watch` / `slack-claim`** use |
+
+### **The bot set is derived from the four API methods the scripts actually call** — `chat.postMessage` · `chat.update` · `chat.delete` · `conversations.history` · `conversations.replies` — *not from guessing generously.* ⛔ `chat:write.customize` *is deliberately absent: it is only needed for a custom display name or avatar, and adding it is a scope change for a cosmetic feature.* *`groups:history` is there so a **private** bus channel works; drop it if yours is public.*
 
 - **`http://localhost:8765/callback` is plain HTTP and Slack accepts it.** *The HTTPS requirement has a localhost carve-out. Do not reach for ngrok or a tunnel.*
 - **The port is arbitrary but must match `--callback-port` forever after.** *Otherwise Claude Code picks a random port and the redirect will not match.*
@@ -151,7 +178,7 @@ claude mcp add --transport http slack https://mcp.slack.com/mcp --scope user --c
 
 ★ **No listener on the callback port is needed.** *Slack's reinstall completes server-side without bouncing through the redirect URL. A session once stood one up as insurance; it was never hit.*
 
-**c.** *OAuth & Permissions → **Bot User OAuth Token** (`xoxb-…`)* → user stashes it as `SLACK_BOT_TOKEN` (→ **§2**).
+**c.** *OAuth & Permissions → **Bot User OAuth Token** (`xoxb-…`)* → user stashes it under **the name this repo declares in `token_env`**, or `SLACK_BOT_TOKEN` if it declares none (→ **§2**).
 
 ## B5 · Give the app an icon *(optional, but it is the app's face in every channel)*
 
@@ -211,9 +238,9 @@ verify      : auth.test on every send; a mismatch REFUSES with exit 2, naming BO
 
 ---
 
-| **Windows** | `setx SLACK_BOT_TOKEN "xoxb-..."` |
+| **Windows** | `setx <TOKEN_VAR> "xoxb-..."` — *where `<TOKEN_VAR>` is the repo's `token_env`, else `SLACK_BOT_TOKEN`* |
 | :-- | --- |
-| **macOS / Linux** | `export SLACK_BOT_TOKEN="xoxb-..."` *in the shell profile* |
+| **macOS / Linux** | `export <TOKEN_VAR>="xoxb-..."` *in the shell profile* |
 
 # ⚠⚠ SETTING IT DOES NOT MAKE IT VISIBLE TO THE RUNNING SESSION.
 
@@ -374,7 +401,17 @@ node -e 'fetch("https://slack.com/api/auth.test",{method:"POST",headers:{Authori
 
 ## ★ Getting the channel id
 
-**Resolve it through MCP** (`mcp__slack__slack_search_channels`), **then hard-code it.** ⚠ *The bot token cannot look it up — `search_channels` runs on the USER token and the bot has no `channels:read`.*
+# ⚠⚠ TWO ROUTES, AND THE DOCUMENTED ONE CAN BE UNAVAILABLE WHILE ITS PRECONDITION READS AS SATISFIED
+
+| **1 · ASK THE HUMAN. FIVE SECONDS, NO TOOLING.** | ### **Right-click the channel → Copy link → the `C…` segment.** *Or channel name → About.* # **This works when nothing else does, and it was missing from this file entirely.** |
+| :-- | --- |
+| **2 · Through MCP** | `mcp__slack__slack_search_channels` — *fine when the tools are actually exposed.* |
+
+## ⛔ **`claude mcp list` REPORTING `✔ Connected` DOES NOT MEAN THE `mcp__slack__*` TOOLS ARE EXPOSED TO YOUR SESSION.** ### *Observed: connected, and the tools absent.* ★ *A session that trusts the status line goes off to debug MCP instead of asking a question that takes five seconds.*
+
+⚠ **AND THE BOT TOKEN GENUINELY CANNOT SUBSTITUTE** — *measured, not assumed:* `conversations.list` **→ `missing_scope`.** *The bot has no `channels:read`, deliberately, and adding it is a scope change → reinstall → trap 3. Ask the human instead.*
+
+**Resolve it, then hard-code it.** ⚠ *The bot token cannot look it up — `search_channels` runs on the USER token and the bot has no `channels:read`.*
 
 # ★★ THEN RECORD IT IN THE REPO'S `CLAUDE.md`.
 
@@ -475,7 +512,7 @@ curl -s -D - -o /dev/null -X POST https://slack.com/api/auth.test \
 | **`not_in_channel`** | **Bot not invited to that channel** → §3. |
 | **`invalid_token_type`** | **A bot token was pointed at `mcp.slack.com`** — *the proven-impossible path. Use the script, not MCP.* |
 | **`$env:SLACK_BOT_TOKEN` is empty** | **Expected** → §2, read it from the registry. |
-| **`invalid_auth` / `token_revoked` on a post** | **The bot token is stale** — *someone reinstalled the app.* Re-copy it and re-run `setx`. |
+| **`invalid_auth` / `token_revoked` on a post** | **The bot token is stale** — *someone reinstalled the app.* Re-copy it and re-stash it **under the same name it already had** — `--doctor` and the scripts name that variable in their error, so read it there rather than assuming. |
 
 ---
 
