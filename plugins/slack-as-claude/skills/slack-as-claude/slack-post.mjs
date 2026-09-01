@@ -92,27 +92,41 @@ function tokenVar() {
   }
 }
 
+/**
+ * Read a user environment variable that may have been set AFTER this process launched.
+ *
+ * ⚠ Windows `setx` writes to HKCU\Environment, but a running process keeps the environment
+ * block it inherited at launch - so a variable set after Claude Code started is invisible
+ * to process.env while plainly existing. This reads it anyway.
+ *
+ * ⛔⛔ THIS EXISTED, WAS ALREADY GENERIC, AND WAS REACHABLE FROM EXACTLY ONE PLACE. It sat
+ * inlined in botToken(), so a freshly-set TOKEN worked immediately while every freshly-set
+ * IDENTITY variable silently did not. Two sessions on one machine then announced DIFFERENT
+ * `machine:` values - one reading the alias, the other still reporting the raw hostname
+ * because it had launched first. Neither was wrong; nothing reported the disagreement.
+ *
+ * ★ The generalisation cost was one `export`-shaped edit: the parameterised version already
+ * existed because `token_env` forced it. A capability confined to the one caller that
+ * happened to need it first is the same shape as the knowledge this project keeps finding
+ * one line from where it was needed.
+ */
+function envFromRegistry(name) {
+  if (process.platform !== 'win32') return null;
+  try {
+    const out = execFileSync('reg', ['query', 'HKCU\\Environment', '/v', name], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const m = out.match(new RegExp(name + '\\s+REG_(?:EXPAND_)?SZ\\s+(\\S+)'));
+    return m ? m[1] : null;
+  } catch {
+    return null; /* not set there either */
+  }
+}
+
 function botToken() {
   const VAR = tokenVar();
-  if (process.env[VAR]) return process.env[VAR];
-
-  // Windows: `setx` writes to HKCU\Environment, but a running process keeps the
-  // environment block it inherited at launch - so a token set after Claude Code
-  // started is invisible to process.env while plainly existing. Read the registry.
-  if (process.platform === 'win32') {
-    try {
-      const out = execFileSync(
-        'reg',
-        ['query', 'HKCU\\Environment', '/v', VAR],
-        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
-      );
-      const m = out.match(new RegExp(VAR + '\\s+REG_(?:EXPAND_)?SZ\\s+(\\S+)'));
-      if (m) return m[1];
-    } catch {
-      /* not set there either */
-    }
-  }
-  return null;
+  return process.env[VAR] || envFromRegistry(VAR) || null;
 }
 
 // --- identity ---------------------------------------------------------------
@@ -188,7 +202,8 @@ function sessionLabel() {
   // the git branch: a branch is shared by every session working on it, so it cannot
   // identify one. Claude Code exposes no session *title* - summaries are written on
   // compaction, not live - so the id is the only per-session handle that exists.
-  if (process.env.CLAUDE_SESSION_NAME) return process.env.CLAUDE_SESSION_NAME;
+  const named = process.env.CLAUDE_SESSION_NAME || envFromRegistry('CLAUDE_SESSION_NAME');
+  if (named) return named;
   const id = process.env.CLAUDE_CODE_SESSION_ID;
   return id ? id.slice(0, 8) : null;
 }
@@ -937,9 +952,12 @@ if (!a['as-app']) {
   const project = a.project ?? projectLabel();
   const worktree = a.worktree ?? worktreeLabel();
   const session = a.session ?? sessionLabel();
-  const machine = a.machine ?? process.env.CLAUDE_SLACK_MACHINE ?? hostname();
+  const machine = a.machine ?? process.env.CLAUDE_SLACK_MACHINE ?? envFromRegistry('CLAUDE_SLACK_MACHINE') ?? hostname();
   const wantEmail =
-    a['user-email'] || ['1', 'true', 'yes'].includes((process.env.CLAUDE_SLACK_USER_EMAIL ?? '').toLowerCase());
+    a['user-email'] ||
+    ['1', 'true', 'yes'].includes(
+      (process.env.CLAUDE_SLACK_USER_EMAIL ?? envFromRegistry('CLAUDE_SLACK_USER_EMAIL') ?? '').toLowerCase(),
+    );
   const user = a.user ?? claudeUser(wantEmail);
 
   // Overriding the display name or avatar is the ONLY path that needs the
