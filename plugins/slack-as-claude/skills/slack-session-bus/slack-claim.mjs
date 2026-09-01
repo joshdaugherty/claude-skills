@@ -142,10 +142,19 @@ function botToken() {
   const fromReg = envFromRegistry(VAR);
   if (fromEnv && fromReg && fromEnv !== fromReg) {
     console.error(
+      // ⛔⛔ THIS STRING CARRIED THE FALSE CLAIM FOR ONE COMMIT AFTER IT WAS WITHDRAWN.
+      // The doc comment above was corrected; this was not - so the tool asserted "exits 1"
+      // and then exited 2, four lines apart, in the same run. Caught by a peer who ran it
+      // rather than read it.
+      //
+      // ★ THE COMMENT IS READ BY WHOEVER EDITS THIS FILE. THE STRING IS READ BY EVERYONE
+      // WHO RUNS IT. Fixing the first and not the second is the same defect as reviewing a
+      // generator instead of generating: I corrected what I was looking at rather than what
+      // the tool says.
       `[claim] ⚠ ${VAR} DIFFERS between this process's environment and HKCU\\Environment.\n` +
         '        The environment wins and is a SNAPSHOT from launch, so after a rotation it is\n' +
-        '        the OLD value. ⛔ An auth failure here exits 1, which is indistinguishable\n' +
-        `        from losing a claim. Relaunch with it unset:  env -u ${VAR} node <script> …`,
+        '        the OLD value, and restarting does not help while the parent shell holds it.\n' +
+        `        Relaunch with it unset:  env -u ${VAR} node <script> …`,
     );
   }
   return fromEnv || fromReg || null;
