@@ -1558,18 +1558,50 @@ if (a.doctor) {
     );
   }
 
-  if (announced && installed && cmpVer(announced.version, installed.version) > 0) {
+  /**
+   * ⛔⛔ TWO GAPS, TWO DIFFERENT COMMANDS. NAMING THE WRONG ONE SENDS THE READER TO A NO-OP.
+   *
+   * `announced > available`  the CLONE has not heard   -> marketplace update
+   * `available > installed`  the clone heard, the CACHE did not -> plugin install
+   *
+   * ★ FOUND BY THE HEARSAY ASK FIRING FOR THE FIRST TIME, AND ONLY A FIRING COULD HAVE
+   * FOUND IT. It said "verify with an update" against INSTALLED, which is right only
+   * while the clone is also behind. Run `marketplace update` and stop - which happens,
+   * because the two commands are separate and the first reports success on its own - and
+   * the state becomes announced 2.15.1 / available 2.15.1 / installed 2.15.0, where the
+   * advice sends you to re-run a command that will now change nothing AND REPORT SUCCESS.
+   * The exact no-op this same block warns about, recommended by it.
+   *
+   * ⚠ The second ask had the same defect in reverse: `available > installed` means the
+   * clone ALREADY has it, so `/plugin marketplace update` is the one command that cannot
+   * help - and it was the only one named.
+   */
+  if (announced && available && cmpVer(announced.version, available.version) > 0) {
     asks.push(
-      `A PEER ANNOUNCED ${announced.version}, newer than the installed ${installed.version}.\n` +
+      `A PEER ANNOUNCED ${announced.version}; the marketplace clone only has ${available.version}.\n` +
         `  ${announced.by} said so on the bus. THAT IS HEARSAY - nothing here has verified\n` +
-        '  the version exists, and the marketplace clone may not have it either. It is\n' +
-        '  worth a look precisely because cutting and installing are separate events that\n' +
-        '  drift. Verify with an update, and read the installed version, not the tick.',
+        '  the version exists. The CLONE has not heard of it, so this is the update case:\n' +
+        `    claude plugin marketplace update ${available.marketplace}\n` +
+        '  Then read the installed version rather than the tick - that command reports\n' +
+        '  success whether or not anything moved.',
+    );
+  } else if (announced && installed && cmpVer(announced.version, installed.version) > 0) {
+    asks.push(
+      `A PEER ANNOUNCED ${announced.version}, newer than the installed ${installed.version} -\n` +
+        `  and the clone ALREADY HAS ${available?.version ?? 'it'}. So the update is done and the\n` +
+        '  CACHE is what is behind. Updating again is a no-op that will report success:\n' +
+        `    claude plugin install ${pluginName}@${available?.marketplace ?? '<marketplace>'}\n` +
+        `  Still hearsay - ${announced.by} claimed it and nothing here has verified it.`,
     );
   }
 
   if (available && installed && cmpVer(available.version, installed.version) > 0) {
-    asks.push(`ASK THE HUMAN TO RUN:  /plugin marketplace update ${available.marketplace}\n  (installed ${installed.version}, available ${available.version})`);
+    asks.push(
+      `THE CLONE HAS ${available.version} AND THE CACHE HAS ${installed.version} - the update ran,\n` +
+        '  the install did not. These are SEPARATE COMMANDS and the first reports success\n' +
+        '  alone, so this state looks handled and is not:\n' +
+        `    claude plugin install ${pluginName}@${available.marketplace}`,
+    );
   }
   /**
    * ⛔⛔⛔ RUNNING < INSTALLED IS DEFINITIVE, AND THIS CHECK DID NOT EXIST.
