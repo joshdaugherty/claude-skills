@@ -489,6 +489,20 @@ const OPTIONS = {
  * ⚠ All three scripts did this, and the version reported only named one. Fixing the
  * reported one would have left the other two - the repo's own lesson about siblings.
  *
+ * ★★★ AND ON WHY THE OLD REMEDY SURVIVED SO LONG — a peer's formulation, and it is the
+ * argument for SCOPING rather than DELETING:
+ *
+ *     A TRUE CLAUSE CARRYING A FALSE CONCLUSION IS THE HARDEST KIND TO REMOVE,
+ *     BECAUSE DELETING IT LOOKS LIKE DELETING SOMETHING TRUE.
+ *
+ * "A fresh export cannot reach a running process" is TRUE, and a restart reads as its
+ * natural consequence - so every reviewer who checked the clause found it correct and
+ * left the conclusion attached to it. The restart branch is right for a terminal-launched
+ * editor and for Linux; it is wrong for a GUI-launched Mac. So it is CONDITIONED, not
+ * cut - which is the same move this project makes with a withdrawn reading: banner the
+ * correction, keep the text, and let the next reader see what was believed and why it
+ * failed.
+ *
  * ⛔⛔ AND THE CATCH MUST NOT REFERENCE `USAGE`: it is a const declared LATER in the file,
  * so reading it here throws a ReferenceError from inside the error handler - the message
  * prints and the process then dies on the recovery path. Found by running it, not by
@@ -695,6 +709,25 @@ const USAGE =
  * str.replace() calls whose anchor did not match. replace() returns the input
  * unchanged and raises NOTHING, so the script printed success twice and wrote a file
  * with no change in it. ASSERT THE ANCHOR, or verify the result afterwards.
+ *
+ * ⛔⛔⛔ AND A CASE IN THIS SUITE ONCE ASSERTED A DEFECT AND WENT GREEN. It read
+ * `non-win32 says to restart the session` and passed, because the message said exactly
+ * that - the advice SKILL.md deleted in the same release. A peer's formulation, and the
+ * tell is mechanical rather than a matter of care:
+ *
+ *     A TEST WHOSE EXPECTED VALUE WAS COPIED FROM THE OUTPUT IS NOT A TEST.
+ *     IT IS A SNAPSHOT WITH AN ASSERTION ATTACHED.
+ *
+ * The expectation and the implementation had the same author and the same source, so the
+ * suite could only ever confirm that the code still did what the code did. A REAL
+ * EXPECTATION HAS TO COME FROM SOMEWHERE THE IMPLEMENTATION CANNOT REACH - a spec, a
+ * platform fact, a user need.
+ *
+ * ⛔ AND THE PLATFORM FACT WAS IN THIS SAME REPOSITORY, IN THE SECTION THE TEST WAS
+ * CONTRADICTING. §A says in capitals that a restart on macOS is not a fix. The test
+ * asserted the opposite and went green. That is the unread-evidence pattern with a GREEN
+ * SUITE ON TOP OF IT - and a green suite is the one condition under which nobody goes
+ * looking at the file next door.
  */
 /**
  * ⛔⛔ A MANIFEST THAT HAS NEVER BEEN PASTED HAS NEVER BEEN VALIDATED.
