@@ -733,7 +733,27 @@ async function checkWorkspace(token, { enforce = true } = {}) {
 function workspaceLine({ who, want, verified }) {
   if (!who.ok) return `unverified (auth.test failed: ${who.error})`;
   const base = `${who.team} (${who.team_id})  ${who.url}`;
-  if (!want) return `${base}  [no repo declaration - unenforced]`;
+  /**
+   * ⛔⛔ TWO DIFFERENT STATES RENDERED AS ONE VERDICT, AND THE HIDDEN ONE PICKS A DIFFERENT
+   * WORKSPACE.
+   *
+   * `[no repo declaration - unenforced]` was emitted both when a git root exists and simply
+   * declares nothing - the documented default - AND when THERE IS NO GIT ROOT AT ALL, so the
+   * question was never asked. On a machine holding more than one workspace token the second
+   * silently falls back to SLACK_BOT_TOKEN and selects a DIFFERENT DESTINATION, rendered as
+   * clean output.
+   *
+   * ⚠ AND IT IS REACHABLE BY THE DOCUMENTED PATH, WHICH IS WHY IT IS NOT AN EDGE CASE: the
+   * skill header hands the reader the plugin's own directory, §0 tells them to run a
+   * --dry-run as its first act, and `cd`-ing to the script just named lands exactly here.
+   * MEASURED on a released copy - same command, same channel, only cwd differing, two
+   * different workspaces, both reported as fine.
+   */
+  if (!want) {
+    return gitRoot()
+      ? `${base}  [no repo declaration - unenforced]`
+      : `${base}  ⛔ [NO GIT ROOT HERE - nothing was consulted, so this is whatever ${tokenVar()} points at]`;
+  }
   return `${base}  [${verified ? 'matches' : 'DOES NOT MATCH'} ${want.path}]`;
 }
 
@@ -1898,8 +1918,39 @@ if (a.doctor) {
    * only a fact about a local clone, and it takes the identical fix: RENDER THE AGE, so
    * the number arrives with its own expiry rather than looking current.
    */
+  /**
+   * ⛔⛔⛔ THE AGE USED TO TRAIL THE VERSION IN A DETACHABLE WRAPPER, AND THREE LANES DETACHED
+   * IT WITHIN TWO HOURS.
+   *
+   *     old:  lane=slack-as-claude 2.18.4 (as of its beat 42s ago)
+   *
+   * Quoting the version alone is ONE copy-paste, and what survives - "still on 2.18.4" -
+   * reads as a present-tense fact about another machine. All three lanes corrected
+   * themselves; the third did so IN THE SAME PARAGRAPH where it corrected the identical lag
+   * about its own lane. That is what makes this a surface defect rather than three careless
+   * readers: the guard was computed, correct, and POSITIONALLY OPTIONAL.
+   *
+   * ★ Same failure the SKILL describes for notifications - AN ASSERTION STRIPPED OF ITS
+   * EVIDENCE - except manufactured by the reader, from a field that hands the evidence over
+   * in a wrapper that can be dropped without leaving a mark.
+   *
+   * ⚠ And it lands on the rule this file carries twice: DO NOT MAKE CLAIMS ABOUT A PEER'S
+   * MACHINE. `PEERS` is the one surface that tempts exactly that, because it is the only
+   * place a lane sees another lane's version at all.
+   *
+   * ✔ THE FIX IS TO MAKE NO PREFIX A WELL-FORMED CLAIM. `last said 2.18.4 42s ago` puts the
+   * tense in the sentence, and `@42s` welds the age to the number so a truncated quote is
+   * VISIBLY partial rather than plausibly complete. Dropping it now changes the meaning
+   * rather than merely the precision - which is the standing rule "make the tool the
+   * protocol": replace a judgement call with a branch.
+   *
+   * ✔ `--presence` CHECKED AND NOT AFFECTED, recorded rather than skipped: its rows are
+   * `alive <label> last beat 44s ago (every 60s)` and carry NO peer version at all. There is
+   * nothing in them to quote as a present-tense claim about another machine, which is the
+   * whole of the defect here. `PEERS` is the only surface that exposes a peer's version.
+   */
   const fmt = ([s, v]) =>
-    `${s}=${v.plugin ?? '?'}${v.beatAge === null ? '' : ` (as of its beat ${v.beatAge}s ago)`}`;
+    `${s}=last said ${v.plugin ?? '?'}${v.beatAge === null ? ' (no beat - age unknown)' : `@${v.beatAge}s-ago`}`;
   const alive = [...peers].filter(([, v]) => v.alive);
   const acting = [...peers].filter(([, v]) => v.active);
   const dead = [...peers].filter(([, v]) => !v.alive && !v.active);
