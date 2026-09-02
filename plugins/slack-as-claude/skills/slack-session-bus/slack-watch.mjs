@@ -339,17 +339,32 @@ function selfTest() {
   }
   const regBad = regCases.filter(([, got, want]) => JSON.stringify(got) !== JSON.stringify(want)).length;
 
+  /**
+   * Case-duplicate detection. Its fixtures are the real rows off a real machine, including
+   * the pair that a documented update could move only half of.
+   */
+  const D = (paths) => paths.map((pp, i) => ({ version: `2.${i}.0`, scope: 'project', projectPath: pp }));
+  const dupCases = [
+    ['case-variant pair is found', caseDuplicateRegistrations(D(['C:\a\b', 'c:\a\b'])).length, 1],
+    ['identical paths are NOT this defect', caseDuplicateRegistrations(D(['C:\a\b', 'C:\a\b'])).length, 0],
+    ['different directories are not a pair', caseDuplicateRegistrations(D(['C:\a', 'C:\b'])).length, 0],
+    ['user scope has no path and is skipped', caseDuplicateRegistrations([{ version: '1.0.0', scope: 'user', projectPath: null }]).length, 0],
+    ['a single project is not a pair', caseDuplicateRegistrations(D(['D:\only'])).length, 0],
+  ];
+  for (const [name, got, want] of dupCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  case-dup: ${name}`);
+  const dupBad = dupCases.filter(([, got, want]) => got !== want).length;
+
   // ⚠ EVERY counter must appear in BOTH the summary and the exit code. regBad was computed
   // and left out of both for one edit - seven cases that printed pass/FAIL and could not
   // fail the suite. A test that cannot fail is the defect this file documents two functions
   // up, committed while writing the note about it.
   console.log(
-    missing.length || bad || regBad
+    missing.length || bad || regBad || dupBad
       ? `\n${missing.length} FLAG(S) MISSING FROM USAGE${missing.length ? `: ${missing.join(', ')}` : ''}` +
-        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}`
+        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}`
       : '\nall pass',
   );
-  process.exit(missing.length || bad || regBad ? 1 : 0);
+  process.exit(missing.length || bad || regBad || dupBad ? 1 : 0);
 }
 
 if (a['self-test']) selfTest();
@@ -1578,6 +1593,48 @@ function registrationsFor(pluginName) {
  * for one directory differing only in drive-letter case - `C:\...` and `c:\...` - at two
  * different versions. A case-sensitive filter silently answers about one of them.
  */
+/**
+ * Registrations for ONE directory recorded under MORE THAN ONE spelling of its path.
+ *
+ * ⛔⛔ MEASURED, AND THE SECOND ONE IS UNREACHABLE RATHER THAN STALE. A real machine carried
+ * `C:\Users\Josh\Herd\uams-statamic` at 2.18.2 and `c:\Users\Josh\Herd\uams-statamic` at
+ * 2.16.0 - the same folder, since Windows matches paths case-insensitively. Running the
+ * documented update from that repo moved ONLY the uppercase row:
+ *
+ *     MOVED   project|C:\Users\Josh\Herd\uams-statamic   2.18.2 -> 2.18.7
+ *     same    project|c:\Users\Josh\Herd\uams-statamic   2.16.0
+ *
+ * ⛔ AND NO COMMAND CAN REACH THE OTHER. `update`, `install`, `uninstall`, `enable` and
+ * `disable` take `<plugin>` and `--scope` and NO path target; `tag`/`validate` take paths but
+ * operate on plugin SOURCE, not registrations. The project is selected by CWD alone - and
+ * Windows canonicalises a drive letter to uppercase, so NO cwd can produce `c:\`.
+ *
+ * ★★★ WHICH IS WHY THIS IS A SEPARATE CHECK. behindRegistrations() matches case-insensitively
+ * and therefore flags BOTH rows, while the remedy it prints can reach at most one.
+ * A DETECTOR BROADER THAN ITS REMEDY PRODUCES A PERMANENT, CORRECT, UNACTIONABLE WARNING -
+ * which is how a real signal gets trained out. Naming the unreachable row turns "run it
+ * again" into "stop, that one is not yours to fix".
+ *
+ * ⚠ UNVERIFIED, AND IT DECIDES SEVERITY RATHER THAN THE FIX: which registration a running
+ * session RESOLVES when two differ only by case. If it takes the uppercase row the extra one
+ * is inert; if it takes the other, a session runs 2.16.0 while every surface - the update's
+ * success line, `plugin list`, the cache - reports the new version.
+ */
+function caseDuplicateRegistrations(regs) {
+  const byPath = new Map();
+  for (const r of regs) {
+    if (!r.projectPath) continue;
+    const key = String(r.projectPath).toLowerCase();
+    if (!byPath.has(key)) byPath.set(key, []);
+    byPath.get(key).push(r);
+  }
+  // Only interesting when the SPELLINGS differ. Two identical paths would be a different
+  // defect and must not be reported as this one.
+  return [...byPath.values()].filter(
+    (g) => g.length > 1 && new Set(g.map((r) => r.projectPath)).size > 1,
+  );
+}
+
 function behindRegistrations(regs, cachedVersion, cwd) {
   if (!cachedVersion) return [];
   const here = String(cwd).toLowerCase();
@@ -1667,20 +1724,6 @@ if (a.doctor) {
       console.log(
         `REGISTERED ${String(r.version).padEnd(8)} ${String(r.scope).padEnd(8)}` +
           `${r.projectPath ?? '(user)'}${mine ? '   <- THIS PROJECT' : ''}`,
-      );
-    }
-    const behind = behindRegistrations(reg, installed?.version, process.cwd());
-    if (behind.length) {
-      asks.push(
-        `REGISTRATION IS BEHIND THE CACHE: ${behind.map((r) => `${r.scope}=${r.version}`).join(', ')} vs cached ${installed.version}.\n` +
-          '  A cache directory is NOT a registration. Scripts run by absolute path use the\n' +
-          '  cache and are fine; a SKILL INVOCATION resolves the registration and would load\n' +
-          '  the older copy. `claude plugin install` populates the cache and moves neither.\n' +
-          `    claude plugin update ${pluginName}@${installed.marketplace}\n` +
-          `    claude plugin update ${pluginName}@${installed.marketplace} --scope project\n` +
-          '  ⚠ UNVERIFIED whether a load resolves installPath or re-resolves the newest\n' +
-          '  directory. The field is named installPath and is pinned per scope, but nobody\n' +
-          '  here has observed a load. Stated so rather than assumed either way.',
       );
     }
   }
@@ -1864,6 +1907,59 @@ if (a.doctor) {
   // Verdict, by BYTES not by version number.
   console.log('');
   const asks = [];
+
+  /**
+   * ⛔⛔⛔ THESE TWO USED TO SIT ~190 LINES ABOVE, BESIDE THE `REGISTERED` PRINTING, AND
+   * REFERENCED `asks` BEFORE IT EXISTED. 2.18.6 AND 2.18.7 BOTH SHIPPED THAT.
+   *
+   * A TDZ ReferenceError, released: `--doctor` would die with "Cannot access 'asks' before
+   * initialization" the moment either condition held.
+   *
+   * ★★★ AND IT NEVER FIRED ON THE MACHINE THAT SHIPPED IT, BECAUSE BOTH ASKS ONLY RUN WHEN
+   * SOMETHING IS WRONG. Registration matched the cache here, so the branch was never taken
+   * and the crash was never seen. THE TOOL WORKED PERFECTLY UNTIL THE MOMENT IT HAD SOMETHING
+   * TO TELL YOU - the worst possible failure profile for a diagnostic, and "a guard that has
+   * never fired has never been read" one level past prose: the guard was not merely unread,
+   * IT WAS UNRUNNABLE.
+   *
+   * ⚠ Found by the case-duplicate ask, which fires on real state and so crashed on its first
+   * run. The older ask has the identical defect and would have waited for a user whose
+   * registration was behind - i.e. exactly the person it was written to help.
+   *
+   * Printing stays where it is; only the ask generation moved.
+   */
+  if (reg.length) {
+    const behind = behindRegistrations(reg, installed?.version, process.cwd());
+    if (behind.length) {
+      asks.push(
+        `REGISTRATION IS BEHIND THE CACHE: ${behind.map((r) => `${r.scope}=${r.version}`).join(', ')} vs cached ${installed.version}.\n` +
+          '  A cache directory is NOT a registration. Scripts run by absolute path use the\n' +
+          '  cache and are fine; a SKILL INVOCATION resolves the registration and would load\n' +
+          '  the older copy. `claude plugin install` populates the cache and moves neither.\n' +
+          `    claude plugin update ${pluginName}@${installed.marketplace}\n` +
+          `    claude plugin update ${pluginName}@${installed.marketplace} --scope project\n` +
+          '  ⚠ UNVERIFIED whether a load resolves installPath or re-resolves the newest\n' +
+          '  directory. The field is named installPath and is pinned per scope, but nobody\n' +
+          '  here has observed a load. Stated so rather than assumed either way.',
+      );
+    }
+    for (const g of caseDuplicateRegistrations(reg)) {
+      const sorted = [...g].sort((x, y) => cmpVer(y.version, x.version));
+      asks.push(
+        'TWO REGISTRATIONS FOR ONE DIRECTORY, differing only in path case:\n' +
+          g.map((r) => `    ${String(r.version).padEnd(8)} ${r.projectPath}`).join('\n') +
+          '\n  Windows matches paths case-insensitively, so these are the SAME folder.\n' +
+          '  ⛔ ONLY ONE IS REACHABLE. Every plugin subcommand selects the project by CWD\n' +
+          '  and takes no path argument, and Windows canonicalises a drive letter to\n' +
+          '  uppercase - so no cwd can address a lower-case-drive entry. MEASURED: the\n' +
+          '  documented update moved the upper-case row and left the other untouched.\n' +
+          `  ⚠ DO NOT re-run the update expecting ${sorted[sorted.length - 1].version} to move. It will not.\n` +
+          '  ⚠ And do NOT hand-edit installed_plugins.json - which registration a running\n' +
+          '  session actually RESOLVES is unverified, and editing destroys the evidence.\n' +
+          '  This is a Claude Code behaviour, not a plugin defect. Reported, not worked around.',
+      );
+    }
+  }
 
   /**
    * ⛔⛔ ARE *YOU* VISIBLE? THIS TOOL KNEW AND REPORTED AROUND IT.
