@@ -146,6 +146,42 @@ function envFromRegistry(name) {
  *
  * ⛔ NEVER PRINT EITHER VALUE, NOT EVEN A PREFIX. A leaked token is what started this.
  */
+/**
+ * The "no token" message, as a PURE FUNCTION OF (variable, platform).
+ *
+ * ⛔⛔ IT IS A FUNCTION SO THE BRANCH THIS AUTHOR CANNOT RUN CAN STILL BE TESTED. The bug it
+ * replaces: the win32 arm interpolated the resolved variable and the other arm was a plain
+ * string with SLACK_BOT_TOKEN baked in - so on macOS, a repo declaring its own `token_env`
+ * got a correct, specific diagnosis followed by a remedy naming A DIFFERENT VARIABLE. The
+ * reader exports it, nothing changes, and the same error repeats verbatim.
+ *
+ * ⚠ THE DIAGNOSIS BEING RIGHT IS WHAT MADE THE REMEDY CREDIBLE - the class this project
+ * already named: review reads conditions, only firing reads output.
+ *
+ * ★★★ AND THE DEFECT DATES ITSELF: the branch that had been RUN substituted correctly, the
+ * branch that had not, did not.
+ *
+ *     A PLATFORM-CONDITIONAL BRANCH IS ONLY EVER AS GOOD AS THE PLATFORM IT WAS RUN ON.
+ *
+ * Which generalises past platforms to ANY branch gated on an environment the author does not
+ * have: untested BY CONSTRUCTION, not by oversight. Inlining it in a ternary made that
+ * permanent; taking the platform as an ARGUMENT makes both arms reachable from a test on
+ * either machine, which is the only fix that survives the next edit.
+ *
+ * ⚠ It lands hardest on the newer path, too: `token_env` exists so one machine can hold
+ * several workspaces' tokens - so anyone who sees this message is, by construction, someone
+ * for whom the default is wrong.
+ */
+function missingTokenMessage(varName, platform) {
+  return (
+    `${varName} is not set.\n` +
+    (platform === 'win32'
+      ? `  setx ${varName} "xoxb-..."   (then restart, or it is read from the registry)`
+      : `  export ${varName}="xoxb-..."   in your shell profile, then RESTART THE SESSION\n` +
+        '  (a fresh export cannot reach a running process, and there is no registry fallback here)')
+  );
+}
+
 function botToken() {
   const VAR = tokenVar();
   const fromEnv = process.env[VAR];
@@ -706,11 +742,27 @@ function selfTest() {
     ['# without space is not a heading', toSlackMrkdwn('#nothashtag').text, '#nothashtag'],
   ];
   for (const [name, got, want] of md) console.log(`  ${got === want ? 'pass' : 'FAIL'}  mrkdwn: ${name}`);
+
+  /**
+   * ★ BOTH PLATFORM ARMS, FROM WHICHEVER MACHINE IS RUNNING THIS. The bug was that the arm
+   * the author could not execute named the DEFAULT variable instead of the resolved one, and
+   * no amount of running the tool on Windows could ever have shown it.
+   */
+  const plat = [
+    ['win32 names the resolved var', missingTokenMessage('SLACK_BOT_TOKEN_ACME', 'win32').includes('setx SLACK_BOT_TOKEN_ACME'), true],
+    ['win32 does NOT name the default', missingTokenMessage('SLACK_BOT_TOKEN_ACME', 'win32').includes('SLACK_BOT_TOKEN "'), false],
+    ['darwin names the resolved var', missingTokenMessage('SLACK_BOT_TOKEN_ACME', 'darwin').includes('export SLACK_BOT_TOKEN_ACME='), true],
+    ['darwin does NOT name the default', /export SLACK_BOT_TOKEN=/.test(missingTokenMessage('SLACK_BOT_TOKEN_ACME', 'darwin')), false],
+    ['linux names the resolved var', missingTokenMessage('SLACK_BOT_TOKEN_ACME', 'linux').includes('export SLACK_BOT_TOKEN_ACME='), true],
+    ['non-win32 says to restart the session', /RESTART THE SESSION/.test(missingTokenMessage('X', 'darwin')), true],
+  ];
+  for (const [name, got, want] of plat) console.log(`  ${got === want ? 'pass' : 'FAIL'}  token msg: ${name}`);
+  const platFailed = plat.filter(([, got, want]) => got !== want).length;
   const mdFailed = md.filter(([, got, want]) => got !== want).length;
   const tbl = toSlackMrkdwn('| a | b |\n| - | - |').changes.tableRows;
   console.log(`  ${tbl === 2 ? 'pass' : 'FAIL'}  mrkdwn: table rows counted (${tbl}), warned not converted`);
 
-  const bad = missing.length + manFailed + mdFailed + (tbl === 2 ? 0 : 1);
+  const bad = missing.length + manFailed + mdFailed + platFailed + (tbl === 2 ? 0 : 1);
   console.log(
     bad
       ? `\n${bad} FAILURE(S)${missing.length ? ` - flags missing from usage: ${missing.join(', ')}` : ''}`
@@ -749,12 +801,28 @@ if (MRKDWN_FIXES) {
 
 const token = botToken();
 if (!token) {
-  die(
-    `${tokenVar()} is not set.\n` +
-      (process.platform === 'win32'
-        ? `  setx ${tokenVar()} "xoxb-..."   (then restart, or it is read from the registry)`
-        : '  export SLACK_BOT_TOKEN="xoxb-..."'),
-  );
+  /**
+   * ⛔⛔ THIS NAMED THE RESOLVED VARIABLE AND THEN TOLD macOS USERS TO EXPORT THE DEFAULT.
+   *
+   * The win32 arm interpolated tokenVar(); the other arm was a plain string with
+   * SLACK_BOT_TOKEN baked in. So on macOS a repo declaring its own `token_env` got a
+   * correct, specific diagnosis followed by a remedy for a DIFFERENT VARIABLE - the reader
+   * exports it, the tool still cannot see a token, and the same error repeats verbatim.
+   *
+   * ⚠ THE DIAGNOSIS BEING RIGHT IS WHAT MADE THE REMEDY CREDIBLE. Same class as #36: a
+   * guard whose CONDITION is correct and whose OUTPUT is wrong - review reads conditions,
+   * only firing reads output.
+   *
+   * ★ AND IT DATES ITSELF: the branch that had been RUN substituted correctly and the branch
+   * that had not, did not. A PLATFORM-CONDITIONAL BRANCH IS ONLY EVER AS GOOD AS THE PLATFORM
+   * IT WAS RUN ON - which generalises past platforms to any branch gated on an environment
+   * the author does not have. It is untested by construction, not by oversight.
+   *
+   * ⚠ It also lands hardest on the newer path: `token_env` exists so one machine can hold
+   * several workspaces' tokens, so ANYONE SEEING THIS MESSAGE IS BY CONSTRUCTION SOMEONE FOR
+   * WHOM THE DEFAULT IS WRONG.
+   */
+  die(missingTokenMessage(tokenVar(), process.platform));
 }
 
 // --- payload ----------------------------------------------------------------
