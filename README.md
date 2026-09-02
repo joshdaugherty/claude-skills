@@ -10,6 +10,62 @@ more skills; Claude Code handles installing and updating them.
 /plugin install slack-as-claude@claude-skills
 ```
 
+⚠ **`/plugin` is not available in every editor.** It works in stock VS Code's extension and is absent
+in at least one fork — `/plugin isn't available in this environment` was observed in **Cursor** on a
+day when stock VS Code was fine at a comparable version. That message means *use the CLI*, not
+*something is broken*.
+
+**If the slash command is unavailable, use the CLI from the repo root:**
+
+```
+claude plugin install slack-as-claude@claude-skills
+```
+
+⛔ **And if that reports `claude: command not found` — the IDE extension does not install a CLI.**
+A machine can have a current Claude Code extension and no `claude` binary anywhere. That is an
+ordinary state for anyone who installed the editor extension and nothing else, not a broken setup.
+Install one:
+
+```
+brew install claude-code                       # macOS
+npm install -g @anthropic-ai/claude-code       # any platform with npm
+```
+
+★ **This section carries install-time answers deliberately.** The skill's own documentation loads by
+*invoking* the skill, which requires the install to have worked — so anything that can fail *during*
+installation has to be answerable from here, or the reader cannot reach the answer.
+
+<details>
+<summary>macOS: where to put the bot token, since that also happens before the skill is readable</summary>
+
+**Find out which shell is actually running — don't guess, and don't pick from a list:**
+
+```
+ps -p $$ -o comm=        # zsh -> ~/.zshrc ; bash -> ~/.bash_profile
+```
+
+*A free tell in any terminal paste: `zsh` prompts with `%`, `bash` with `$`.*
+
+⚠ `~/.bashrc` is the wrong file on macOS even when you *are* on bash — an interactive login shell
+reads `~/.bash_profile`, and `~/.bashrc` is often absent entirely. Writing to both is harmless.
+
+⛔ **And "restart the session" is the fix for only one of two causes:**
+
+- **Stale environment** — the process holds an environment block from before your export. **A restart fixes it.**
+- **Non-login shell** — the harness spawns a shell that never sources your profile at all. **A restart changes nothing**, on the first invocation or the hundredth, and nothing tells you the advice didn't apply.
+
+For the second, wrap the call — `bash -lc 'node …/slack-post.mjs …'` — or set the value where a
+non-login shell will see it (`launchctl setenv`, or export it in whatever spawns the harness).
+
+★ **Windows hides this entirely**, which is why it went unnoticed for so long: there the token falls
+back to `HKCU\Environment` when the environment is empty, so it is found no matter what shell
+spawned the process. The platform with the weaker environment story is the one with less tooling.
+
+*Reported from a real macOS onboarding; this project has no macOS machine, so it is recorded at the
+strength it was received rather than measured here.*
+
+</details>
+
 Update later with:
 
 ```
