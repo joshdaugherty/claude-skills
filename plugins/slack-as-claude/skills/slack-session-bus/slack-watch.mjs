@@ -215,6 +215,9 @@ const USAGE =
       '              --doctor, which answers the SESSION question "am I behind" and stays\n' +
       '              narrow on purpose. Exhaustive across every registration, and\n' +
       '              deliberately invoked so it can afford to be.\n' +
+      '              ⚠ NEEDS NO --channel AND NO TOKEN: it reads only the plugin cache and\n' +
+      '              installed_plugins.json, so it still works on a machine whose credential\n' +
+      '              is missing or revoked - which is when you most want to run it.\n' +
       '\n' +
       '  --show <ts>  ONE message, in full, by ts - the command the [bus] excerpt line\n' +
       '              names. Needed because --since is EXCLUSIVE and so cannot fetch the\n' +
@@ -427,13 +430,27 @@ function selfTest() {
 
 if (a['self-test']) selfTest();
 
-if (a.help || !a.channel) {
+/**
+ * ⛔⛔ --consistency IS A PURELY LOCAL AUDIT AND USED TO DEMAND A CHANNEL AND A CREDENTIAL.
+ *
+ * Verified over the whole block: no `fetch`, no `slackPost`, no `await`, no use of `token`.
+ * It reads ~/.claude/plugins/cache and installed_plugins.json and nothing else.
+ *
+ * Requiring both turned the MACHINE-DIAGNOSIS command off in exactly the situations it exists
+ * for - a missing or revoked token, an unknown channel id, a machine that carries the plugin
+ * and no Slack credential at all. And --doctor tells the reader to run it, so the dead end was
+ * reachable by following the tool's own advice. A required argument that is never read is an
+ * instruction to go hunting for a credential you do not need. (#112)
+ */
+const LOCAL_ONLY = Boolean(a.consistency);
+
+if (a.help || (!a.channel && !LOCAL_ONLY)) {
   console.error(USAGE);
   process.exit(a.help ? 0 : 1);
 }
 
-const token = botToken();
-if (!token) {
+const token = LOCAL_ONLY ? null : botToken();
+if (!token && !LOCAL_ONLY) {
   console.error(`${tokenVar()} is not set.`);
   process.exit(1);
 }
@@ -1384,7 +1401,7 @@ if (a.ping) {
     const look = await recentMessages(50);
     if (!look.ok) { console.error(`[ping] read failed (${look.error}) - still waiting; a missed read is not a missed pong.`); continue; }
     for (const m of look.messages) {
-      if (Number(m.ts) <= Number(sent.ts)) continue;
+      if (tsCmp(m.ts, sent.ts) <= 0) continue;
       const mm = parseMessage(m).meta;
       if (mm.type === 'x-pong' && mm.session === target) {
         const rtt = (Number(m.ts) - Number(sent.ts)).toFixed(1);
@@ -1452,7 +1469,7 @@ if (a.audit) {
   // timeline" has one fixed answer. That REMOVES the caveat instead of documenting it,
   // which matters for a diagnostic - a tool whose disclaimer says "this may be wrong for
   // reasons unrelated to what you asked" stops being trusted exactly when it is needed.
-  const newest = replies.reduce((mx, m) => (Number(m.ts) > Number(mx) ? m.ts : mx), a.audit);
+  const newest = replies.reduce((mx, m) => (tsCmp(m.ts, mx) > 0 ? m.ts : mx), a.audit);
   const timeline = new Set();
   let cur = null;
   let pages = 0;
@@ -1767,10 +1784,24 @@ function normPath(p) {
 /**
  * Compare two Slack timestamps EXACTLY. Longer integer part wins; otherwise lexical.
  *
- * ⛔ NOT Number(). A Slack ts carries 16 significant digits and a JS double holds ~15-17,
- * so coercion rounds at the boundary - slack-session-bus/SKILL.md:574 says exactly that,
- * and ~15 sites in these scripts do it anyway. This is the form already used correctly at
- * the roster scan; issue #110 routes the remaining sites through here.
+ * ⚠⚠ AND THE JUSTIFICATION THIS COMMENT SHIPPED WITH WAS WRONG. It said coercion "rounds at
+ * the boundary", and #110 was filed on that basis. MEASURED, IT DOES NOT - not at any
+ * magnitude this will ever see:
+ *
+ *     round-trip String(Number(ts)) for current values     LOSSLESS
+ *     double spacing (ulp) near 1.788e9                    2.38e-7 s
+ *     Slack ts granularity                                 1e-6 s      <- 4x the ulp
+ *     ordering would break only above ts ~ 4.5e9 s         the year 2112
+ *
+ * So this is NOT a bug fix. It is exactness BY CONSTRUCTION on the comparisons that decide
+ * ORDER or IDENTITY, matching the sites that already compared as strings. It does NOT replace
+ * arithmetic that turns a ts into a DURATION (`now - Number(ts)`, an rtt, a heartbeat age):
+ * those are subtractions into seconds that a string compare cannot express.
+ *
+ * ★ The rule it was filed against - SKILL.md:574, "a ts has 16 significant digits" - is real,
+ * but it is about SHELL and cross-language coercion, where the float is RE-SERIALISED in a
+ * shorter form. That is a different mechanism from comparing two doubles in JS, and reading
+ * the rule without measuring turned one into the other.
  */
 function tsCmp(a, b) {
   const x = String(a ?? ''); const y = String(b ?? '');
