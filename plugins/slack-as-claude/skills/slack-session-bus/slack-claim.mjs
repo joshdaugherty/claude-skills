@@ -383,6 +383,39 @@ function meta(msg) {
 // float: a ts is an IDENTIFIER that looks like a number, and every conversion to a
 // number is a chance to lose the low digits that are the only thing making it
 // unique. Do not "fix" this back to Number().
+/**
+ * Compare two Slack timestamps EXACTLY. Longer integer part wins; otherwise lexical.
+ *
+ * ⚠⚠ AND THE HONEST JUSTIFICATION IS WEAKER THAN THE ISSUE THAT PROMPTED IT. #110 was filed
+ * claiming Number() coercion could misorder timestamps. MEASURED, IT CANNOT - not at any
+ * magnitude this will see:
+ *
+ *     round-trip String(Number(ts)) for current values     LOSSLESS
+ *     double spacing (ulp) near 1.788e9                    2.38e-7 s
+ *     Slack ts granularity                                 1e-6 s      <- 4x the ulp
+ *     ordering would break only above ts ~ 4.5e9 s         the year 2112
+ *
+ * So this is NOT a bug fix. It is exactness BY CONSTRUCTION on the four comparisons that
+ * decide order or identity, matching the two sites that already compared as strings.
+ *
+ * ★ The rule it was filed against - SKILL.md:574, "a ts has 16 significant digits" - is real,
+ * but it is about SHELL and cross-language coercion, where the float is RE-SERIALISED in a
+ * shorter form. That is a different mechanism from comparing two doubles in JS, and reading
+ * the rule without measuring turned one into the other.
+ *
+ * ⚠ SCOPE, deliberately: this replaces comparisons that establish ORDER or IDENTITY. It does
+ * NOT replace arithmetic that turns a ts into a DURATION (`now - Number(ts)`, an rtt, a
+ * heartbeat age) - those are subtractions into seconds where a sub-microsecond error cannot
+ * change a displayed age, and a string compare cannot express them. Naming that boundary
+ * matters more than converting every call site: a sweep that converted the durations too
+ * would be a change nobody could justify line by line.
+ */
+function tsCmp(a, b) {
+  const x = String(a ?? ''); const y = String(b ?? '');
+  if (x.length !== y.length) return x.length < y.length ? -1 : 1;
+  return x < y ? -1 : x > y ? 1 : 0;
+}
+
 function rankClaims(claims, { exclude = null } = {}) {
   return claims
     .filter((c) => c.session !== exclude)
@@ -673,7 +706,7 @@ async function retirementOf(session) {
   for (const m of res.messages ?? []) {
     const mm = meta(m);
     if (mm.type !== 'x-retired' || mm.session !== session) continue;
-    if (!newest || Number(m.ts) > Number(newest.ts)) newest = { ts: m.ts, releases: mm.releases ?? '' };
+    if (!newest || tsCmp(m.ts, newest.ts) > 0) newest = { ts: m.ts, releases: mm.releases ?? '' };
   }
   return newest;
 }
@@ -788,7 +821,9 @@ if (holder && holder.session !== label) {
   // Retirement first: it is positive evidence, so it does not need a timeout. Only fall
   // back to the staleness judgement if the holder never said it was going.
   const retired = await retirementOf(holder.session);
-  const retiredAfterClaim = retired && Number(retired.ts) > Number(holder.ts);
+  // ⛔ CLAIM-PROTOCOL ARBITRATION - this decides whether a retirement supersedes a live
+  // claim. It is the last comparison in these scripts that should be approximate.
+  const retiredAfterClaim = retired && tsCmp(retired.ts, holder.ts) > 0;
 
   const live = retiredAfterClaim ? null : await livenessOf(holder.session);
   if (retiredAfterClaim) {
