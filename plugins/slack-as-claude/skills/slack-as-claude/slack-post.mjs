@@ -832,6 +832,17 @@ function checkManifests() {
 }
 
 function selfTest() {
+  // ⛔⛔ COUNT EVERY ASSERTION ACTUALLY EMITTED. Summing the case arrays was the obvious
+  // implementation and it UNDERCOUNTED BY HALF, because several checks print pass/FAIL
+  // outside any array - and a floor built on a number that does not see them is the very
+  // defect this guards against. Wrapping the emitter cannot drift from the print sites.
+  let ran = 0;
+  const emit = console.log;
+  console.log = (...z) => {
+    if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
+    emit(...z);
+  };
+  const CASE_FLOOR = 47; // raise when adding cases - a constant, reviewed on change
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -885,11 +896,22 @@ function selfTest() {
   const tbl = toSlackMrkdwn('| a | b |\n| - | - |').changes.tableRows;
   console.log(`  ${tbl === 2 ? 'pass' : 'FAIL'}  mrkdwn: table rows counted (${tbl}), warned not converted`);
 
-  const bad = missing.length + manFailed + mdFailed + platFailed + (tbl === 2 ? 0 : 1);
+  // ⛔⛔ THE SUMMARY WAS THE BARE STRING `all pass`, WITH NO COUNT. A broken extraction
+  // regex, a renamed section or an early return leaves every counter at zero and prints
+  // exactly that - so A WHOLE BLOCK CEASING TO RUN IS INDISTINGUISHABLE FROM A GREEN SUITE.
+  // Evidence it already bites: three reviewers reading these files reported three different
+  // case totals for one deterministic command, because none of them could take the number
+  // from the tool. Nobody can check a number the tool does not print. (#104)
+  //
+  // ⚠ THE FLOOR IS A CONSTANT, reviewed when it changes - NOT derived from the same arrays
+  // it guards, which would move with them and assert nothing. Raise it when adding cases.
+  const tooFew = ran < CASE_FLOOR;
+  if (tooFew) console.log(`\n⛔ ONLY ${ran} CASES RAN, floor is ${CASE_FLOOR} - a block stopped running.`);
+  const bad = missing.length + manFailed + mdFailed + platFailed + (tbl === 2 ? 0 : 1) + (tooFew ? 1 : 0);
   console.log(
     bad
       ? `\n${bad} FAILURE(S)${missing.length ? ` - flags missing from usage: ${missing.join(', ')}` : ''}`
-      : '\nall pass',
+      : `\n${ran} cases, all pass`,
   );
   process.exit(bad ? 1 : 0);
 }
@@ -1266,7 +1288,20 @@ const WS = await checkWorkspace(token, { enforce: !a['dry-run'] });
 if (a['dry-run']) {
   console.log('DRY RUN - nothing sent.');
   console.log(`  workspace: ${workspaceLine(WS)}`);
-  if (WS.want && !WS.verified) console.log('  ⛔ MISMATCH - a real send would REFUSE. See above.');
+  // ⛔ WAS: `WS.want && !WS.verified`, with no test of WS.who.ok - so an UNANSWERED auth.test
+  // rendered as a workspace MISMATCH. That is the exact conflation checkWorkspace's own
+  // comment forbids four hundred lines above: "A failed auth.test is NOT a mismatch - it is
+  // an unanswered question. Say which." slack-watch.mjs:1957 guards correctly with
+  // `&& WS.who.ok`; this sibling did not, and §0's verdict table has no row for the
+  // unverified case - so a stale token sent the reader to edit a committed declaration. (#103)
+  if (WS.want && !WS.verified && WS.who?.ok) {
+    console.log('  ⛔ MISMATCH - a real send would REFUSE. See above.');
+  } else if (WS.want && !WS.verified) {
+    console.log('  ⚠ UNVERIFIED, which is NOT a mismatch - auth.test did not answer, so the');
+    console.log('  workspace question is OPEN. Do NOT edit the declaration on this: fix the');
+    console.log('  credential or the network first, then re-run. A real send would refuse,');
+    console.log('  because an unanswered check cannot authorise a post.');
+  }
   console.log(`  channel  : ${a.channel}`);
   console.log(`  username : ${payload.username ?? "(the app's own name)"}`);
   console.log(`  icon     : ${payload.icon_emoji ?? "(the app's own avatar)"}`);

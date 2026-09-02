@@ -253,7 +253,8 @@ const USAGE =
       '               PEERS. The decisive check is the VERSION DIRECTORY; bytes are the\n' +
       '               fallback when the versions match. Prints what to ask a human for.\n' +
       '  --raw        INSPECTOR. Every message verbatim - raw ts, edited, every context\n' +
-      '               element, undecoded body. No whitelist, no decode, no filtering.\n' +
+      '               element, undecoded body. No whitelist, no decode. --since filters,\n' +
+      '               and the count printed says how many it withheld.\n' +
       '               Reach for this the moment the rendering looks wrong: the renderer\n' +
       '               is where fields go to die.\n' +
       '\n' +
@@ -300,6 +301,17 @@ function looksLikeCollision(age, every) {
  * them gave a FALSE PASS by grepping the whole file instead of the usage text.
  */
 function selfTest() {
+  // ⛔⛔ COUNT EVERY ASSERTION ACTUALLY EMITTED. Summing the case arrays was the obvious
+  // implementation and it UNDERCOUNTED BY HALF, because several checks print pass/FAIL
+  // outside any array - and a floor built on a number that does not see them is the very
+  // defect this guards against. Wrapping the emitter cannot drift from the print sites.
+  let ran = 0;
+  const emit = console.log;
+  console.log = (...z) => {
+    if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
+    emit(...z);
+  };
+  const CASE_FLOOR = 51; // raise when adding cases - a constant, reviewed on change
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -393,13 +405,24 @@ function selfTest() {
   // and left out of both for one edit - seven cases that printed pass/FAIL and could not
   // fail the suite. A test that cannot fail is the defect this file documents two functions
   // up, committed while writing the note about it.
+  // ⛔⛔ THE SUMMARY WAS THE BARE STRING `all pass`, WITH NO COUNT. A broken extraction
+  // regex, a renamed section or an early return leaves every counter at zero and prints
+  // exactly that - so A WHOLE BLOCK CEASING TO RUN IS INDISTINGUISHABLE FROM A GREEN SUITE.
+  // Evidence it already bites: three reviewers reading these files reported three different
+  // case totals for one deterministic command, because none of them could take the number
+  // from the tool. Nobody can check a number the tool does not print. (#104)
+  //
+  // ⚠ THE FLOOR IS A CONSTANT, reviewed when it changes - NOT derived from the same arrays
+  // it guards, which would move with them and assert nothing. Raise it when adding cases.
+  const tooFew = ran < CASE_FLOOR;
+  if (tooFew) console.log(`\n⛔ ONLY ${ran} CASES RAN, floor is ${CASE_FLOOR} - a block stopped running.`);
   console.log(
-    missing.length || bad || regBad || dupBad || pathBad
-      ? `\n${missing.length} FLAG(S) MISSING FROM USAGE${missing.length ? `: ${missing.join(', ')}` : ''}` +
+    missing.length || bad || regBad || dupBad || pathBad || tooFew
+      ? `\n${tooFew ? `ONLY ${ran} CASES RAN, FLOOR IS ${CASE_FLOOR} - A BLOCK STOPPED RUNNING. ` : ''}${missing.length} FLAG(S) MISSING FROM USAGE${missing.length ? `: ${missing.join(', ')}` : ''}` +
         `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}`
-      : '\nall pass',
+      : `\n${ran} cases, all pass`,
   );
-  process.exit(missing.length || bad || regBad || dupBad || pathBad ? 1 : 0);
+  process.exit(missing.length || bad || regBad || dupBad || pathBad || tooFew ? 1 : 0);
 }
 
 if (a['self-test']) selfTest();
@@ -1739,6 +1762,20 @@ function caseDuplicateRegistrations(regs) {
  */
 function normPath(p) {
   return String(p).toLowerCase().replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
+/**
+ * Compare two Slack timestamps EXACTLY. Longer integer part wins; otherwise lexical.
+ *
+ * ⛔ NOT Number(). A Slack ts carries 16 significant digits and a JS double holds ~15-17,
+ * so coercion rounds at the boundary - slack-session-bus/SKILL.md:574 says exactly that,
+ * and ~15 sites in these scripts do it anyway. This is the form already used correctly at
+ * the roster scan; issue #110 routes the remaining sites through here.
+ */
+function tsCmp(a, b) {
+  const x = String(a ?? ''); const y = String(b ?? '');
+  if (x.length !== y.length) return x.length < y.length ? -1 : 1;
+  return x < y ? -1 : x > y ? 1 : 0;
 }
 
 function containsPath(dir, cwd) {
@@ -3174,8 +3211,14 @@ if (a.raw) {
     process.exit(1);
   }
   const msgs = read.messages.slice().reverse();
+  // ⛔ THE COUNT BELOW USED TO BE msgs.length - THE UNFILTERED ARRAY - printed under the
+  // words "no filtering", on the one command whose stated purpose is to be trusted when
+  // the rendering already looks wrong. --raw --since printed K messages and reported N.
+  let shown = 0;
+  let filtered = 0;
   for (const m of msgs) {
-    if (a.since && Number(m.ts) <= Number(a.since)) continue;
+    if (a.since && tsCmp(m.ts, a.since) <= 0) { filtered += 1; continue; }
+    shown += 1;
     const bits = [`ts=${m.ts}`];
     if (m.edited) bits.push(`edited=${m.edited.ts}`);
     if (m.thread_ts && m.thread_ts !== m.ts) bits.push(`thread=${m.thread_ts}`);
@@ -3189,7 +3232,13 @@ if (a.raw) {
     }
     console.log(`    text | ${m.text ?? ''}`);
   }
-  console.log(`\n${msgs.length} message(s), verbatim - no decode, no filtering, no whitelist.`);
+  console.log(`\n${shown} message(s), verbatim - no decode, no whitelist.`);
+  if (filtered) {
+    console.log(`⚠ ${filtered} older message(s) NOT shown - --since ${a.since} filtered them.`);
+    console.log(`  ${msgs.length} were read from the channel. Drop --since to see all of them.`);
+  } else {
+    console.log('No filtering was applied: every message read is above.');
+  }
   process.exit(0);
 }
 
