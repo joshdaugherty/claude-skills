@@ -1839,9 +1839,11 @@ if (a.doctor) {
       `A PEER ANNOUNCED ${announced.version}; the marketplace clone only has ${available.version}.\n` +
         `  ${announced.by} said so on the bus. THAT IS HEARSAY - nothing here has verified\n` +
         '  the version exists. The CLONE has not heard of it, so this is the update case:\n' +
-        `    claude plugin marketplace update ${available.marketplace}\n` +
-        '  Then read the installed version rather than the tick - that command reports\n' +
-        '  success whether or not anything moved.',
+        `    claude plugin marketplace update ${available.marketplace}   # catalog only\n` +
+        `    claude plugin update ${pluginName}@${available.marketplace}   # moves the registration\n` +
+        `    claude plugin update ${pluginName}@${available.marketplace} --scope project   # each project too\n` +
+        '  ⚠ Read `claude plugin list` rather than the tick. `marketplace update` reports\n' +
+        '  success whether or not anything moved, and it moves no version at all.',
     );
   } else if (announced && installed && cmpVer(announced.version, installed.version) > 0) {
     asks.push(
@@ -2218,6 +2220,23 @@ if (a['announce-install']) {
    * ⛔ Deleting the version is NOT the fix: a peer who HAS updated needs the new copy
    * specifically, and a wrong-but-present path would silently relaunch the old code - worse
    * than failing loudly. So the update leads, and the path is stated as valid only after it.
+   *
+   * ⛔⛔ AND THE WARNING ON THAT PATH ASSERTED A FACT ABOUT THE READER'S MACHINE - "it does
+   * not exist on your machine until step 1 has run". TWO MACHINES REPORTED THE COUNTEREXAMPLE
+   * WITHIN MINUTES: the directory was already there, because they had updated on their own.
+   * It is now conditional, which loses nothing and is true everywhere.
+   *
+   * ★★★ AND THE REASON IT RECURRED IS WORTH MORE THAN THE FIX. #57 was corrected on exactly
+   * this point - a sender cannot know a reader's cache state - and the correction was applied
+   * TO THE TICKET. The fix had already been authored from the original strong premise, and
+   * nothing carried the weaker wording across:
+   *
+   *     A TICKET EDIT IS NOT AN INPUT TO THE CODE.
+   *
+   * ⚠ The sentence was also self-undermining IN PLACE: two paragraphs below it the same
+   * notice says of the file list "yours may differ - compute your own if it matters". One
+   * machine-specific claim hedged, the other asserted flatly, in one block. That asymmetry is
+   * what #57 was filed about; only the ordering half of it got fixed.
    */
   const cmd =
     `node "$HOME/.claude/plugins/cache/${now.marketplace}/${pluginName}/${now.version}` +
@@ -2231,13 +2250,18 @@ if (a['announce-install']) {
       '',
       '*1 · UPDATE FIRST — you cannot restart onto code you do not have yet:*',
       '```',
-      `claude plugin marketplace update ${now.marketplace}`,
-      `claude plugin install ${pluginName}@${now.marketplace}`,
+      `claude plugin marketplace update ${now.marketplace}     # refresh the catalog`,
+      `claude plugin update ${pluginName}@${now.marketplace}   # move the USER registration`,
+      `claude plugin update ${pluginName}@${now.marketplace} --scope project   # and EACH project scope`,
       '```',
+      '⚠ *`marketplace update` refreshes the catalog and moves no version; `install` is for a*',
+      '*plugin you do not have. **`plugin update` is the one that moves a registration**, it*',
+      '*defaults to `--scope user`, and a repo-enabled entry is a SEPARATE registration that*',
+      '*stays behind silently. `claude plugin list` is the only place the disagreement shows.*',
       `*2 · THEN restart the watcher.* ⚠ *The \`${now.version}\` in the path below is MY version`,
-      'directory. It does not exist on your machine until step 1 has run, and pointing node at an',
-      'absent one gives you `Cannot find module` — which reads as a broken announcement or a corrupt',
-      'install, not as "I still need to update".*',
+      'directory. It exists on your machine only if you have already updated — if you have not,',
+      'node reports `Cannot find module`, which reads as a broken announcement rather than "I',
+      'still need to update". Step 1 makes it true either way.*',
       '```',
       cmd,
       '```',

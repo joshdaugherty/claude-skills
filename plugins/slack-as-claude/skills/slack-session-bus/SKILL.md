@@ -351,7 +351,18 @@ the notice that was tested      node "$HOME/.claude/…/2.18.2/…"   <- already
 
 **The loop is:** *edit the repo* → **commit** → **tag and release** → `/plugin marketplace update <name>` → **restart any watcher, with `--since`.**
 
-★ *`marketplace update` alone refreshes the cache — **a second `/plugin install` is not needed**. Verified: the update pulled a new version directory and marked the old ones orphaned. `install` is for the FIRST time only.*
+# ⛔⛔ WITHDRAWN — THIS LINE WAS WRONG, AND IT CONTRADICTED TWO OTHERS IN THIS FILE.
+
+### *It said `marketplace update` alone refreshes the cache and a second install is not needed.* **MEASURED ON A SECOND MACHINE, WITH THE NEW VERSION ALREADY PUBLISHED: `marketplace update` reported `✔ Successfully updated marketplace` and the cache directory did not change.**
+
+## ★★★ AND NONE OF THE THREE COMMANDS DOES WHAT ITS NAME SUGGESTS. THE ONE THAT MOVES A REGISTRATION IS THE ONE NOBODY WAS RUNNING:
+
+| `claude plugin marketplace update <mkt>` | **refreshes the CATALOG. Moves no version, ever.** *Its success line is identical whether anything moved or not.* |
+| :-- | --- |
+| `claude plugin install <plugin>@<mkt>` | **populates a cache DIRECTORY.** ⛔ *Measured: **39 runs, 39 new directories, ZERO registrations moved** — a real success line every time.* |
+| # `claude plugin update <plugin>@<mkt>` | # **THE ONLY ONE THAT MOVES A REGISTRATION.** ⚠ *Defaults to `--scope user`. A repo-enabled entry is a SEPARATE registration and stays behind silently.* |
+
+⚠ **`claude plugin list` is the only place the disagreement is visible** — *and it disagreed with `--doctor` for two days: `INSTALLED 2.18.5` from the newest cache directory, while this repo's registration was pinned at **2.12.4**.*
 
 ⚠ **That is slower than editing a file, and deliberately so.** *The alternative is what happened here: one session silently three hours ahead of the other, and a shared conclusion drawn from unequal code.* ★ *Whoever authors a fix should say on the bus which VERSION carries it, not which file.*
 
@@ -917,7 +928,7 @@ ASK: /plugin marketplace update   (installed 2.15.0, available 2.15.1)
 | update with **no version bump** | cache untouched; the command printed `fetched just now` and **looked handled** |
 | :-- | --- |
 | version bump with **no update** | a session asserted a peer was current against its own listing showing otherwise |
-| **update that installed nothing** | `claude plugin marketplace update` moved the CLONE and reported ✔; the plugin needed a **separate `plugin install`** |
+| **update that installed nothing** | `claude plugin marketplace update` moved the CLONE and reported ✔; the plugin needed a **separate command** — ⚠ *and for two days this file said that command was `plugin install`. It is `plugin update`: `install` populates a cache directory and moves no registration.* |
 
 ### **Every one of them is a confident success line over state that did not move.** # **AFTER ANY UPDATE, READ THE CACHE, NOT THE TICK.**
 
@@ -968,7 +979,9 @@ ASK: /plugin marketplace update   (installed 2.15.0, available 2.15.1)
 ```bash
 git tag -a v2.16.0 -m "..." && git push --follow-tags
 slack-post.mjs --type release --released 2.16.0 --cut-at "$(git log -1 --format=%cI v2.16.0)"
-claude plugin marketplace update <marketplace> && claude plugin install <plugin>@<marketplace>
+claude plugin marketplace update <marketplace>            # catalog only, moves nothing
+claude plugin update <plugin>@<marketplace>              # moves the USER registration
+claude plugin update <plugin>@<marketplace> --scope project   # and EACH project scope
 ```
 
 ---
