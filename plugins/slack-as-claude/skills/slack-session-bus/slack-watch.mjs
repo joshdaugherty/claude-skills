@@ -2014,17 +2014,56 @@ if (a.doctor) {
       // shipped by the very release that made it false. The two cases say different things.
       const spokeAge = Math.max(0, Math.round(now - lastSpokeAt(msgs, selfLabel)));
       const speaking = spokeAge <= STALE_FLOOR_SEC;
-      asks.push(
-        `YOU ARE NOT PUBLISHING PRESENCE as "${selfLabel}"${mine ? ` - last beat ${Math.round(now - mine.beat)}s ago, past its window` : ' - no presence message at all'}.\n` +
-          (speaking
-            ? `  You posted ${spokeAge}s ago, so peers on 2.10.0+ see you as ACTIVE - present, but\n` +
-              '  NOT REACHABLE. Older peers see you as GONE outright. Either way you cannot be\n' +
-              "  --ping'd and cannot answer a liveness probe."
-            : '  Every peer sees you as GONE. You cannot be --ping\'d, you are absent from\n' +
-              '  --presence, and a STALE TAKEOVER of any claim you hold will look justified to\n' +
-              '  the session performing it.') +
-          '\n  Arm a watcher with:  --session <label> --heartbeat 60',
-      );
+      /**
+       * ⛔⛔⛔ WITHOUT `--session` THIS LABEL IS A FALLBACK, AND THE ALARM BELOW WOULD BE
+       * ABOUT THE FALLBACK WHILE READING AS A FINDING ABOUT THE CALLER'S LANE.
+       *
+       * Measured: run with no --session, --doctor reported "YOU ARE NOT PUBLISHING PRESENCE
+       * as 5f321b20 ... Every peer sees you as GONE" while PEERS IN THE SAME OUTPUT showed
+       * that session's real lane beating 19 seconds earlier. Every sentence true of the
+       * substituted label and false of the lane running it.
+       *
+       * ⚠ AND ACTING ON IT DOES HARM, WHICH IS WHY IT CANNOT JUST BE LEFT TO THE READER: the
+       * remedy it names is correct for a REAL silent lane, so a false positive lands on
+       * someone primed to believe it. Re-arming re-primes the feed and swallows anything
+       * landing during the handover unless --since is hand-carried; arming a SECOND watcher
+       * under the real label gives two processes rewriting one presence message - the
+       * one-row-for-two-sessions collapse this file documents.
+       *
+       * ★ The footnote already existed and was in the wrong place: "(Pass --session so your
+       * own messages are not counted as peers)" sits BELOW the alarm and is phrased as being
+       * about peer COUNTING. A reader working in reading order never reaches it, and it does
+       * not mention the label the alarm just used.
+       *
+       * ⛔ The emphatic form is KEPT for the case it was written for - --session given and
+       * presence genuinely absent. Softening that to fix a false positive that only occurs
+       * WITHOUT the flag would trade a real warning for a cosmetic one.
+       *
+       * THE GENERAL SHAPE: a diagnostic that substitutes a default for a missing argument and
+       * then reports a finding ABOUT THE SUBSTITUTE in the voice it would use for the real
+       * thing. It already knows the label was defaulted - that is the one fact the alarm
+       * omitted.
+       */
+      if (!a.session) {
+        asks.push(
+          `No presence found for "${selfLabel}" - but NO --session was passed, so that is the\n` +
+            '  session-id fallback rather than a label you use. THIS CHECK CANNOT TELL YOU\n' +
+            '  ANYTHING ABOUT YOUR REAL LANE, and the PEERS line above may well show it alive.\n' +
+            '  ⛔ Do NOT arm a watcher on the strength of this. Re-run with --session <label>.',
+        );
+      } else {
+        asks.push(
+          `YOU ARE NOT PUBLISHING PRESENCE as "${selfLabel}"${mine ? ` - last beat ${Math.round(now - mine.beat)}s ago, past its window` : ' - no presence message at all'}.\n` +
+            (speaking
+              ? `  You posted ${spokeAge}s ago, so peers on 2.10.0+ see you as ACTIVE - present, but\n` +
+                '  NOT REACHABLE. Older peers see you as GONE outright. Either way you cannot be\n' +
+                "  --ping'd and cannot answer a liveness probe."
+              : "  Every peer sees you as GONE. You cannot be --ping'd, you are absent from\n" +
+                '  --presence, and a STALE TAKEOVER of any claim you hold will look justified to\n' +
+                '  the session performing it.') +
+            '\n  Arm a watcher with:  --session <label> --heartbeat 60',
+        );
+      }
     }
   }
 
@@ -2297,6 +2336,46 @@ if (a.doctor) {
  */
 if (a['announce-install']) {
   if (!a.session) die('--announce-install needs --session <label>: the notice says who moved.', 2);
+
+  /**
+   * ⛔⛔ THE LABEL WAS CHECKED FOR EXISTENCE AND NEVER FOR REACHABILITY.
+   *
+   * A lane that announces an update while holding no watcher posts under a label that has
+   * POSTED but never BEAT - `active` in a peer's roster: present, and NOT reachable. It
+   * cannot be --ping'd and cannot answer a liveness probe, and nothing on the announcing
+   * side said so. The announcement is precisely the moment a peer is most likely to want to
+   * reply to you.
+   *
+   * ★ THE TOOL ALREADY REASONED ABOUT A LABEL'S PRESENCE AND ONLY FOR THE INVERSE CONDITION.
+   * looksLikeCollision() warns about a label that is TOO ALIVE - two sessions sharing one
+   * presence message - and was silent about one that was NEVER alive. Same field, opposite
+   * failure, one guarded and one not.
+   *
+   * ⚠ WARN, NEVER REFUSE. Announcing from a lane with no watcher is legitimate - a one-shot
+   * release runner has nothing to keep alive - so this must not block the post. It exists so
+   * the sender knows what the roster will say about them, which is the one thing they cannot
+   * see from their own side.
+   */
+  {
+    const seen = await recentMessages(200);
+    if (seen.ok) {
+      const mine = seen.messages.map(presenceOf).find((p) => p && p.session === a.session);
+      if (!mine) {
+        console.error(
+          `[watch] ⚠ "${a.session}" publishes no presence message, so this announcement will\n` +
+            '        arrive from a label peers read as ACTIVE - present, but NOT REACHABLE.\n' +
+            "        You cannot be --ping'd and cannot answer a liveness probe, which is a poor\n" +
+            '        state to be in at the moment you tell everyone to restart.\n' +
+            `        Arm one first if you want replies:  --session ${a.session} --heartbeat 60`,
+        );
+      }
+    } else {
+      // ⛔ A failed read is not an absent presence. Say which, or this warns about a channel
+      // it could not open - the failure this repo has fixed three times in other readers.
+      console.error(`[watch] could not check whether "${a.session}" publishes presence (${seen.error}); announcing anyway.`);
+    }
+  }
+
   const selfFile = fileURLToPath(import.meta.url);
   const skillDir = dirname(selfFile);
   const runningManifest = readJson(join(skillDir, '..', '..', '.claude-plugin', 'plugin.json'));
