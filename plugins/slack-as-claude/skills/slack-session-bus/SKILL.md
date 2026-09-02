@@ -349,18 +349,33 @@ the notice that was tested      node "$HOME/.claude/…/2.18.2/…"   <- already
 
 # ⛔ **WHICH MEANS A FIX IS NOT AVAILABLE TO A PEER UNTIL IT IS RELEASED.**
 
-**The loop is:** *edit the repo* → **commit** → **tag and release** → `/plugin marketplace update <name>` → **restart any watcher, with `--since`.**
+**The loop is:** *edit the repo* → **commit** → **tag and release** → **update** → **restart any watcher, with `--since`.**
 
-# ⛔⛔ WITHDRAWN — THIS LINE WAS WRONG, AND IT CONTRADICTED TWO OTHERS IN THIS FILE.
-
-### *It said `marketplace update` alone refreshes the cache and a second install is not needed.* **MEASURED ON A SECOND MACHINE, WITH THE NEW VERSION ALREADY PUBLISHED: `marketplace update` reported `✔ Successfully updated marketplace` and the cache directory did not change.**
-
-## ★★★ AND NONE OF THE THREE COMMANDS DOES WHAT ITS NAME SUGGESTS. THE ONE THAT MOVES A REGISTRATION IS THE ONE NOBODY WAS RUNNING:
-
-| `claude plugin marketplace update <mkt>` | **refreshes the CATALOG. Moves no version, ever.** *Its success line is identical whether anything moved or not.* |
+| # **A HUMAN, in the Claude terminal** | `/plugin marketplace update <name>` — ✔ *observed to move BOTH registrations in one invocation.* |
 | :-- | --- |
-| `claude plugin install <plugin>@<mkt>` | **populates a cache DIRECTORY.** ⛔ *Measured: **39 runs, 39 new directories, ZERO registrations moved** — a real success line every time.* |
-| # `claude plugin update <plugin>@<mkt>` | # **THE ONLY ONE THAT MOVES A REGISTRATION.** ⚠ *Defaults to `--scope user`. A repo-enabled entry is a SEPARATE registration and stays behind silently.* |
+| # **AN AGENT** | ⛔ **cannot type a slash command at all.** *Three CLI commands, and the update is the one that moves anything* → **the surface table below.** |
+
+⚠ *Which surface you are on decides which commands exist, and this loop was written from one of them without saying which — see the amendment below.*
+
+# ⛔⛔ AMENDED TWICE. THIS LINE WAS **SCOPED**, NOT WRONG — AND THE FIRST CORRECTION GOT THAT WRONG IN THE SAME WAY.
+
+### *It said `marketplace update` alone refreshes the cache and a second install is not needed.* **That is TRUE of the SLASH form and FALSE of the CLI form, and it never said which it meant.**
+
+## ⛔⛔⛔ **THE TWO SURFACES OF "marketplace update" BEHAVE DIFFERENTLY. NOTHING IN THIS FILE SAID SO, AND BOTH CORRECTIONS SO FAR HAVE ASSUMED THEY WERE ONE THING.**
+
+| # **`/plugin marketplace update <mkt>`** <br> ### *typed by the OPERATOR in the **Claude terminal*** | ### **MOVED BOTH REGISTRATIONS FROM ONE INVOCATION** — *user and project, cache directory pulled, `1 plugin bumped`.* <br> ⚠ **THE EFFECT IS ESTABLISHED; THE MECHANISM IS NOT.** *It may internally do install + update, or update every scope by design. Not known.* <br> ⛔ **AND NAME THE SURFACE, BECAUSE THAT IS THE WHOLE POINT OF THIS ROW:** *typed in the **terminal**, then REPORTED to a session running in the editor extension. The session observed before/after state and the operator's word — it did not watch the command run, and it was not the surface the command was typed into.* ⚠ *Whether the same slash command typed into an **extension UI** behaves identically is **UNVERIFIED**.* |
+| :-- | --- |
+| # **`claude plugin marketplace update <mkt>`** *(CLI)* | ### **Refreshes the CATALOG and moves no version** — ⚠ **measured on Windows across 39 release cycles, and on macOS with the version already published: `✔ Successfully updated marketplace`, cache unchanged.** *Its success line is identical whether anything moved or not.* |
+| **`claude plugin install <plugin>@<mkt>`** | **populates a cache DIRECTORY.** ⛔ *39 runs, 39 new directories, **ZERO registrations moved** — a real success line every time.* |
+| # **`claude plugin update <plugin>@<mkt>`** | # **THE ONLY CLI COMMAND THAT MOVES A REGISTRATION.** ⚠ *Defaults to `--scope user`. A repo-enabled entry is a SEPARATE registration and stays behind silently.* |
+
+# ⛔ **AND AN AGENT CANNOT REACH THE ONE-STEP PATH AT ALL** *(→ §A step 2)*. ### **A slash command is user-side input.** *So the CLI rows are the whole of an agent's options, and the three-command sequence is not a workaround — it is the only procedure available to the party most likely to be executing it.*
+
+## ★★★ **AND THE RECURRENCE IS THE LESSON, NOT THE FACT.**
+
+### **The first correction resolved a contradiction by PICKING A WINNER between two lines, and recorded the conditions of the winner no more than the loser had recorded its own.** # **SAME DEFECT, ONE ITERATION LATER, WITH A STRONGER WORD IN IT — "ever".**
+
+⚠ *That word is the whole error: it forecloses exactly the case the release loop twelve lines above depends on.* ★ **A CORRECTION THAT DOES NOT RECORD ITS OWN CONDITIONS IS THE THING IT IS CORRECTING.** *Two unscoped claims disagreed; the fix replaced them with one unscoped claim and called the matter settled.*
 
 ⚠ **`claude plugin list` is the only place the disagreement is visible** — *and it disagreed with `--doctor` for two days: `INSTALLED 2.18.5` from the newest cache directory, while this repo's registration was pinned at **2.12.4**.*
 
