@@ -2195,6 +2195,30 @@ if (a['announce-install']) {
    * is directly runnable rather than a placeholder somebody has to interpret. The default
    * cache location is an assumption, so it is stated rather than hidden.
    */
+  /**
+   * ⛔⛔ THE VERSION DIRECTORY IN THIS PATH IS THE SENDER'S, AND A PEER DOES NOT HAVE IT.
+   *
+   * `$HOME` fixed the USER half of the path (#40) and left the VERSION half machine-specific
+   * in exactly the same way. A peer still on 2.18.2 has no 2.18.4 directory until the
+   * marketplace pulls it, so the command they were just handed fails with
+   * `Cannot find module` - which reads as "the announcement is broken" or "my install is
+   * corrupt", never as "I still need to update". The correct action is not derivable from
+   * the error.
+   *
+   * ★ AND IT DEFEATED THE NOTICE'S OWN PURPOSE: the message exists because a running watcher
+   * executes the code it launched with, and a peer who followed it could only ever restart on
+   * THE STALE CODE THE NOTICE WAS WARNING ABOUT. Updating is the prerequisite and it was the
+   * one step omitted.
+   *
+   * ⚠⚠ THE HEDGE WAS ALREADY IN THE MESSAGE, ONE PARAGRAPH ABOVE, ON THE OTHER FIELD:
+   * "Files below are *my* delta … yours may differ". The file list got the caution and the
+   * PATH - the part the reader is told to EXECUTE - did not. A caveat applied to the safer
+   * of two machine-specific claims is not a caveat, it is a reminder that the author knew.
+   *
+   * ⛔ Deleting the version is NOT the fix: a peer who HAS updated needs the new copy
+   * specifically, and a wrong-but-present path would silently relaunch the old code - worse
+   * than failing loudly. So the update leads, and the path is stated as valid only after it.
+   */
   const cmd =
     `node "$HOME/.claude/plugins/cache/${now.marketplace}/${pluginName}/${now.version}` +
     `/skills/slack-session-bus/slack-watch.mjs" --channel ${a.channel} ` +
@@ -2203,7 +2227,17 @@ if (a['announce-install']) {
   if (code.length) {
     lines.push(
       '*IF YOU HAVE A WATCHER ARMED IT IS RUNNING THE OLD CODE* — regardless of what your',
-      '`--doctor` says about INSTALLED. Restart it from the installed copy:',
+      '`--doctor` says about INSTALLED. *Two steps, and the order is the point:*',
+      '',
+      '*1 · UPDATE FIRST — you cannot restart onto code you do not have yet:*',
+      '```',
+      `claude plugin marketplace update ${now.marketplace}`,
+      `claude plugin install ${pluginName}@${now.marketplace}`,
+      '```',
+      `*2 · THEN restart the watcher.* ⚠ *The \`${now.version}\` in the path below is MY version`,
+      'directory. It does not exist on your machine until step 1 has run, and pointing node at an',
+      'absent one gives you `Cannot find module` — which reads as a broken announcement or a corrupt',
+      'install, not as "I still need to update".*',
       '```',
       cmd,
       '```',
