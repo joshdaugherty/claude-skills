@@ -87,6 +87,14 @@ So when a change states a fact — *"no cwd can address this"*, *"the update mov
 
 ★ This is the tier-3 problem wearing a different coat. The observation was sound and its **subject kept moving**, which no amount of reviewing the diff would surface.
 
+#### ★★★ And the stronger form, which stops the stale claim existing at all
+
+> **Emit the observation, not the conclusion.**
+
+Instead of shipping *"only one is reachable"*, print what **this run** measured — `last moved 17:07:14 / last moved 17:47:26` — and let the reader draw it. **A stored conclusion ages silently; a regenerated one cannot.** Step 7 catches a stale claim on the next release; this stops one existing.
+
+★ It is the same escalation as the `PEERS` fix, one domain over: there, from *labelling a value* to *making the unlabelled form unrepresentable*; here, from *re-checking a world-claim* to *not storing one*. **Both end in the same place — the safe form is the only form the code can produce.**
+
 ### 8 · Record the verdict
 
 A defect the review found and you fixed → the commit message, in the form the file uses (what was wrong, what it produced, what was measured). A finding you are **not** acting on → a GitHub issue, named rather than silent. A withdrawn claim → **banner the correction and keep the text**, so the next reader sees what was believed and why it failed.
