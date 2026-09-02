@@ -102,7 +102,7 @@ node <plugin>/skills/slack-as-claude/slack-post.mjs --channel <CHANNEL_ID> --tex
 
 | **1** | **Open the repo in Claude Code.** *Trust is per-folder, persistent and one-time: a repo you have opened before needs no re-trust, and a committed `extraKnownMarketplaces` is picked up on the next session start regardless.* |
 | :-: | --- |
-| **2** | **In your terminal, FROM THE REPO ROOT:** `claude plugin install slack-as-claude@claude-skills` ### *From the root, because the marketplace is registered by the repo's own `.claude/settings.json`.* <br><br> ✔ **CHECKPOINT — try invoking the skill.** ⚠ **If it says `Unknown skill`, the install is probably fine and the SESSION is stale.** *Try `/reload-plugins`; if it still does not resolve, **RESTART THE SESSION**.* ⛔ **Do not debug the install on the strength of `claude plugin list` — it reports `✔ enabled` for a correctly installed plugin a running session cannot yet see** *(→ §7)*. |
+| **2** | # **IN THE SESSION: `/plugin install slack-as-claude@claude-skills`** ### *The slash command needs no CLI, so try it first.* <br> **FALLBACK, in a terminal at the REPO ROOT:** `claude plugin install slack-as-claude@claude-skills` — *from the root, because the marketplace is registered by the repo's own `.claude/settings.json`.* <br><br> ✔ **CHECKPOINT — THREE DIFFERENT FAILURES, THREE DIFFERENT FIXES. Read which one you got:** <br> ⚠ **`Unknown skill`** → *the install is probably fine and the SESSION is stale.* Try `/reload-plugins`; if it still does not resolve, **RESTART THE SESSION**. ⛔ *Do not debug the install on the strength of `claude plugin list` — it reports `✔ enabled` for a correctly installed plugin a running session cannot yet see* (→ §7). <br> ⚠ **`/plugin isn't available in this environment`** → *you are in a VS Code FORK.* **Observed in Cursor, while stock VS Code was fine the same day** — so this is a property of the fork, not the version. **Use the CLI fallback.** <br> ⚠ **`claude: command not found`** → **THE IDE EXTENSION DOES NOT INSTALL A CLI.** *A machine can have a current extension and no `claude` binary anywhere — an ordinary state for anyone who installed the editor extension and nothing else.* **Install the CLI** *(`brew install claude-code`, or the setup docs)*, **or use `/plugin` if your editor has it.** <br><br> ⛔ **If you are in a fork AND have no CLI you have NEITHER path** — that is the case this step used to leave with no exit at all. |
 | **3** | # **CREATE YOUR OWN APP — → PATH BUS.** ### **So the bus can tell people apart.** ⛔ *A shared token gives everyone ONE identity, collective rotation, and no way to revoke a single person.* ⚠ **Edit TWO manifest fields to your own name before pasting — `display_information.name` AND `features.bot_user.display_name` — and make them distinct from every teammate's.** |
 | **4** | **Get the token:** *Go to App Settings → **OAuth & Permissions** → under the **`OAuth Tokens`** heading → **Bot User OAuth Token** (`xoxb-…`).* ⚠ **NOT at the top of that page.** |
 | **5** | # **STASH IT — IN YOUR OWN TERMINAL, NEVER PASTED INTO A CHAT.** *(the two forms below are NOT variants of one command)* |
@@ -132,7 +132,7 @@ node <plugin>/skills/slack-as-claude/slack-post.mjs --channel <CHANNEL_ID> --tex
 
 | # **Windows** | `setx <TOKEN_VAR> "xoxb-..."` ### ✔ **Effective immediately**, *because the scripts fall back to reading `HKCU\Environment` when `process.env` does not have it.* |
 | :-- | --- |
-| # **macOS / Linux** | # ⛔ **`setx` DOES NOT EXIST.** ### **Add `export <TOKEN_VAR>="xoxb-..."` to `~/.zshrc` or `~/.bashrc`, THEN RESTART THE SESSION.** ⚠ *There is no registry fallback on these platforms, so a fresh `export` is invisible to an already-running process — see §2.* |
+| # **macOS / Linux** | # ⛔ **`setx` DOES NOT EXIST.** <br><br> ### **1 · FIND OUT WHICH SHELL IS ACTUALLY RUNNING. DO NOT GUESS, AND DO NOT OFFER THE READER A CHOICE:** <br> `ps -p $$ -o comm=` → **`zsh` → `~/.zshrc`** · **`bash` → `~/.bash_profile`** <br> ★ *There is a free tell in every terminal paste: **`zsh` prompts with `%`, `bash` with `$`**.* <br><br> ### **2 · Add `export <TOKEN_VAR>="xoxb-..."` to THAT file.** <br><br> # ⛔⛔ **3 · AND THEN: "RESTART THE SESSION" IS THE FIX FOR ONE OF TWO CAUSES. FIND OUT WHICH YOU HAVE.** ### **They are indistinguishable from the error message and only one of them is cured by restarting.** <br><br> ⚠ **STALE ENVIRONMENT** — *the process is holding an environment block from before your export.* ✔ **RESTART FIXES IT.** <br> ⛔ **NON-LOGIN SHELL** — *the harness spawns a shell that never sources your profile at all: a non-login shell does not read `~/.bash_profile`, and a non-interactive one does not read `~/.bashrc` either.* # **RESTARTING CHANGES NOTHING** — *the variable is absent on the first invocation and on every one after it, and nothing says the advice did not apply.* <br><br> ✔ **REMEDY FOR THE SECOND — wrap the invocation so a login shell sources the profile:** `bash -lc 'node …/slack-post.mjs …'` *· or put the value somewhere a non-login shell will see it (`launchctl setenv` on macOS, or export it in the parent that spawns the harness).* <br><br> ★ *Reported from a macOS session that completed step 2 correctly and still had no token.* ⚠ **ATTRIBUTED, NOT MEASURED HERE** — *this project has no macOS machine; it is recorded at the strength it was received.* <br><br> ⛔⛔ **THE OLD WORDING SAID "`~/.zshrc` or `~/.bashrc`" AND COST FOUR ROUNDS ON ONE MACHINE.** *Both exports landed in `~/.zshrc` on a machine running **bash**, so the shell never sourced them.* # **AND THE FAILURE MIMICS A DIFFERENT CAUSE:** *the probe says `<TOKEN_VAR> is not set`, which reads as **"the export did not take"** rather than **"the export went into a file this shell never reads"** — so the natural response is to run the same export again, reproducing it exactly.* <br><br> ⚠ **`~/.bashrc` IS THE WRONG FILE ON macOS EVEN WHEN THE READER IS ON BASH:** *an interactive login shell reads `~/.bash_profile`, and `~/.bashrc` is frequently absent entirely.* ✔ **Writing to both is harmless insurance** — *an IDE's integrated terminal may spawn a different shell than Terminal.app.* <br><br> # ★★★ **AND STATE THE ASYMMETRY PLAINLY, BECAUSE IT EXPLAINS WHY NOBODY SAW ANY OF THIS:** ### **WINDOWS HIDES THE ENTIRE PROBLEM.** *`botToken()` falls back to `HKCU\Environment` when `process.env` is empty, so a Windows session finds the token no matter what shell spawned it.* # **THE PLATFORM WITH THE WEAKER ENVIRONMENT STORY IS THE ONE WITH LESS TOOLING** — *and every author of this file so far has been on the platform that cannot see the failure.* ⚠ *Same asymmetry §2 records for the identity variables.* |
 
 ★ **`<TOKEN_VAR>` is not a placeholder you leave in.** *You read it from the repo's `token_env` during the probe, so what you present is `setx SLACK_BOT_TOKEN_ACME "xoxb-..."`.*
 
@@ -180,6 +180,32 @@ curl -s https://mcp.slack.com/.well-known/oauth-authorization-server
 # ⛔ THE CREDENTIAL RULE — APPLIES TO BOTH PATHS
 
 # **A `xoxb-` token, a client secret, an OAuth code and the VERIFICATION TOKEN are credentials. NONE may enter the transcript.**
+
+# ⛔⛔⛔ AND THAT SENTENCE FORBIDS AN **OUTCOME** WHILE §0's PROBE MANDATES AN **OPERATION**. NAME THE OPERATIONS, OR THEY GET IMPROVISED.
+
+### **Twice in one day, by two different sessions, the leak came from an agent trying to answer "is the token set?" — a question this file REQUIRES be answered and never said how to answer.**
+
+## ✔ THE ONLY SANCTIONED CHECK:
+
+```
+node <plugin>/skills/slack-as-claude/slack-post.mjs --channel <id> --text x --dry-run
+```
+
+### **It resolves the credential, prints `<TOKEN_VAR> is not set.` when absent, and NEVER ECHOES IT when present.** # **The value is never expanded, so there is nothing to leak.**
+
+## ⛔ NEVER, EVEN "JUST TO CHECK":
+
+| `echo $VAR` · `printenv` · `env` | **prints it** |
+| :-- | --- |
+| # `${VAR:-fallback}` | # ⚠⚠ **RETURNS THE VALUE WHEN SET.** *It substitutes the fallback only when UNSET.* **`"${VAR:+SET}${VAR:-UNSET}"` looks like it partitions and does not — the set case prints `SET` AND THE SECRET.** *That exact line put a live bot token in a transcript.* |
+| # `reg query HKCU\Environment` *(whole key)* | # **DUMPS EVERY VALUE, INCLUDING TOKENS YOU WERE NOT LOOKING FOR.** *This one leaked two unrelated credentials at once — the variable under test and a Hugging Face token nobody was thinking about.* |
+| passing it as a CLI argument | *lands in process listings and shell history* |
+
+## ★★★ AND A REDACTION FILTER DOES NOT PROTECT YOU HERE — IT **STRUCTURALLY CANNOT**
+
+### **A `sed` filter covers bytes flowing through a PIPE. A SHELL EXPANSION IS A DIFFERENT PATH: the value is interpolated BEFORE any filter exists.** ⚠ *And the trap is that both appear in the same session — an agent watches its redaction correctly mask a token in `grep` output, and reasonably concludes it is protected on the next line. It is not.*
+
+# ✔ **IF YOU GENUINELY MUST TEST SET-NESS WITHOUT THE SCRIPT, TEST WITHOUT EXPANDING:** `[ -n "${VAR+x}" ] && echo set || echo unset` *· or a length alone, `${#VAR}`.* ⛔ **Both are worse than the dry-run, which answers the question you actually have.**
 
 ## ⚠⚠ **AND THE ONE THAT ACTUALLY LEAKS IS THE ONE NOBODY GUARDS: `Basic Information` RENDERS THE VERIFICATION TOKEN IN PLAINTEXT.**
 
