@@ -1615,7 +1615,16 @@ function registrationsFor(pluginName) {
     for (const [key, entries] of Object.entries(j.plugins ?? {})) {
       if (key.split('@')[0] !== pluginName) continue;
       for (const e of entries ?? []) {
-        if (e?.version) out.push({ version: e.version, scope: e.scope ?? '?', projectPath: e.projectPath ?? null });
+        // ⚠ lastUpdated is carried so the duplicate ask can EMIT WHAT IT OBSERVED rather than
+        // a stored conclusion about it - see the note at caseDuplicateRegistrations().
+        if (e?.version) {
+          out.push({
+            version: e.version,
+            scope: e.scope ?? '?',
+            projectPath: e.projectPath ?? null,
+            lastUpdated: e.lastUpdated ?? null,
+          });
+        }
       }
     }
     return out;
@@ -1805,10 +1814,12 @@ if (a.consistency) {
     console.log('');
     console.log('  ⛔ SAME DIRECTORY, TWO SPELLINGS - an update moves ONE, unpredictably:');
     for (const r of g) console.log(`       ${String(r.version).padEnd(9)}${r.projectPath}`);
-    console.log('     MEASURED, and it corrects an earlier claim by this tool: BOTH rows have');
-    console.log('     been moved by `plugin update --scope project`, at different times. So');
-    console.log('     neither is unreachable - but one run moves ONE row and nothing says');
-    console.log('     which. What selects between them is UNKNOWN.');
+    console.log('     WHAT THIS RUN OBSERVED - not a conclusion stored when this was written:');
+    for (const r of g) console.log(`       last moved ${r.lastUpdated ?? 'unknown'}   ${r.projectPath}`);
+    console.log('     ⚠ Both timestamps recent = both rows are reachable and what selects');
+    console.log('     between them is unknown. Only one ever moving = the other may not be.');
+    console.log('     This tool asserted the second and was wrong within the hour, so it now');
+    console.log('     prints the observation and lets you draw the conclusion.');
     console.log('     Do not hand-edit the state file: it is the evidence.');
   }
 
@@ -2168,12 +2179,15 @@ if (a.doctor) {
           '  key folds some differences and not others: a linked git worktree resolves to its\n' +
           '  PRIMARY checkout (measured, two machines, two drives), while drive-letter case is\n' +
           '  NOT folded.\n' +
-          '  ⚠ THIS CORRECTS AN EARLIER CLAIM BY THIS TOOL, WHICH SAID ONE ROW WAS UNREACHABLE.\n' +
-          '  BOTH have since been moved by `plugin update --scope project`, at different times.\n' +
-          '  So neither is unreachable - but one run moves ONE row, and what selects between\n' +
-          '  them is UNKNOWN.\n' +
-          `  ⚠ Re-running MAY move ${sorted[sorted.length - 1].version} or may move the other again. Check with\n` +
-          '  --consistency afterwards rather than assuming which one landed.\n' +
+          '  WHAT THIS RUN OBSERVED, rather than a conclusion stored when this was written:\n' +
+          g
+            .map((r) => `    ${String(r.version).padEnd(9)}last moved ${r.lastUpdated ?? 'unknown'}   ${r.projectPath}`)
+            .join('\n') +
+          '\n  ⚠ Read those two timestamps. If both have moved, BOTH rows are reachable and\n' +
+          '  what selects between them is unknown. If only one ever moves, the other may be\n' +
+          '  unreachable. THIS TOOL PREVIOUSLY ASSERTED THE SECOND AND WAS WRONG WITHIN THE\n' +
+          '  HOUR, which is why it now prints the observation and lets you draw it.\n' +
+          '  ⚠ Re-run --consistency after an update rather than assuming which row landed.\n' +
           '  ⚠ And do NOT hand-edit installed_plugins.json - which registration a running\n' +
           '  session actually RESOLVES is unverified, and editing destroys the evidence.\n' +
           '  This is a Claude Code behaviour, not a plugin defect. Reported, not worked around.',
