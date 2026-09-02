@@ -293,6 +293,30 @@ UP TO DATE, AS FAR AS THIS CAN SEE. ... nothing newer is present in the clone ON
 
 ## ⛔ **So two `+dev` versions agreeing tells you NOTHING, and one disagreeing tells you nothing either.** ### **`!SKEW` between `+dev` copies is not evidence.** *Both lanes read it as though it were, for a whole day.*
 
+# ⛔⛔⛔ AND THE SAME VOIDING APPLIES TO **VERIFYING A PEER'S OUTPUT** — WHICH IS THE PART THAT WENT UNNOTICED FOR TWO DAYS
+
+### **A peer posts something produced by its `+dev` tree. You check it, it holds, you report it as verified.** # **YOU HAVE ESTABLISHED THAT A BRANCH WORKS. YOU HAVE ESTABLISHED NOTHING ABOUT ANYTHING INSTALLABLE.**
+
+✅ **CAUGHT ON A REAL ONE.** *A session verified a changed path in a delivered notice — ran it under two shells, both resolved, reported "not a defect". Then, later:*
+
+```
+released 2.18.2, in the cache   grep -c HOME slack-watch.mjs -> 0
+released 2.18.3, in the cache   grep -c HOME slack-watch.mjs -> 2
+the notice that was tested      node "$HOME/.claude/…/2.18.2/…"   <- already $HOME
+```
+
+### **The released 2.18.2 could not have produced that string. It came from the author's `+dev` tree.** ⚠ *The measurement was real, the shells were real, and* # **THE SUBJECT WAS A BUILD NOBODY COULD INSTALL.**
+
+## ★★★ **AND HERE IS WHY IT SURVIVES REVIEW: THE FLAW IS INVISIBLE WHENEVER THE `+dev` BUILD IS RIGHT.**
+
+### *If the authoring tree matches what ships next — which it usually does — the verification reaches the correct conclusion by luck, and looks indistinguishable from one that had standing.* # **IT ONLY EVER SHOWS UP ON THE ONE OCCASION THE TREES DIFFER, WHICH IS EXACTLY WHEN YOU WERE RELYING ON IT.**
+
+| ⛔ **DO NOT** | *verify a peer's `+dev` output and file the result as a finding about the plugin* |
+| :-- | --- |
+| ✔ **DO** | **re-run it against the RELEASE once one exists** — *same answer, different standing* — **or say plainly that the subject was an authoring tree** |
+
+⚠ **AND THE SESSION THAT FOUND THIS HAD OPENED THE WHOLE EXCHANGE BY WARNING THE OTHER ONE ABOUT IT** — *"an acceptance sweep passing on `+dev` establishes that the branch works, not that anything installable does"* — **then spent two days verifying `+dev` output without noticing the rule applied to itself.** ★ *Quoting a caveat back is not the same as respecting it; a limit you can state is not thereby a limit you are observing.*
+
 # ✔ **AND DO NOT "FIX" THIS BY RE-READING THE MANIFEST PER MESSAGE.** ### *In the cache it is already exact; in the repo there is no correct value to read.* **Re-reading would make a process report a version it is not running — the exact failure this file is about.** ★ *This began as "the instrument is stale", which was wrong, and as "the value is already right", which was also wrong. The truth was neither.*
 
 ---
