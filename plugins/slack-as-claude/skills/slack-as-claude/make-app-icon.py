@@ -1,4 +1,4 @@
-"""Render an emoji to a PNG suitable for a Slack app icon.
+r"""Render an emoji to a PNG suitable for a Slack app icon.
 
     python make-app-icon.py                       # robot face on dark slate
     python make-app-icon.py --emoji "\U0001F9EC"  # a different glyph
@@ -29,6 +29,7 @@ import argparse
 import os
 import sys
 
+# ⚠ REQUIRES Pillow, and nothing in this repo declared it:  python -m pip install Pillow
 from PIL import Image, ImageDraw, ImageFont
 
 EMOJI_FONTS = [

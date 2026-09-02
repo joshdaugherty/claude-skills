@@ -22,11 +22,17 @@ is the extension's generic self-description, not a fork discriminator — and `T
 An agent asked "which editor is this?" will answer *VS Code*, confidently and wrongly. The extension
 **path** discriminates: `~/.cursor/extensions/anthropic.claude-code-…` vs `~/.vscode/extensions/…`.
 
-**If the slash command is unavailable, use the CLI from the repo root:**
+**If the slash command is unavailable, use the CLI — the marketplace must already be known:**
 
 ```
+claude plugin marketplace add joshdaugherty/claude-skills   # once per machine
 claude plugin install slack-as-claude@claude-skills
 ```
+
+⚠ **This used to say "from the repo root", on the stated grounds that the repo's own
+`.claude/settings.json` registers the marketplace. There is no such file in this repo and there
+never has been** — `git ls-files .claude/` lists one rule file. The cwd does not register a
+marketplace; the `marketplace add` above is what does.
 
 ⛔ **And if that reports `claude: command not found` — the IDE extension does not install a CLI.**
 A machine can have a current Claude Code extension and no `claude` binary anywhere. That is an
@@ -134,17 +140,33 @@ Update later with:
 
 This repo is **public**, so `marketplace add` clones without credentials.
 
-⚠ **The CLI splits the update into two commands, and the first reports success on its own:**
+⚠ **The CLI splits this into three separate things, and two of them report success without
+updating anything you are running:**
 
 ```
-claude plugin marketplace update claude-skills      # moves the CLONE
-claude plugin install slack-as-claude@claude-skills # installs it
+claude plugin marketplace update claude-skills      # refreshes the CATALOG only
+claude plugin install slack-as-claude@claude-skills # populates a CACHE DIRECTORY only
+claude plugin update slack-as-claude@claude-skills  # ← THE ONLY ONE THAT MOVES A REGISTRATION
 ```
 
-Running only the first prints `✔ Successfully updated marketplace` while the installed version
-does not move. **After any update, check the installed version rather than the tick** —
-`~/.claude/plugins/cache/claude-skills/slack-as-claude/`. The `/plugin marketplace update`
-slash command appears to do both.
+# ⛔ **`install` IS NOT THE UPDATE COMMAND.** Measured on this project: **39 `install` runs
+produced 39 new cache directories and moved ZERO registrations.** Both of the first two print a
+cheerful tick while the version your sessions actually load stays exactly where it was.
+
+⚠ **`claude plugin update` defaults to `--scope user`.** A registration is pinned *per scope* in
+`~/.claude/plugins/installed_plugins.json`, so a project-scoped registration needs
+`--scope project`, run **from that project's directory**.
+
+⛔ **And do not verify by looking in the cache.** `~/.claude/plugins/cache/…` fills up on every
+`install`, so it shows the new version while your session keeps loading the old one — that is the
+check that hid this for weeks. **Verify the REGISTRATION:**
+
+```
+node <plugin>/skills/slack-session-bus/slack-watch.mjs --consistency --channel <id>
+```
+
+It prints every registration on the machine with its scope and path, and says plainly when it had
+nothing to compare against rather than calling that a pass.
 
 ⚠ **A freshly installed plugin's skills are not active in a session that was already running.** Try
 `/reload-plugins` first — it is cheap. **If the skill still does not resolve, restart the session.**
@@ -221,7 +243,8 @@ and has also reported a server unauthorized while its token was demonstrably liv
 **If all you want is the bus between concurrent sessions, none of the MCP setup applies.** That
 route — PATH BUS in the skill — is three bot scopes and a channel invite: no MCP server, no user
 token, no OAuth flow, and it sidesteps the most expensive trap in the file. The skill's scripts
-call four bot-token endpoints and nothing else.
+call six bot-token endpoints and nothing else — including `chat.update` (every heartbeat tick)
+and `chat.delete` (`--retire`), so the app both EDITS and DELETES its own messages.
 
 What is machine-wide and what is not:
 
