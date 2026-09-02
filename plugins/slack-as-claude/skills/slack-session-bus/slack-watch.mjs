@@ -182,7 +182,21 @@ const OPTIONS = {
     help: { type: 'boolean', short: 'h', default: false },
 };
 
-const { values: a } = parseArgs({ options: OPTIONS });
+/**
+ * ⛔ An unknown flag threw a Node stack trace instead of naming the known ones. Full note in
+ * slack-post.mjs. ⚠ Do NOT reference USAGE here - it is declared LATER in this file, so the
+ * error handler would itself throw a ReferenceError on the recovery path. OPTIONS is in
+ * scope because parseArgs needs it.
+ */
+let a;
+try {
+  ({ values: a } = parseArgs({ options: OPTIONS }));
+} catch (e) {
+  console.error(`${e.message}\n`);
+  console.error(`known flags: ${Object.keys(OPTIONS).map((f) => `--${f}`).join(' ')}`);
+  console.error('\nRun with --help for the full usage.');
+  process.exit(2);
+}
 
 const USAGE =
     'usage: node slack-watch.mjs --channel <id> [--interval 30] [--since <ts>] [--replay]\n' +

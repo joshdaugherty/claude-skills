@@ -465,7 +465,24 @@ const OPTIONS = {
     help: { type: 'boolean', short: 'h', default: false },
 };
 
-const { values: a } = parseArgs({ options: OPTIONS });
+/**
+ * ⛔ An unknown flag threw a Node stack trace instead of naming the known ones. Full note in
+ * slack-post.mjs. ⚠ Do NOT reference USAGE here - it is declared LATER in this file.
+ *
+ * ⛔⛔ EXIT 2, NEVER 1. In this script exit 1 is a VERDICT - "stand down, someone else holds
+ * it" - so a mistyped flag exiting 1 would be indistinguishable from losing a claim, and the
+ * work would silently not happen. That is the one place in this repo where a usage error and
+ * a legitimate answer share an exit code if nobody is careful.
+ */
+let a;
+try {
+  ({ values: a } = parseArgs({ options: OPTIONS }));
+} catch (e) {
+  console.error(`${e.message}\n`);
+  console.error(`known flags: ${Object.keys(OPTIONS).map((f) => `--${f}`).join(' ')}`);
+  console.error('\nRun with --help for the full usage.');
+  process.exit(2);
+}
 
 const label = a.session || process.env.CLAUDE_SESSION_NAME || (process.env.CLAUDE_CODE_SESSION_ID ?? '').slice(0, 8);
 
