@@ -275,7 +275,34 @@ function sessionLabel() {
   // the git branch: a branch is shared by every session working on it, so it cannot
   // identify one. Claude Code exposes no session *title* - summaries are written on
   // compaction, not live - so the id is the only per-session handle that exists.
-  const named = process.env.CLAUDE_SESSION_NAME || envFromRegistry('CLAUDE_SESSION_NAME');
+  /**
+   * ⛔⛔⛔ NO `envFromRegistry` HERE, DELIBERATELY. A MACHINE-SCOPED STORE CANNOT EXPRESS A
+   * PER-SESSION VALUE.
+   *
+   * `CLAUDE_SLACK_MACHINE` and `CLAUDE_SLACK_USER_EMAIL` are LABELS - one value per machine
+   * is the correct model, so `HKCU\Environment` is the right home for them and #29 wired the
+   * registry read there. `CLAUDE_SESSION_NAME` is an IDENTITY - MANY per machine - so a
+   * machine-scoped store is not merely unnecessary, it is the WRONG SHAPE.
+   *
+   * ⚠ 2.18.3 through 2.18.8 wired it anyway, and the failure direction is the quiet one: a
+   * session that omitted `--session` silently resolved its label out of the registry, and the
+   * result LOOKS DELIBERATE RATHER THAN DEFAULTED - nothing in the output distinguishes "the
+   * operator set this" from "this machine had one lying around". Two lanes can then land on
+   * one label, and #24 records what follows: beat() adopts any presence matching it, roster()
+   * keys by it, so two live sessions share one row that is addressable as neither.
+   *
+   * ★★★ AND THE REASON IT SHIPPED IS WORTH MORE THAN THE FIX. #29's issue BODY asked for all
+   * three variables. A COMMENT four minutes later corrected it to exclude this one, citing the
+   * SKILL.md shipped three hours earlier that calls the variable structurally unfit for what
+   * it names. The body was implemented and the comment was never read.
+   *
+   *     A REQUIREMENT HAS REVISIONS, AND THE FIRST ONE IS THE ONE YOU ALREADY HAVE OPEN.
+   *
+   * The mirror of #61, which was "a ticket edit is not an input to the code": there the
+   * correction came after the code, here it came BEFORE and was still missed. Read the
+   * comments, not only the body.
+   */
+  const named = process.env.CLAUDE_SESSION_NAME;
   if (named) return named;
   const id = process.env.CLAUDE_CODE_SESSION_ID;
   return id ? id.slice(0, 8) : null;
