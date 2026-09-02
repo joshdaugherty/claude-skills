@@ -399,6 +399,17 @@ function rankClaims(claims, { exclude = null } = {}) {
 // the transport cannot produce, so the branch is exercised on demand instead of
 // being carried untested forever or dropped and silently becoming arbitrary.
 function selfTest() {
+  // ⛔⛔ COUNT EVERY ASSERTION ACTUALLY EMITTED. Summing the case arrays was the obvious
+  // implementation and it UNDERCOUNTED BY HALF, because several checks print pass/FAIL
+  // outside any array - and a floor built on a number that does not see them is the very
+  // defect this guards against. Wrapping the emitter cannot drift from the print sites.
+  let ran = 0;
+  const emit = console.log;
+  console.log = (...z) => {
+    if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
+    emit(...z);
+  };
+  const CASE_FLOOR = 25; // raise when adding cases - a constant, reviewed on change
   let failed = 0;
   const check = (name, got, want) => {
     const ok = JSON.stringify(got) === JSON.stringify(want);
@@ -472,8 +483,19 @@ function selfTest() {
     check(`guard "${g.name}" exits ${g.code}, no stack trace`, r.status === g.code && !/ReferenceError|TypeError|is not defined/.test(out), true);
   }
 
-  console.log(failed ? `\n${failed} FAILED` : '\nall pass');
-  process.exit(failed ? 1 : 0);
+  // ⛔⛔ THE SUMMARY WAS THE BARE STRING `all pass`, WITH NO COUNT. A broken extraction
+  // regex, a renamed section or an early return leaves every counter at zero and prints
+  // exactly that - so A WHOLE BLOCK CEASING TO RUN IS INDISTINGUISHABLE FROM A GREEN SUITE.
+  // Evidence it already bites: three reviewers reading these files reported three different
+  // case totals for one deterministic command, because none of them could take the number
+  // from the tool. Nobody can check a number the tool does not print. (#104)
+  //
+  // ⚠ THE FLOOR IS A CONSTANT, reviewed when it changes - NOT derived from the same arrays
+  // it guards, which would move with them and assert nothing. Raise it when adding cases.
+  const tooFew = ran < CASE_FLOOR;
+  if (tooFew) console.log(`\n⛔ ONLY ${ran} CASES RAN, floor is ${CASE_FLOOR} - a block stopped running.`);
+  console.log(failed ? `\n${failed} FAILED of ${ran}` : `\n${ran} cases, all pass`);
+  process.exit(failed || tooFew ? 1 : 0);
 }
 
 const OPTIONS = {
