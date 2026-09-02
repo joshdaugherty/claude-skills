@@ -79,7 +79,15 @@ Fix every blocker and major, and every cheap high-confidence minor.
 - **A pre-existing bug the change merely touches is in scope.** Fix it.
 - **Re-run the gate**: `node <each script> --self-test`, `node --check`, and the markdown table validator, after the fixes.
 
-### 7 · Record the verdict
+### 7 · Re-verify the claims the change *makes*, not only the code it changes
+
+⛔ **A fix that ships an assertion about the world ages independently of the code.** This repo shipped *"only one of these registrations is reachable"* in three consecutive releases — measured, correct at the time, and **false within the hour**, because both rows were subsequently moved by the same command. Nothing in the diff changed; the world did.
+
+So when a change states a fact — *"no cwd can address this"*, *"the update moved only the upper-case row"*, *"this branch never fires"* — **re-run the measurement at ship time**, and prefer a form that degrades honestly: *"one run moves one row and nothing says which"* survives a second observation; *"only one is reachable"* does not.
+
+★ This is the tier-3 problem wearing a different coat. The observation was sound and its **subject kept moving**, which no amount of reviewing the diff would surface.
+
+### 8 · Record the verdict
 
 A defect the review found and you fixed → the commit message, in the form the file uses (what was wrong, what it produced, what was measured). A finding you are **not** acting on → a GitHub issue, named rather than silent. A withdrawn claim → **banner the correction and keep the text**, so the next reader sees what was believed and why it failed.
 

@@ -165,6 +165,7 @@ const OPTIONS = {
     presence: { type: 'boolean', default: false },
     raw: { type: 'boolean', default: false },
     doctor: { type: 'boolean', default: false },
+    consistency: { type: 'boolean', default: false },
     all: { type: 'boolean', default: false },
     'gone-after': { type: 'string' },
     retire: { type: 'boolean', default: false },
@@ -204,7 +205,12 @@ const USAGE =
       '       [--ignore-session <label>]... [--include-self] [--once]\n' +
       '\n' +
       '       [--heartbeat <sec>] [--retire] [--releases <ts,ts>] [--all]\n' +
-      '       [--announce-install] [--from <version>] [--show <ts>]\n' +
+      '       [--announce-install] [--from <version>] [--show <ts>] [--consistency]\n' +
+      '\n' +
+      '  --consistency  the OPERATOR question - is this MACHINE consistent - as opposed to\n' +
+      '              --doctor, which answers the SESSION question "am I behind" and stays\n' +
+      '              narrow on purpose. Exhaustive across every registration, and\n' +
+      '              deliberately invoked so it can afford to be.\n' +
       '\n' +
       '  --show <ts>  ONE message, in full, by ts - the command the [bus] excerpt line\n' +
       '              names. Needed because --since is EXCLUSIVE and so cannot fetch the\n' +
@@ -354,17 +360,34 @@ function selfTest() {
   for (const [name, got, want] of dupCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  case-dup: ${name}`);
   const dupBad = dupCases.filter(([, got, want]) => got !== want).length;
 
+  /**
+   * containsPath. The first case is the one that shipped broken: this repo has a primary and
+   * a worktree whose name EXTENDS the primary's, so a bare startsWith marked the wrong row
+   * and - worse - scoped the staleness check to it.
+   */
+  const pathCases = [
+    ['a prefixed SIBLING is not inside', containsPath('D:\\a\\daugherty-ydna', 'D:\\a\\daugherty-ydna-R-BRANCH'), false],
+    ['the directory itself is inside', containsPath('D:\\a\\repo', 'D:\\a\\repo'), true],
+    ['a subdirectory is inside', containsPath('D:\\a\\repo', 'D:\\a\\repo\\sources'), true],
+    ['a forward-slash subdirectory is inside', containsPath('D:\\a\\repo', 'D:/a/repo/sources'), true],
+    ['a trailing separator does not break it', containsPath('D:\\a\\repo\\', 'D:\\a\\repo\\sources'), true],
+    ['drive-letter case is folded', containsPath('C:\\a\\repo', 'c:\\a\\repo\\sub'), true],
+    ['an unrelated directory is not inside', containsPath('D:\\a\\repo', 'D:\\b\\other'), false],
+  ];
+  for (const [name, got, want] of pathCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  path: ${name}`);
+  const pathBad = pathCases.filter(([, got, want]) => got !== want).length;
+
   // ⚠ EVERY counter must appear in BOTH the summary and the exit code. regBad was computed
   // and left out of both for one edit - seven cases that printed pass/FAIL and could not
   // fail the suite. A test that cannot fail is the defect this file documents two functions
   // up, committed while writing the note about it.
   console.log(
-    missing.length || bad || regBad || dupBad
+    missing.length || bad || regBad || dupBad || pathBad
       ? `\n${missing.length} FLAG(S) MISSING FROM USAGE${missing.length ? `: ${missing.join(', ')}` : ''}` +
-        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}`
+        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}`
       : '\nall pass',
   );
-  process.exit(missing.length || bad || regBad || dupBad ? 1 : 0);
+  process.exit(missing.length || bad || regBad || dupBad || pathBad ? 1 : 0);
 }
 
 if (a['self-test']) selfTest();
@@ -1669,11 +1692,36 @@ function caseDuplicateRegistrations(regs) {
   );
 }
 
+/**
+ * Does `dir` contain `cwd` - as a DIRECTORY, not as a string prefix?
+ *
+ * ⛔⛔ `here.startsWith(projectPath)` IS WRONG AND THIS REPO IS THE COUNTEREXAMPLE.
+ * `…\daugherty-ydna` is a string prefix of `…\daugherty-ydna-R-BRANCH`, so a session in the
+ * linked worktree was told the PRIMARY's registration governed it - and the same test decided
+ * which rows counted as "behind", so the error was never merely cosmetic.
+ *
+ * ⚠ The pair that breaks it is a WORKTREE, which is exactly the layout this project uses and
+ * documents. The counterexample was one `cd` away for two days.
+ *
+ * Equal, or followed by a separator. Case-folded because Windows matches paths that way -
+ * see the case-duplicate note; both dimensions have to be handled and they are different bugs.
+ */
+function containsPath(dir, cwd) {
+  // ⚠ NORMALISE THE SEPARATOR ON BOTH SIDES FIRST. A registration is recorded with
+  // backslashes while a cwd can arrive with forward slashes - Git Bash, a path built by
+  // join() elsewhere, a tool that already normalised - so comparing them raw rejects a
+  // genuine child directory. Caught by this function's own fixtures before it shipped,
+  // which is the only reason it is not another entry in the corrections list.
+  const norm = (p) => String(p).toLowerCase().replace(/\\/g, '/').replace(/\/+$/, '');
+  const d = norm(dir);
+  const c = norm(cwd);
+  return c === d || c.startsWith(`${d}/`);
+}
+
 function behindRegistrations(regs, cachedVersion, cwd) {
   if (!cachedVersion) return [];
-  const here = String(cwd).toLowerCase();
   return regs
-    .filter((r) => !r.projectPath || here.startsWith(String(r.projectPath).toLowerCase()))
+    .filter((r) => !r.projectPath || containsPath(r.projectPath, cwd))
     .filter((r) => cmpVer(r.version, cachedVersion) < 0);
 }
 
@@ -1682,6 +1730,99 @@ function cmpVer(x, y) {
   const [a1, b1, c1] = p(x);
   const [a2, b2, c2] = p(y);
   return a1 - a2 || b1 - b2 || c1 - c2;
+}
+
+/**
+ * ★★★ "AM I BEHIND" AND "IS THIS MACHINE CONSISTENT" ARE TWO QUESTIONS WITH DIFFERENT OWNERS,
+ * AND ANSWERING THEM IN ONE COMMAND MAKES BOTH WORSE. A peer's formulation, and it resolves
+ * an argument this file had with itself:
+ *
+ *     "AM I BEHIND"              a SESSION's question, asked at every start. It must stay
+ *                                NARROW or it becomes noise - and a warning that fires on
+ *                                things you cannot act on is how a real signal gets ignored.
+ *     "IS THIS MACHINE           an OPERATOR's question, asked DELIBERATELY. It can afford to
+ *      CONSISTENT"               be exhaustive, because nobody reads it forty times a day.
+ *
+ * ⛔ The case that forced the split: a registration TWENTY-TWO RELEASES stale, for a project
+ * this session is not in. `--doctor` is right to stay silent about it - widening the startup
+ * check to every registration on the machine would bury the one line that concerns you.
+ *
+ * ★ A ROW THAT NOTHING REPORTS ON ITS MERITS DOES NOT ARGUE FOR WIDENING THE STARTUP CHECK.
+ * IT ARGUES FOR THE SECOND COMMAND EXISTING.
+ *
+ * ⚠ Note what this deliberately does NOT do: it never prescribes a command it cannot reach.
+ * An unreachable registration is reported as unreachable, because a detector broader than its
+ * remedy produces a permanent, correct, unactionable warning.
+ */
+if (a.consistency) {
+  const selfFile = fileURLToPath(import.meta.url);
+  const skillDir = dirname(selfFile);
+  const runningManifest = readJson(join(skillDir, '..', '..', '.claude-plugin', 'plugin.json'));
+  const pluginName = runningManifest?.name ?? 'slack-as-claude';
+
+  const cacheRoot = join(homedir(), '.claude', 'plugins', 'cache');
+  let newest = null;
+  const dirs = [];
+  try {
+    for (const mkt of readdirSync(cacheRoot)) {
+      const dir = join(cacheRoot, mkt, pluginName);
+      if (!existsSync(dir)) continue;
+      for (const v of readdirSync(dir)) {
+        const orphaned = existsSync(join(dir, v, '.orphaned_at'));
+        dirs.push({ version: v, marketplace: mkt, orphaned });
+        if (!orphaned && (!newest || cmpVer(v, newest) > 0)) newest = v;
+      }
+    }
+  } catch {
+    /* no cache */
+  }
+
+  const reg = registrationsFor(pluginName);
+  console.log(`MACHINE CONSISTENCY - ${pluginName}`);
+  console.log(`  cache: ${dirs.length} version director${dirs.length === 1 ? 'y' : 'ies'}, newest non-orphaned ${newest ?? 'none'}`);
+  console.log(`  registrations: ${reg.length}`);
+  console.log('');
+
+  if (!reg.length) {
+    // ⛔ A failed or empty read is not "consistent". Say which it is.
+    console.log('  No registrations readable. That is NOT a clean bill of health - it means');
+    console.log('  installed_plugins.json was absent or unreadable, so nothing was compared.');
+    process.exit(0);
+  }
+
+  let problems = 0;
+  for (const r of [...reg].sort((x, y) => String(x.projectPath ?? '').localeCompare(String(y.projectPath ?? '')))) {
+    const behind = newest && cmpVer(r.version, newest) < 0;
+    if (behind) problems += 1;
+    console.log(
+      `  ${behind ? '⚠ BEHIND ' : '  ok     '}${String(r.version).padEnd(9)}${String(r.scope).padEnd(9)}${r.projectPath ?? '(user)'}`,
+    );
+  }
+
+  const dupes = caseDuplicateRegistrations(reg);
+  for (const g of dupes) {
+    problems += 1;
+    console.log('');
+    console.log('  ⛔ SAME DIRECTORY, TWO SPELLINGS - an update moves ONE, unpredictably:');
+    for (const r of g) console.log(`       ${String(r.version).padEnd(9)}${r.projectPath}`);
+    console.log('     MEASURED, and it corrects an earlier claim by this tool: BOTH rows have');
+    console.log('     been moved by `plugin update --scope project`, at different times. So');
+    console.log('     neither is unreachable - but one run moves ONE row and nothing says');
+    console.log('     which. What selects between them is UNKNOWN.');
+    console.log('     Do not hand-edit the state file: it is the evidence.');
+  }
+
+  console.log('');
+  if (!problems) {
+    console.log('  Every registration matches the newest cached version, and no directory is');
+    console.log('  registered twice. ⚠ This says nothing about which copy a SKILL INVOCATION');
+    console.log('  resolves - that remains unverified.');
+  } else {
+    console.log(`  ${problems} thing(s) to look at. A registration behind the cache is fixed FROM`);
+    console.log('  THAT PROJECT\'S DIRECTORY:  claude plugin update <plugin>@<mkt> --scope project');
+    console.log('  ⚠ A row flagged unreachable above is NOT fixable by that command, or any other.');
+  }
+  process.exit(0);
 }
 
 if (a.doctor) {
@@ -1754,7 +1895,15 @@ if (a.doctor) {
   if (reg.length) {
     const here = process.cwd().toLowerCase();
     for (const r of reg) {
-      const mine = r.projectPath && here.startsWith(r.projectPath.toLowerCase());
+      // ⛔ A BARE startsWith MATCHES A PREFIXED SIBLING. `…\daugherty-ydna` is a prefix of
+      // `…\daugherty-ydna-R-BRANCH`, so a session standing in the worktree was told the
+      // PRIMARY's registration was "THIS PROJECT". This repo HAS that exact pair, so the
+      // false marker was one `cd` away the whole time.
+      //
+      // ★ The same bug shape as behindRegistrations(), which uses the identical test to
+      // decide whether a row governs you - so the marker was cosmetic and the SCOPING was
+      // not. Both go through containsPath() now.
+      const mine = r.projectPath && containsPath(r.projectPath, here);
       console.log(
         `REGISTERED ${String(r.version).padEnd(8)} ${String(r.scope).padEnd(8)}` +
           `${r.projectPath ?? '(user)'}${mine ? '   <- THIS PROJECT' : ''}`,
@@ -2014,13 +2163,17 @@ if (a.doctor) {
         'TWO REGISTRATIONS FOR ONE DIRECTORY, differing only in path case:\n' +
           g.map((r) => `    ${String(r.version).padEnd(8)} ${r.projectPath}`).join('\n') +
           '\n  Windows matches paths case-insensitively, so these are the SAME folder.\n' +
-          '  ⛔ ONLY ONE IS REACHABLE. No plugin subcommand takes a path argument, and the\n' +
-          '  NORMALISER between your cwd and the registration key folds some differences and\n' +
-          '  not others: a linked git worktree resolves to its PRIMARY checkout (measured on\n' +
-          '  two machines, two drives - no worktree row is created), while drive-letter case\n' +
-          '  is NOT folded. MEASURED: the documented update moved the upper-case row and left\n' +
-          '  the other untouched.\n' +
-          `  ⚠ DO NOT re-run the update expecting ${sorted[sorted.length - 1].version} to move. It will not.\n` +
+          '  ⛔ AN UPDATE MOVES ONE OF THEM AND NOTHING TELLS YOU WHICH. No plugin subcommand\n' +
+          '  takes a path argument, and the NORMALISER between your cwd and the registration\n' +
+          '  key folds some differences and not others: a linked git worktree resolves to its\n' +
+          '  PRIMARY checkout (measured, two machines, two drives), while drive-letter case is\n' +
+          '  NOT folded.\n' +
+          '  ⚠ THIS CORRECTS AN EARLIER CLAIM BY THIS TOOL, WHICH SAID ONE ROW WAS UNREACHABLE.\n' +
+          '  BOTH have since been moved by `plugin update --scope project`, at different times.\n' +
+          '  So neither is unreachable - but one run moves ONE row, and what selects between\n' +
+          '  them is UNKNOWN.\n' +
+          `  ⚠ Re-running MAY move ${sorted[sorted.length - 1].version} or may move the other again. Check with\n` +
+          '  --consistency afterwards rather than assuming which one landed.\n' +
           '  ⚠ And do NOT hand-edit installed_plugins.json - which registration a running\n' +
           '  session actually RESOLVES is unverified, and editing destroys the evidence.\n' +
           '  This is a Claude Code behaviour, not a plugin defect. Reported, not worked around.',
