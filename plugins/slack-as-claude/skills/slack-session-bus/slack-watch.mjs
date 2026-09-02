@@ -21,7 +21,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
@@ -1727,6 +1727,53 @@ function containsPath(dir, cwd) {
   return c === d || c.startsWith(`${d}/`);
 }
 
+/**
+ * The MAIN worktree containing `cwd`, or null. A linked worktree is a SIBLING directory, not
+ * a descendant, so no path test can relate the two - this asks git.
+ *
+ * ⛔⛔ WHY THE MARKER NEEDS IT: #80 removed a false positive (a prefixed sibling matched a
+ * bare startsWith) and put a FALSE NEGATIVE in its place - a linked worktree, correctly
+ * excluded as a path, got no attribution at all. For at least one consuming repo FOUR OF FIVE
+ * TREES ARE WORKTREES, so "no marker" became the normal case rather than an edge one.
+ *
+ * ★ And before that, those trees were attributed to the primary FOR AN ACCIDENTAL REASON -
+ * the string prefix happened to match. The accidental answer and the plausible answer were
+ * the same value, which is exactly why the defect survived long enough to be cited as
+ * evidence elsewhere.
+ *
+ * ⛔⛔ AND THE MARKER CLAIMS A PATH RELATIONSHIP, NOT A RESOLUTION. It says "this row is the
+ * registration of the MAIN WORKTREE CONTAINING YOU" - which git answers definitively. It does
+ * NOT say that a plugin command or a skill load resolves to that row.
+ *
+ * ⚠ THAT SECOND CLAIM IS RETRACTED AND UNESTABLISHED. It was believed because THIS TOOL'S OWN
+ * MARKER had a prefix bug and labelled a sibling as the current project - three lanes then
+ * read a DISPLAY artifact as a fact about the CLI's write path. And every behavioural run
+ * that seemed to confirm it was a NO-OP ("already at the latest version"), which may exit
+ * before any registration write, so an absent worktree row proves nothing.
+ *
+ * ★ THE DECISIVE TEST IS A VERSION-CHANGING UPDATE FROM A WORKTREE CWD, and it wants a
+ * single-tenant machine: doing it here would downgrade a registration other live sessions
+ * depend on. Flagged rather than run.
+ */
+function mainWorktreeOf(cwd) {
+  try {
+    const top = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (!top) return null;
+    const common = execFileSync('git', ['rev-parse', '--git-common-dir'], {
+      cwd: top, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (!common) return top;
+    // ⚠ `--git-common-dir` is RELATIVE to the cwd in a main worktree, so it must be resolved
+    // against the toplevel rather than used raw - the trap slack-post.mjs documents, where
+    // dirname() of it yielded "..".
+    return dirname(resolve(top, common));
+  } catch {
+    return null;
+  }
+}
+
 function behindRegistrations(regs, cachedVersion, cwd) {
   if (!cachedVersion) return [];
   return regs
@@ -1905,6 +1952,7 @@ if (a.doctor) {
   const reg = registrationsFor(pluginName);
   if (reg.length) {
     const here = process.cwd().toLowerCase();
+    const primaryHere = mainWorktreeOf(process.cwd());
     for (const r of reg) {
       // ⛔ A BARE startsWith MATCHES A PREFIXED SIBLING. `…\daugherty-ydna` is a prefix of
       // `…\daugherty-ydna-R-BRANCH`, so a session standing in the worktree was told the
@@ -1914,10 +1962,14 @@ if (a.doctor) {
       // ★ The same bug shape as behindRegistrations(), which uses the identical test to
       // decide whether a row governs you - so the marker was cosmetic and the SCOPING was
       // not. Both go through containsPath() now.
-      const mine = r.projectPath && containsPath(r.projectPath, here);
+      // Direct containment, or the primary worktree of this one. The two are DIFFERENT
+      // strengths of answer and are labelled differently - see mainWorktreeOf().
+      const direct = r.projectPath && containsPath(r.projectPath, here);
+      const viaPrimary = !direct && r.projectPath && primaryHere && containsPath(r.projectPath, primaryHere);
+      const mark = direct ? '   <- THIS PROJECT' : viaPrimary ? '   <- THIS PROJECT (via its primary worktree)' : '';
       console.log(
         `REGISTERED ${String(r.version).padEnd(8)} ${String(r.scope).padEnd(8)}` +
-          `${r.projectPath ?? '(user)'}${mine ? '   <- THIS PROJECT' : ''}`,
+          `${r.projectPath ?? '(user)'}${mark}`,
       );
     }
   }
@@ -2175,10 +2227,16 @@ if (a.doctor) {
           g.map((r) => `    ${String(r.version).padEnd(8)} ${r.projectPath}`).join('\n') +
           '\n  Windows matches paths case-insensitively, so these are the SAME folder.\n' +
           '  ⛔ AN UPDATE MOVES ONE OF THEM AND NOTHING TELLS YOU WHICH. No plugin subcommand\n' +
-          '  takes a path argument, and the NORMALISER between your cwd and the registration\n' +
-          '  key folds some differences and not others: a linked git worktree resolves to its\n' +
-          '  PRIMARY checkout (measured, two machines, two drives), while drive-letter case is\n' +
-          '  NOT folded.\n' +
+          '  takes a path argument, and whatever maps your cwd to a registration key does NOT\n' +
+          '  fold drive-letter case.\n' +
+          '  ⚠ AN EARLIER VERSION OF THIS ASK ALSO SAID a worktree "resolves to its PRIMARY\n' +
+          '  checkout (measured, two machines, two drives)". THAT IS RETRACTED. The evidence\n' +
+          "  was this tool's OWN `<- THIS PROJECT` marker, which had a prefix bug and labelled\n" +
+          '  a SIBLING directory as the current project - so three lanes read a DISPLAY\n' +
+          "  artifact as a fact about the CLI's WRITE path. And the behavioural runs that\n" +
+          '  seemed to confirm it were all NO-OPS ("already at the latest version"), which may\n' +
+          '  exit before any registration write. UNESTABLISHED - the decisive test is a\n' +
+          '  version-CHANGING update from a worktree cwd, and it wants a single-tenant machine.\n' +
           '  WHAT THIS RUN OBSERVED, rather than a conclusion stored when this was written:\n' +
           g
             .map((r) => `    ${String(r.version).padEnd(9)}last moved ${r.lastUpdated ?? 'unknown'}   ${r.projectPath}`)
