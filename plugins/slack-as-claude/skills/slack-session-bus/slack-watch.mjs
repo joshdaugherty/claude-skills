@@ -1846,12 +1846,28 @@ if (a.consistency) {
     process.exit(0);
   }
 
+  /**
+   * ⛔⛔ `ok` IS A VERDICT. IT USED TO BE PRINTED WHEN NO COMPARISON HAD HAPPENED.
+   *
+   *     const behind = newest && cmpVer(r.version, newest) < 0;
+   *
+   * With no non-orphaned cache directory, `newest` is null, so `behind` is null for EVERY
+   * row, `problems` never increments, and the clean-bill branch asserts a comparison that
+   * never ran. Measured: two registrations 19 minor versions apart, BOTH READING `ok`, and
+   * exit 0 - so the output was wrong even about registration-vs-registration.
+   *
+   * ⚠ The mirror guard sits ELEVEN LINES ABOVE, for the other empty input: "No registrations
+   * readable. That is NOT a clean bill of health." The authors knew this exact shape and
+   * wrote it once. This is the same guard for the cache side. (#89)
+   */
+  const comparable = Boolean(newest);
   let problems = 0;
   for (const r of [...reg].sort((x, y) => String(x.projectPath ?? '').localeCompare(String(y.projectPath ?? '')))) {
-    const behind = newest && cmpVer(r.version, newest) < 0;
+    const behind = comparable && cmpVer(r.version, newest) < 0;
     if (behind) problems += 1;
+    const mark = behind ? '⚠ BEHIND ' : comparable ? '  ok     ' : '  ?      ';
     console.log(
-      `  ${behind ? '⚠ BEHIND ' : '  ok     '}${String(r.version).padEnd(9)}${String(r.scope).padEnd(9)}${r.projectPath ?? '(user)'}`,
+      `  ${mark}${String(r.version).padEnd(9)}${String(r.scope).padEnd(9)}${r.projectPath ?? '(user)'}`,
     );
   }
 
@@ -1871,7 +1887,23 @@ if (a.consistency) {
   }
 
   console.log('');
-  if (!problems) {
+  if (!comparable) {
+    // ⛔ The cache-side mirror of the !reg.length guard above. An absent input is an
+    // UNANSWERED QUESTION, not a pass, and `ok` on every row was the answer to a question
+    // nobody asked. (#89)
+    console.log('  ⛔ NOTHING WAS COMPARED AGAINST THE CACHE: no non-orphaned version directory');
+    console.log('  was found, so every row above reads ? and NOT ok. That is NOT a clean bill of');
+    console.log('  health - it is an empty read, exactly like an unreadable installed_plugins.json.');
+    console.log('  The cache root may be absent, relocated, fully orphaned, or unreadable.');
+    console.log('');
+    if (dupes.length) {
+      console.log(`  ⚠ The ${dupes.length} duplicate-directory finding(s) above DO stand: that check compares`);
+      console.log('  registrations to each other and needs no cache.');
+    } else {
+      console.log('  ✔ The duplicate-directory check DID run and found none - it compares');
+      console.log('  registrations to each other and needs no cache.');
+    }
+  } else if (!problems) {
     console.log('  Every registration matches the newest cached version, and no directory is');
     console.log('  registered twice. ⚠ This says nothing about which copy a SKILL INVOCATION');
     console.log('  resolves - that remains unverified.');
@@ -2183,7 +2215,32 @@ if (a.doctor) {
 
   // Verdict, by BYTES not by version number.
   console.log('');
+
+  /**
+   * ⛔⛔ AN ASK CARRIES ITS OWN CLASSIFICATION. IT USED TO BE RECOVERED BY PREFIX-MATCHING
+   * ITS DISPLAY PROSE, AND THE MATCH HAD ALREADY DRIFTED OFF EVERY ASK THAT MATTERED.
+   *
+   *     asks.some((x) => x.startsWith('ASK') || x.startsWith('RESTART'))
+   *
+   * Measured across the 13 push sites: ZERO began with `ASK` - that literal was dead - and
+   * exactly ONE began with `RESTART`. So `YOU ARE RUNNING AN OLDER INSTALLED COPY`, whose
+   * own text calls itself DEFINITIVE, rendered under `ACTION SUGGESTED:` and never produced
+   * the escalation headline or the paste-to-a-human block that is the entire mechanism for
+   * getting an update authorised. THE ONE CASE THE BYTE CHECK CANNOT HELP IS THE CASE WHERE
+   * THE ESCALATION WAS WITHHELD. (#91)
+   *
+   * ★ Same escalation as the PEERS fix, one domain over: from LABELLING a value to making
+   * the unlabelled form UNREPRESENTABLE. There is no way to add an ask without saying, AT
+   * THE PUSH SITE, which of these three it is - and rewording it cannot change the answer.
+   *
+   *   askBehind  disk-derived, AND asserts the running code is older than what is installed
+   *   askDisk    disk-derived, but not a claim about being behind
+   *   askPeer    derived from the CHANNEL READ - meaningless if that read failed (#90)
+   */
   const asks = [];
+  const askBehind = (text) => asks.push({ text, disk: true, behind: true });
+  const askDisk = (text) => asks.push({ text, disk: true, behind: false });
+  const askPeer = (text) => asks.push({ text, disk: false, behind: false });
 
   /**
    * ⛔⛔⛔ THESE TWO USED TO SIT ~190 LINES ABOVE, BESIDE THE `REGISTERED` PRINTING, AND
@@ -2208,7 +2265,7 @@ if (a.doctor) {
   if (reg.length) {
     const behind = behindRegistrations(reg, installed?.version, process.cwd());
     if (behind.length) {
-      asks.push(
+      askBehind(
         `REGISTRATION IS BEHIND THE CACHE: ${behind.map((r) => `${r.scope}=${r.version}`).join(', ')} vs cached ${installed.version}.\n` +
           '  A cache directory is NOT a registration. Scripts run by absolute path use the\n' +
           '  cache and are fine; a SKILL INVOCATION resolves the registration and would load\n' +
@@ -2222,7 +2279,7 @@ if (a.doctor) {
     }
     for (const g of caseDuplicateRegistrations(reg)) {
       const sorted = [...g].sort((x, y) => cmpVer(y.version, x.version));
-      asks.push(
+      askDisk(
         'TWO REGISTRATIONS FOR ONE DIRECTORY, differing only in path case:\n' +
           g.map((r) => `    ${String(r.version).padEnd(8)} ${r.projectPath}`).join('\n') +
           '\n  Windows matches paths case-insensitively, so these are the SAME folder.\n' +
@@ -2321,14 +2378,14 @@ if (a.doctor) {
        * omitted.
        */
       if (!a.session) {
-        asks.push(
+        askPeer(
           `No presence found for "${selfLabel}" - but NO --session was passed, so that is the\n` +
             '  session-id fallback rather than a label you use. THIS CHECK CANNOT TELL YOU\n' +
             '  ANYTHING ABOUT YOUR REAL LANE, and the PEERS line above may well show it alive.\n' +
             '  ⛔ Do NOT arm a watcher on the strength of this. Re-run with --session <label>.',
         );
       } else {
-        asks.push(
+        askPeer(
           `YOU ARE NOT PUBLISHING PRESENCE as "${selfLabel}"${mine ? ` - last beat ${Math.round(now - mine.beat)}s ago, past its window` : ' - no presence message at all'}.\n` +
             (speaking
               ? `  You posted ${spokeAge}s ago, so peers on 2.10.0+ see you as ACTIVE - present, but\n` +
@@ -2367,7 +2424,7 @@ if (a.doctor) {
    * PEERS its beat age, !JOINED a seam with nothing stored. This one shipped without.
    */
   if (announced && installed && cmpVer(announced.version, installed.version) < 0) {
-    asks.push(
+    askPeer(
       `THE INSTALLED ${installed.version} WAS NEVER ANNOUNCED - newest announcement is ${announced.version}.\n` +
         '  A gap in the record, not evidence the release is unreal: an announcement is a\n' +
         '  claim someone has to make, and nobody made this one. Post it with:\n' +
@@ -2395,7 +2452,7 @@ if (a.doctor) {
    * help - and it was the only one named.
    */
   if (announced && available && cmpVer(announced.version, available.version) > 0) {
-    asks.push(
+    askPeer(
       `A PEER ANNOUNCED ${announced.version}; the marketplace clone only has ${available.version}.\n` +
         `  ${announced.by} said so on the bus. THAT IS HEARSAY - nothing here has verified\n` +
         '  the version exists. The CLONE has not heard of it, so this is the update case:\n' +
@@ -2406,7 +2463,7 @@ if (a.doctor) {
         '  success whether or not anything moved, and it moves no version at all.',
     );
   } else if (announced && installed && cmpVer(announced.version, installed.version) > 0) {
-    asks.push(
+    askPeer(
       `A PEER ANNOUNCED ${announced.version}, newer than the installed ${installed.version} -\n` +
         `  and the clone ALREADY HAS ${available?.version ?? 'it'}. So the update is done and the\n` +
         '  CACHE is what is behind. Updating again is a no-op that will report success:\n' +
@@ -2416,7 +2473,7 @@ if (a.doctor) {
   }
 
   if (available && installed && cmpVer(available.version, installed.version) > 0) {
-    asks.push(
+    askDisk(
       `THE CLONE HAS ${available.version} AND THE CACHE HAS ${installed.version} - the update ran,\n` +
         '  the install did not. These are SEPARATE COMMANDS and the first reports success\n' +
         '  alone, so this state looks handled and is not:\n' +
@@ -2450,7 +2507,7 @@ if (a.doctor) {
    * needs no byte comparison and cannot be fooled by which file happens to be identical.
    */
   if (inCache && installed && cmpVer(runningVer, installed.version) < 0) {
-    asks.push(
+    askBehind(
       `YOU ARE RUNNING AN OLDER INSTALLED COPY: ${runningVer}, while ${installed.version} is installed.\n` +
         '  This is definitive - it compares version directories, not bytes - and it holds\n' +
         '  even when the file you are executing is unchanged, because the OTHER scripts in\n' +
@@ -2501,7 +2558,7 @@ if (a.doctor) {
       /* best effort - the version check above is the load-bearing one */
     }
     if (differing.length) {
-      asks.push(
+      askBehind(
         `FILES THAT DIFFER from the installed ${installed.version}: ${differing.join(', ')}\n` +
           '  Listed because "the watcher is unchanged" says nothing about the others, and\n' +
           '  a stale slack-claim is the one that can double-execute a finished task.\n' +
@@ -2515,7 +2572,7 @@ if (a.doctor) {
   if (installed && existsSync(installed.watcher)) {
     const same = sameCode(selfFile, installed.watcher);
     if (same === false && inCache) {
-      asks.push(
+      askBehind(
         // ⛔⛔ --heartbeat WAS MISSING, AND #36 FIXED THE IDENTICAL DEFECT IN THE x-update
         // NOTICE AND NOT IN THIS SIBLING. A reader following this restarts a watcher that
         // publishes NO PRESENCE: un-pingable, absent from --presence, and a stale takeover of
@@ -2534,23 +2591,43 @@ if (a.doctor) {
       // Running a repo checkout whose bytes differ from the release. Direction is not
       // knowable from bytes alone, but a working tree is normally AHEAD, not behind -
       // so do not tell the human to go fetch something. Tell them what is actually true.
-      asks.push(
+      askDisk(
         `You are running an AUTHORING CHECKOUT whose code differs from the released ${installed.version}.\n` +
           `  That usually means uncommitted work, not a stale session. Nothing to fetch.\n` +
           `  Peers on the release cannot see anything you added here until it ships.`,
       );
     } else if (same === true && !inCache) {
-      asks.push(`Switch to the installed copy - same code, but the repo is authoring-only:\n  ${installed.watcher}`);
+      askDisk(`Switch to the installed copy - same code, but the repo is authoring-only:\n  ${installed.watcher}`);
     }
   }
+
+  /**
+   * ⛔⛔ A DISK-DERIVED ASK SURVIVES A FAILED CHANNEL READ. The entire ask-printing chain
+   * used to hang off the `else` of this branch, so a failed read computed all thirteen asks
+   * and printed NONE - including TWO REGISTRATIONS FOR ONE DIRECTORY and YOU ARE RUNNING AN
+   * OLDER INSTALLED COPY, which never touch Slack - while the arm's own closing sentence
+   * told the reader the disk-derived information had survived.
+   *
+   * A revoked or expired token is PRECISELY when someone runs --doctor. (#90)
+   */
+  const shown = readable ? asks : asks.filter((x) => x.disk);
+  const withheld = asks.length - shown.length;
 
   if (!readable) {
     console.log('');
     console.log(`⛔ THE CHANNEL READ FAILED (${read.error}). Everything above about PEERS is`);
-    console.log('UNKNOWN, not empty, and no ACTION has been suggested from it - advice derived');
+    console.log('UNKNOWN, not empty, and no ACTION has been suggested FROM IT - advice derived');
     console.log('from an unanswered question is worse than none, because it is actionable.');
+    if (withheld) console.log(`${withheld} peer-derived action(s) withheld for that reason.`);
     console.log('The version lines ARE still trustworthy: they come from disk, not from Slack.');
-  } else if (!asks.length) {
+    if (shown.length) {
+      console.log(`So are the ${shown.length} action(s) below - every one is derived from disk, which`);
+      console.log('is why a failed channel read does not suppress them.');
+    }
+    console.log('');
+  }
+
+  if (!shown.length) {
     // ⛔ WAS: "...and nothing newer is available." THAT SENTENCE WAS A LIE THIS TOOL
     // COULD NOT DETECT. It asserts a fact about the MARKETPLACE while knowing only a
     // fact about a LOCAL CLONE, and it was printed verbatim while v2.9.0 sat tagged
@@ -2560,8 +2637,50 @@ if (a.doctor) {
     // The claim is now scoped to what was actually checked, and the caveat is
     // UNCONDITIONAL - not shown only when the clone looks old, because "old" is
     // exactly the judgement this tool has already proved it cannot make.
-    console.log('UP TO DATE, AS FAR AS THIS CAN SEE. Running code matches the newest INSTALLED copy,');
-    console.log('and nothing newer is present in the marketplace clone ON DISK.');
+    //
+    // ⛔⛔ AND IT STILL PRINTED A VERDICT FOR TWO COMPARISONS WITHOUT CHECKING THAT EITHER
+    // HAD RUN. Both halves were unconditional, while EVERY ask that could contradict them
+    // sits behind `installed &&`. With no non-orphaned cache directory `installed` is null,
+    // nothing is compared, no ask is pushed, and THE ABSENCE OF A COMPARISON WAS REPORTED
+    // AS A PASS - in the exact words the comment above calls the most expensive thing a
+    // wrong status line can do.
+    //
+    // ⚠ The second half was not merely vacuous but FALSE: nothing anywhere compared the
+    // clone to what is RUNNING, only to `installed`. A clone at 9.9.9 printed `AVAILABLE
+    // 9.9.9` five lines above `nothing newer is present in the marketplace clone`. (#88)
+    //
+    // EMIT THE OBSERVATION, NOT THE CONCLUSION. Each half now says whether it ran.
+    const comparedToCache = Boolean(installed && existsSync(installed.watcher));
+    const knowRunning = Boolean(runningVer) && runningVer !== 'unknown';
+    const cloneComparable = Boolean(available) && knowRunning;
+    const cloneNewer = cloneComparable && cmpVer(available.version, runningVer) > 0;
+
+    const checked = [];
+    if (comparedToCache) checked.push(`running code matches the newest CACHED copy (${installed.version})`);
+    if (cloneComparable && !cloneNewer) {
+      checked.push(`the marketplace clone ON DISK (${available.version}) is not newer than what you are running (${runningVer})`);
+    }
+
+    const unchecked = [];
+    if (!comparedToCache) unchecked.push('RUNNING vs CACHED - no non-orphaned cache directory for this plugin exists, so nothing was compared.');
+    if (!available) unchecked.push('the MARKETPLACE CLONE - none on disk, so no available version was read.');
+    else if (!knowRunning) unchecked.push('the MARKETPLACE CLONE - the running version is unknown, so it could not be compared.');
+
+    if (cloneNewer) {
+      console.log(`⛔ THE MARKETPLACE CLONE HAS ${available.version} AND YOU ARE RUNNING ${runningVer}.`);
+      console.log('  No ask fired for it: every version ask is guarded on a CACHE entry that does');
+      console.log('  not exist here, so the clone was compared to the cache and never to you.');
+      console.log('');
+    }
+    if (!checked.length) {
+      console.log('⛔ NOTHING WAS COMPARED. THIS IS NOT A CLEAN BILL OF HEALTH - it is an empty');
+      console.log('read, the same as an unreadable installed_plugins.json, and it means only that');
+      console.log('no check had the inputs it needed to run.');
+    } else {
+      console.log('UP TO DATE, AS FAR AS THIS CAN SEE - and only this far:');
+      checked.forEach((c) => console.log(`  ✔ ${c}`));
+    }
+    unchecked.forEach((u) => console.log(`  ⚠ NOT CHECKED: ${u}`));
     console.log(
       `⚠ That clone is a CACHE (${available?.fetched ?? 'age unknown'}). A release pushed since then is`,
     );
@@ -2576,10 +2695,10 @@ if (a.doctor) {
     console.log('INSTRUCTIONS: a release changing only SKILL.md changes how every session behaves');
     console.log('while moving zero executable bytes. Release 2.12.2 was exactly that.');
   } else {
-    const behind = asks.some((x) => x.startsWith('ASK') || x.startsWith('RESTART'));
+    const behind = shown.some((x) => x.behind);
     console.log(behind ? 'THIS SESSION IS BEHIND, and cannot fix it itself - updating a plugin is the human\'s call.' : 'ACTION SUGGESTED:');
     if (behind) console.log('Paste this to them:\n\n  I am behind on the slack-as-claude plugin and need you to authorise catching up.');
-    asks.forEach((x) => console.log(`  ${x.replace(/\n/g, '\n  ')}`));
+    shown.forEach((x) => console.log(`  ${x.text.replace(/\n/g, '\n  ')}`));
   }
   if (!a.session) console.log('\n(Pass --session <label> so your own messages are not counted as peers.)');
   process.exit(0);
