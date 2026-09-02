@@ -10,10 +10,17 @@ more skills; Claude Code handles installing and updating them.
 /plugin install slack-as-claude@claude-skills
 ```
 
-⚠ **`/plugin` is not available in every editor.** It works in stock VS Code's extension and is absent
-in at least one fork — `/plugin isn't available in this environment` was observed in **Cursor** on a
-day when stock VS Code was fine at a comparable version. That message means *use the CLI*, not
-*something is broken*.
+⚠ **`/plugin` is not available in every editor.** `/plugin isn't available in this environment` was
+observed in **Cursor** at two extension versions (2.1.246 and 2.1.252), so within that range it is
+not version-dependent; stock VS Code was fine the same day. No data on Windsurf, VSCodium or
+Positron — don't generalise "forks" from one fork. That message means *use the CLI*, not *something
+is broken*.
+
+⚠ **You can't tell which editor you're in from the session's own environment banner.** A session
+running in **Cursor** reports *"You are running inside a VSCode native extension environment"* — that
+is the extension's generic self-description, not a fork discriminator — and `TERM_PROGRAM` is unset.
+An agent asked "which editor is this?" will answer *VS Code*, confidently and wrongly. The extension
+**path** discriminates: `~/.cursor/extensions/anthropic.claude-code-…` vs `~/.vscode/extensions/…`.
 
 **If the slash command is unavailable, use the CLI from the repo root:**
 
@@ -41,26 +48,53 @@ installation has to be answerable from here, or the reader cannot reach the answ
 **Find out which shell is actually running — don't guess, and don't pick from a list:**
 
 ```
-ps -p $$ -o comm=        # zsh -> ~/.zshrc ; bash -> ~/.bash_profile
+basename "$(ps -p $$ -o comm=)"      # zsh -> ~/.zshrc ; bash -> ~/.bash_profile
 ```
+
+⚠ **The `basename` is not optional.** Measured on macOS, `ps -p $$ -o comm=` prints `/bin/bash` — an
+absolute path — so `case "$(ps …)" in zsh) … bash) … esac` matches **neither arm** and falls silently
+through.
+
+⛔ **Don't fall back to `$SHELL`.** It's the login shell from your passwd entry, *not the shell that
+is running*. On a machine whose login shell is `zsh` while the harness spawns `bash`, `$SHELL` names
+the file that will **not** be sourced — which is the exact bug this check exists to prevent.
 
 *A free tell in any terminal paste: `zsh` prompts with `%`, `bash` with `$`.*
 
-⚠ **If you try that from Git Bash on Windows it fails — `ps: unknown option -- o`.** That is MSYS's
-`ps` lacking `-o`, **not** the probe being wrong; the two point opposite ways. Don't "fix" the probe
-on the strength of it. *(Measured on Windows. The macOS behaviour below is attributed, not measured —
-this project has no Mac.)*
+⚠ **From Git Bash on Windows this fails — `ps: unknown option -- o`.** That's MSYS's `ps` lacking
+`-o`, **not** the probe being wrong; don't "fix" a correct command on the strength of it.
 
 ⚠ `~/.bashrc` is the wrong file on macOS even when you *are* on bash — an interactive login shell
 reads `~/.bash_profile`, and `~/.bashrc` is often absent entirely. Writing to both is harmless.
 
-⛔ **And "restart the session" is the fix for only one of two causes:**
+### ⛔ And do not "restart the session" — on macOS that is not a weaker fix, it is not a fix
 
-- **Stale environment** — the process holds an environment block from before your export. **A restart fixes it.**
-- **Non-login shell** — the harness spawns a shell that never sources your profile at all. **A restart changes nothing**, on the first invocation or the hundredth, and nothing tells you the advice didn't apply.
+Measured on macOS 26.6.2 in Cursor: the harness shell is **non-login** (`shopt -q login_shell` → 1)
+and **non-interactive** (`$-` → `hBc`), so it sources no profile at all. And restarting doesn't reach
+it either:
 
-For the second, wrap the call — `bash -lc 'node …/slack-post.mjs …'` — or set the value where a
-non-login shell will see it (`launchctl setenv`, or export it in whatever spawns the harness).
+```
+~/.bash_profile modified   08:52:50
+extension host  started    08:54:14     <- after the export, still absent
+Cursor.app      started    seven days earlier, from the GUI
+```
+
+The extension host inherits from the **GUI application**, whose environment came from `launchd` — not
+from any shell. **A GUI-launched app never reads a shell profile, at launch or afterwards.**
+
+✔ **The one remedy measured working end to end:** `bash -lc 'node …/slack-post.mjs …'` — token and
+`CLAUDE_SLACK_MACHINE` both resolved, live post succeeded, nothing restarted. ⚠ A profile that guards
+on `[[ $- == *i* ]]` would be skipped by a login-but-non-interactive shell and defeat this; the
+machine measured had no such guard.
+
+⚠ **`launchctl setenv` is half-measured.** It does set the `launchd` environment and is correctly
+invisible to an already-running app — but that a *later-launched* app inherits it was **not** tested,
+and **it does not survive a reboot** (persisting needs a LaunchAgent). Don't sell it as the durable
+answer.
+
+★ **Bounded:** one macOS machine, one editor, one day. It establishes the mechanism; it does not
+establish that every macOS harness is non-login — an editor launched *from a terminal* would inherit
+that terminal's environment and behave completely differently.
 
 ★ **Windows hides this entirely**, which is why it went unnoticed for so long: there the token falls
 back to `HKCU\Environment` when the environment is empty, so it is found no matter what shell
