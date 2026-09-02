@@ -1606,8 +1606,22 @@ function registrationsFor(pluginName) {
  *
  * ⛔ AND NO COMMAND CAN REACH THE OTHER. `update`, `install`, `uninstall`, `enable` and
  * `disable` take `<plugin>` and `--scope` and NO path target; `tag`/`validate` take paths but
- * operate on plugin SOURCE, not registrations. The project is selected by CWD alone - and
- * Windows canonicalises a drive letter to uppercase, so NO cwd can produce `c:\`.
+ * operate on plugin SOURCE, not registrations.
+ *
+ * ⛔⛔ AN EARLIER VERSION OF THIS NOTE SAID "the project is selected by CWD ALONE". THAT IS
+ * FALSE, AND IT SHIPPED IN 2.18.8. There is a NORMALISER between cwd and the registration
+ * key, and it folds some differences and not others:
+ *
+ *     MEASURED, from a linked worktree with NO registration of its own, on two machines and
+ *     two drives:  `claude plugin update … --scope project` reported the PRIMARY checkout's
+ *     version and created no worktree row. Cwd-alone predicts a new row or a failure to find
+ *     one; neither happened.
+ *
+ * ★ So the duplicate lives IN THAT NORMALISER - a path that already canonicalises one
+ * dimension (worktree -> primary) and not another (drive-letter case). That is a far better
+ * target for an upstream ticket than "raw cwd matching", which is what the old premise
+ * pointed at. THE CONCLUSION SURVIVED AND THE REASON DID NOT: right finding, wrong worked
+ * example, shipped inside an ask that tells people what is and is not reachable.
  *
  * ★★★ WHICH IS WHY THIS IS A SEPARATE CHECK. behindRegistrations() matches case-insensitively
  * and therefore flags BOTH rows, while the remedy it prints can reach at most one.
@@ -1949,10 +1963,12 @@ if (a.doctor) {
         'TWO REGISTRATIONS FOR ONE DIRECTORY, differing only in path case:\n' +
           g.map((r) => `    ${String(r.version).padEnd(8)} ${r.projectPath}`).join('\n') +
           '\n  Windows matches paths case-insensitively, so these are the SAME folder.\n' +
-          '  ⛔ ONLY ONE IS REACHABLE. Every plugin subcommand selects the project by CWD\n' +
-          '  and takes no path argument, and Windows canonicalises a drive letter to\n' +
-          '  uppercase - so no cwd can address a lower-case-drive entry. MEASURED: the\n' +
-          '  documented update moved the upper-case row and left the other untouched.\n' +
+          '  ⛔ ONLY ONE IS REACHABLE. No plugin subcommand takes a path argument, and the\n' +
+          '  NORMALISER between your cwd and the registration key folds some differences and\n' +
+          '  not others: a linked git worktree resolves to its PRIMARY checkout (measured on\n' +
+          '  two machines, two drives - no worktree row is created), while drive-letter case\n' +
+          '  is NOT folded. MEASURED: the documented update moved the upper-case row and left\n' +
+          '  the other untouched.\n' +
           `  ⚠ DO NOT re-run the update expecting ${sorted[sorted.length - 1].version} to move. It will not.\n` +
           '  ⚠ And do NOT hand-edit installed_plugins.json - which registration a running\n' +
           '  session actually RESOLVES is unverified, and editing destroys the evidence.\n' +
@@ -2174,9 +2190,19 @@ if (a.doctor) {
     const same = sameCode(selfFile, installed.watcher);
     if (same === false && inCache) {
       asks.push(
-        `RESTART THIS WATCHER from the installed copy - the running process is stale:\n` +
-          `  node "${installed.watcher}" --channel ${a.channel} --session <label> --since <last ts you saw>\n` +
-          `  ⚠ pass --since, or the restart silently drops anything posted during the handover.`,
+        // ⛔⛔ --heartbeat WAS MISSING, AND #36 FIXED THE IDENTICAL DEFECT IN THE x-update
+        // NOTICE AND NOT IN THIS SIBLING. A reader following this restarts a watcher that
+        // publishes NO PRESENCE: un-pingable, absent from --presence, and a stale takeover of
+        // its claims looks justified. §6 calls that a correctness hazard and it is the worst
+        // instance in this project's history - reproduced here, in --doctor, by the fix that
+        // removed it thirty lines away.
+        //
+        // ★ Third time today a fix landed where it was reported and nowhere else.
+        'RESTART THIS WATCHER from the installed copy - the running process is stale:\n' +
+          `  node "${installed.watcher}" --channel ${a.channel} --session <label> --heartbeat 60 --since <last ts you saw>\n` +
+          "  ⚠ KEEP --heartbeat: without it you publish no presence, cannot be --ping'd, are\n" +
+          '  absent from --presence entirely, and a stale takeover of your claims looks justified.\n' +
+          '  ⚠ And pass --since, or the restart silently drops anything posted during the handover.',
       );
     } else if (same === false && !inCache) {
       // Running a repo checkout whose bytes differ from the release. Direction is not
