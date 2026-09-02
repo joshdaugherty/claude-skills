@@ -310,12 +310,46 @@ function selfTest() {
   for (const [name, got, want] of cases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  ${name}`);
   const bad = cases.filter(([, got, want]) => got !== want).length;
 
+  /**
+   * The registration-behind-cache predicate. Its ask can only fire on a misconfigured
+   * machine, so on the machine that ships it the branch would never run - which is exactly
+   * the condition under which nobody reads it. The fixtures are the REAL shapes off this
+   * machine, including the two registrations for one directory differing only in drive-letter
+   * case, at two different versions.
+   */
+  const R = [
+    { version: '2.12.4', scope: 'project', projectPath: 'D:\\GitHub Repos\\daugherty-ydna' },
+    { version: '2.18.2', scope: 'project', projectPath: 'C:\\Users\\Josh\\Herd\\uams-statamic' },
+    { version: '2.18.5', scope: 'user', projectPath: null },
+    { version: '2.16.0', scope: 'project', projectPath: 'c:\\Users\\Josh\\Herd\\uams-statamic' },
+  ];
+  const names = (l) => l.map((r) => `${r.scope}=${r.version}`).sort().join(',');
+  const regCases = [
+    ['this project behind -> flagged', names(behindRegistrations(R, '2.18.5', 'D:\\GitHub Repos\\daugherty-ydna')), 'project=2.12.4'],
+    ['other projects are NOT this cwd', names(behindRegistrations(R, '2.18.5', 'D:\\GitHub Repos\\daugherty-ydna')).includes('2.18.2'), false],
+    ['user scope counts everywhere', names(behindRegistrations(R, '2.19.0', 'D:\\GitHub Repos\\daugherty-ydna')).includes('user=2.18.5'), true],
+    // ⚠ BOTH case-variants of one directory must match, or the answer covers one of two.
+    ['drive-letter case is ignored', names(behindRegistrations(R, '2.18.5', 'c:\\users\\josh\\herd\\uams-statamic')), 'project=2.16.0,project=2.18.2'],
+    ['a subdirectory still matches its project', names(behindRegistrations(R, '2.18.5', 'D:\\GitHub Repos\\daugherty-ydna\\sources')), 'project=2.12.4'],
+    ['all current -> silent', behindRegistrations(R, '2.12.4', 'D:\\GitHub Repos\\daugherty-ydna').length, 0],
+    ['no cached version -> silent, never a crash', behindRegistrations(R, undefined, 'D:\\anything').length, 0],
+  ];
+  for (const [name, got, want] of regCases) {
+    console.log(`  ${JSON.stringify(got) === JSON.stringify(want) ? 'pass' : 'FAIL'}  registration: ${name}`);
+  }
+  const regBad = regCases.filter(([, got, want]) => JSON.stringify(got) !== JSON.stringify(want)).length;
+
+  // ⚠ EVERY counter must appear in BOTH the summary and the exit code. regBad was computed
+  // and left out of both for one edit - seven cases that printed pass/FAIL and could not
+  // fail the suite. A test that cannot fail is the defect this file documents two functions
+  // up, committed while writing the note about it.
   console.log(
-    missing.length || bad
-      ? `\n${missing.length} FLAG(S) MISSING FROM USAGE${missing.length ? `: ${missing.join(', ')}` : ''}${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}`
+    missing.length || bad || regBad
+      ? `\n${missing.length} FLAG(S) MISSING FROM USAGE${missing.length ? `: ${missing.join(', ')}` : ''}` +
+        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}`
       : '\nall pass',
   );
-  process.exit(missing.length || bad ? 1 : 0);
+  process.exit(missing.length || bad || regBad ? 1 : 0);
 }
 
 if (a['self-test']) selfTest();
@@ -1506,6 +1540,52 @@ function cloneAge(dir) {
   return 'age unknown';
 }
 
+/**
+ * What Claude Code has REGISTERED for this plugin, per scope - which is a different question
+ * from what is in the cache. See the long note at the CACHED/REGISTERED lines in --doctor.
+ *
+ * ⚠ Returns [] on any failure, and the caller prints nothing rather than a confident absence:
+ * "no registrations" and "could not read the file" must not render identically. That is the
+ * failed-read-is-not-an-empty-channel rule, one file over.
+ */
+function registrationsFor(pluginName) {
+  try {
+    const p = join(homedir(), '.claude', 'plugins', 'installed_plugins.json');
+    if (!existsSync(p)) return [];
+    const j = JSON.parse(readFileSync(p, 'utf8'));
+    const out = [];
+    for (const [key, entries] of Object.entries(j.plugins ?? {})) {
+      if (key.split('@')[0] !== pluginName) continue;
+      for (const e of entries ?? []) {
+        if (e?.version) out.push({ version: e.version, scope: e.scope ?? '?', projectPath: e.projectPath ?? null });
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Which registrations that GOVERN THIS DIRECTORY are older than the cached version.
+ *
+ * ⛔ Pure, and lifted out of --doctor, because the ask it drives would otherwise be a branch
+ * that only fires on a machine that happens to be misconfigured - i.e. never, on the machine
+ * that ships it. A GUARD THAT HAS NEVER FIRED HAS NEVER BEEN READ, and a test whose expected
+ * value is copied from the output is not a test.
+ *
+ * ⚠ Case-insensitive comparison is not tidiness: the real machine carries TWO registrations
+ * for one directory differing only in drive-letter case - `C:\...` and `c:\...` - at two
+ * different versions. A case-sensitive filter silently answers about one of them.
+ */
+function behindRegistrations(regs, cachedVersion, cwd) {
+  if (!cachedVersion) return [];
+  const here = String(cwd).toLowerCase();
+  return regs
+    .filter((r) => !r.projectPath || here.startsWith(String(r.projectPath).toLowerCase()))
+    .filter((r) => cmpVer(r.version, cachedVersion) < 0);
+}
+
 function cmpVer(x, y) {
   const p = (v) => String(v).split('.').map(Number);
   const [a1, b1, c1] = p(x);
@@ -1550,7 +1630,60 @@ if (a.doctor) {
   } catch {
     /* no cache */
   }
-  console.log(`INSTALLED  ${installed ? `${installed.version}   (marketplace: ${installed.marketplace})` : 'none found'}`);
+  console.log(`CACHED     ${installed ? `${installed.version}   (newest directory, marketplace: ${installed.marketplace})` : 'none found'}`);
+
+  /**
+   * ⛔⛔⛔ THE LINE ABOVE USED TO SAY `INSTALLED`, AND IT WAS READING THE WRONG SIDE OF THE
+   * QUESTION THIS TOOL EXISTS TO ANSWER.
+   *
+   * A cache DIRECTORY is not a registration. Claude Code resolves a plugin from
+   * installed_plugins.json, which pins an explicit `installPath` PER SCOPE. The two
+   * disagreed by twenty-three releases on the machine cutting them: `INSTALLED 2.18.5` for
+   * two days while THIS repo's registration was pinned at 2.12.4 - a build predating PATH
+   * BUS, §0, the macOS section and the credential-operations rule.
+   *
+   * ★ AND NOTHING EITHER SESSION DID COULD HAVE EXPOSED IT. Both invoke the scripts by
+   * absolute path into the cache, so the code actually running IS the newest and every
+   * self-test, dry-run and doctor reading was correct about the thing being executed. The
+   * registration only governs what a SKILL INVOCATION loads - and neither session has ever
+   * invoked the skill. THE FIELD THIS GOT WRONG IS THE ONE FIELD NEITHER READER HAD ANY
+   * REASON TO CONSULT.
+   *
+   * ⚠ §7 already models released -> installed -> resident because each hop is invisible
+   * from the one before. REGISTRATION IS A FOURTH HOP and it was missing:
+   *
+   *     released -> catalog -> cache directory -> REGISTRATION -> resident
+   *                            (this tool read here)  (a load reads here)
+   *
+   * ⛔ Neither is preferred silently: a cache directory the registration does not point at
+   * is still what a by-path invocation runs, which is most of this project's own usage.
+   * Both are printed, and only their DISAGREEMENT is actionable.
+   */
+  const reg = registrationsFor(pluginName);
+  if (reg.length) {
+    const here = process.cwd().toLowerCase();
+    for (const r of reg) {
+      const mine = r.projectPath && here.startsWith(r.projectPath.toLowerCase());
+      console.log(
+        `REGISTERED ${String(r.version).padEnd(8)} ${String(r.scope).padEnd(8)}` +
+          `${r.projectPath ?? '(user)'}${mine ? '   <- THIS PROJECT' : ''}`,
+      );
+    }
+    const behind = behindRegistrations(reg, installed?.version, process.cwd());
+    if (behind.length) {
+      asks.push(
+        `REGISTRATION IS BEHIND THE CACHE: ${behind.map((r) => `${r.scope}=${r.version}`).join(', ')} vs cached ${installed.version}.\n` +
+          '  A cache directory is NOT a registration. Scripts run by absolute path use the\n' +
+          '  cache and are fine; a SKILL INVOCATION resolves the registration and would load\n' +
+          '  the older copy. `claude plugin install` populates the cache and moves neither.\n' +
+          `    claude plugin update ${pluginName}@${installed.marketplace}\n` +
+          `    claude plugin update ${pluginName}@${installed.marketplace} --scope project\n` +
+          '  ⚠ UNVERIFIED whether a load resolves installPath or re-resolves the newest\n' +
+          '  directory. The field is named installPath and is pinned per scope, but nobody\n' +
+          '  here has observed a load. Stated so rather than assumed either way.',
+      );
+    }
+  }
 
   // Available: what the marketplace clone ON DISK currently offers.
   //
