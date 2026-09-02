@@ -240,7 +240,7 @@ auth.test  ·  chat.postMessage  ·  conversations.history  ·  conversations.re
 | **6** | # **ASK THE HUMAN WHICH CHANNEL, AND DO NOT ASSUME A NAME.** ### *There is no conventional name and this skill deliberately prescribes none — one workspace of this project's own uses `#bus`, another uses `#claude-bus`.* **Then, in Slack, in that channel: `/invite @<app name>`.** *Per-channel and permanent. A bot that is not a member cannot post, and the error does not say so plainly.* |
 | **7** | **Get the channel id — ask the human** *(§3, and it is five seconds)*. **Then verify with a `--dry-run`, which sends nothing.** |
 
-### **That is the whole path.** *No MCP server, no user token, no OAuth flow, no callback port, no reinstall, no trap 5.* ✔ **`--doctor`, `--presence`, `--ping`, claiming and posting all work on this alone.**
+### **That is the whole path.** *No MCP server, no user token, no OAuth flow, no callback port, no reinstall, no trap 5.* ✔ **`--doctor`, `--presence`, `--ping`, claiming and posting all work on this alone** — *all of those live in `slack-session-bus/slack-watch.mjs`, not in this skill's script.*
 
 ## ⚠ NAVIGATION — **`api.slack.com/apps` IS THE ENTRY POINT, BUT THE SETTINGS UI IS NOT THERE ANY MORE**
 
@@ -455,7 +455,7 @@ credential  : process.env[token_env || SLACK_BOT_TOKEN]  -> HKCU\Environment, sa
 verify      : auth.test on every send; a mismatch REFUSES with exit 2, naming BOTH
 ```
 
-⛔ **A mismatch refuses rather than warns**, *because a warning on a path that still succeeds is precisely how the original misdelivery happened.* ✔ **`--dry-run` and `--doctor` both name the destination**, so *"where is this going"* is answerable without sending. ✔ **No declaration = today's behaviour exactly** — a single-workspace machine needs no configuration.
+⛔ **A mismatch refuses rather than warns**, *because a warning on a path that still succeeds is precisely how the original misdelivery happened.* ✔ **`--dry-run` and `slack-watch.mjs --doctor` both name the destination**, so *"where is this going"* is answerable without sending. ✔ **No declaration = today's behaviour exactly** — a single-workspace machine needs no configuration.
 
 ---
 
@@ -753,7 +753,7 @@ curl -s -D - -o /dev/null -X POST https://slack.com/api/auth.test \
 | **`not_in_channel`** | **Bot not invited to that channel** → §3. |
 | **`invalid_token_type`** | **A bot token was pointed at `mcp.slack.com`** — *the proven-impossible path. Use the script, not MCP.* |
 | **`$env:SLACK_BOT_TOKEN` is empty** | **Expected** → §2, read it from the registry. |
-| **`invalid_auth` / `token_revoked` on a post** | **The bot token is stale** — *someone reinstalled the app.* Re-copy it and re-stash it **under the same name it already had** — `--doctor` and the scripts name that variable in their error, so read it there rather than assuming. |
+| **`invalid_auth` / `token_revoked` on a post** | **The bot token is stale** — *someone reinstalled the app.* Re-copy it and re-stash it **under the same name it already had** — `slack-watch.mjs --doctor` and the scripts name that variable in their error, so read it there rather than assuming. |
 
 ---
 

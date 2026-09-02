@@ -177,8 +177,11 @@ function missingTokenMessage(varName, platform) {
     `${varName} is not set.\n` +
     (platform === 'win32'
       ? `  setx ${varName} "xoxb-..."   (then restart, or it is read from the registry)`
-      : `  export ${varName}="xoxb-..."   in your shell profile, then RESTART THE SESSION\n` +
-        '  (a fresh export cannot reach a running process, and there is no registry fallback here)')
+      : `  export ${varName}="xoxb-..."   in your shell profile, then EITHER:\n` +
+        `    wrap the call:   bash -lc 'node <this script> ...'      <- measured working on macOS\n` +
+        '    or restart the session -- ONLY if your editor was launched FROM A TERMINAL.\n' +
+        '  A GUI-launched editor inherits from launchd, not from any shell, so no restart\n' +
+        '  reaches it and you will see this exact message again.')
   );
 }
 
@@ -472,7 +475,37 @@ const OPTIONS = {
     help: { type: 'boolean', short: 'h', default: false },
 };
 
-const { values: a } = parseArgs({ options: OPTIONS, allowPositionals: false });
+/**
+ * ⛔ AN UNKNOWN FLAG THREW A NODE STACK TRACE INSTEAD OF PRINTING USAGE.
+ *
+ *     TypeError [ERR_PARSE_ARGS_UNKNOWN_OPTION]: Unknown option '--doctor'
+ *     at node:internal/util/parse_args/parse_args:102
+ *
+ * ★ The reader who sees this is, by construction, someone who has just guessed wrong about
+ * which script owns a flag - so it is the exact moment a usage string is most useful, and a
+ * stack trace pointing into node internals is the least useful thing that could appear. It
+ * reads as "the tool is broken" rather than "that flag lives elsewhere".
+ *
+ * ⚠ All three scripts did this, and the version reported only named one. Fixing the
+ * reported one would have left the other two - the repo's own lesson about siblings.
+ *
+ * ⛔⛔ AND THE CATCH MUST NOT REFERENCE `USAGE`: it is a const declared LATER in the file,
+ * so reading it here throws a ReferenceError from inside the error handler - the message
+ * prints and the process then dies on the recovery path. Found by running it, not by
+ * reading it. `OPTIONS` is in scope because parseArgs itself needs it, so the flag list
+ * comes from there and cannot go out of date.
+ */
+let a;
+try {
+  ({ values: a } = parseArgs({ options: OPTIONS, allowPositionals: false }));
+} catch (e) {
+  console.error(`${e.message}\n`);
+  console.error(`known flags: ${Object.keys(OPTIONS).map((f) => `--${f}`).join(' ')}`);
+  console.error('\nRun with --help for the full usage. ⚠ If you were looking for --doctor,');
+  console.error('--presence, --ping, --raw, --audit, --show or --heartbeat, those belong to');
+  console.error('slack-session-bus/slack-watch.mjs, not to this script.');
+  process.exit(2);
+}
 
 /**
  * Resolve the message body WITHOUT letting a shell touch it.
@@ -754,7 +787,13 @@ function selfTest() {
     ['darwin names the resolved var', missingTokenMessage('SLACK_BOT_TOKEN_ACME', 'darwin').includes('export SLACK_BOT_TOKEN_ACME='), true],
     ['darwin does NOT name the default', /export SLACK_BOT_TOKEN=/.test(missingTokenMessage('SLACK_BOT_TOKEN_ACME', 'darwin')), false],
     ['linux names the resolved var', missingTokenMessage('SLACK_BOT_TOKEN_ACME', 'linux').includes('export SLACK_BOT_TOKEN_ACME='), true],
-    ['non-win32 says to restart the session', /RESTART THE SESSION/.test(missingTokenMessage('X', 'darwin')), true],
+    // ⛔⛔ THIS CASE USED TO ASSERT THE DEFECT. It read `non-win32 says to restart the
+    // session` and PASSED, because the message said exactly that - the advice §A had
+    // deleted in the same release. A test can pin a bug in place as firmly as it pins a
+    // fix, and a green suite is what stops anyone looking.
+    ['non-win32 leads with the MEASURED remedy', /bash -lc/.test(missingTokenMessage('X', 'darwin')), true],
+    ['non-win32 conditions any restart on a terminal launch', /ONLY if your editor was launched FROM A TERMINAL/.test(missingTokenMessage('X', 'darwin')), true],
+    ['non-win32 says a GUI launch cannot be fixed by restarting', /no restart\n  reaches it/.test(missingTokenMessage('X', 'darwin')), true],
   ];
   for (const [name, got, want] of plat) console.log(`  ${got === want ? 'pass' : 'FAIL'}  token msg: ${name}`);
   const platFailed = plat.filter(([, got, want]) => got !== want).length;
