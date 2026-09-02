@@ -74,23 +74,44 @@ and **non-interactive** (`$-` → `hBc`), so it sources no profile at all. And r
 it either:
 
 ```
-~/.bash_profile modified   08:52:50
-extension host  started    08:54:14     <- after the export, still absent
-Cursor.app      started    seven days earlier, from the GUI
+~/.bash_profile  modified  Sep 2 08:52:50
+44201 <- 40125             Sep 2 09:26    bash
+40125 <- 1722              Sep 2 08:54    claude            <- the SESSION restarted here
+ 1722 <- 1262              Aug 26 08:42   extension-host    <- inherits from this, 7 days old
+ 1262 <- 1                 Aug 26 08:42   Cursor  (from the GUI, env from launchd)
 ```
 
-The extension host inherits from the **GUI application**, whose environment came from `launchd` — not
-from any shell. **A GUI-launched app never reads a shell profile, at launch or afterwards.**
+The session restarted *after* the export and still couldn't see it, because it inherits from the
+extension host — which predates the export by a week. **The restart never crossed the boundary where
+the environment is established.** A GUI-launched app never reads a shell profile, at launch or
+afterwards, and nothing beneath it can.
+
+⚠ An earlier version of this block called the 08:54 process *"the extension host"*. It was the
+**session**. The probe was `ps -p $PPID`, which returns **exactly one level** — one level of a
+four-level chain, reported as the whole chain, and it reads identically to a correct result. **Walk
+the chain to PID 1, or you're naming whichever process you looked at first.**
 
 ✔ **The one remedy measured working end to end:** `bash -lc 'node …/slack-post.mjs …'` — token and
 `CLAUDE_SLACK_MACHINE` both resolved, live post succeeded, nothing restarted. ⚠ A profile that guards
 on `[[ $- == *i* ]]` would be skipped by a login-but-non-interactive shell and defeat this; the
 machine measured had no such guard.
 
-⚠ **`launchctl setenv` is half-measured.** It does set the `launchd` environment and is correctly
-invisible to an already-running app — but that a *later-launched* app inherits it was **not** tested,
-and **it does not survive a reboot** (persisting needs a LaunchAgent). Don't sell it as the durable
-answer.
+✔ **`launchctl setenv` propagates — measured.** It sets the `launchd` environment, is correctly
+invisible to an already-running app, and an app launched *afterwards* does inherit it. ⛔ It still
+**does not survive a reboot** (persisting needs a LaunchAgent), so it's a within-session mechanism,
+not a durable alternative to a profile export.
+
+⛔ **How that was measured matters more than the result: the first run was a false negative that
+looked exactly like a finding.** Probed against `Calculator`, the variable came back `ABSENT` — from
+a 61-character dump containing **zero** variables, because `ps -E` can't read the environment of a
+SIP-protected Apple binary. `USER` and `HOME` were "absent" too. Without a positive control that
+would have been reported as *"launchctl does not propagate"* — the exact opposite of the truth.
+
+✔ So **any `ps -E` probe on macOS needs a known-present variable checked alongside the one under
+test, and a third-party binary as the target.** ⚠ Second trap in the same test: `open` also
+propagates the *calling shell's* environment, so an `open`-launched process isn't a clean model of a
+Dock-launched one — the result holds only because `launchctl setenv` provably doesn't touch the
+calling shell.
 
 ★ **Bounded:** one macOS machine, one editor, one day. It establishes the mechanism; it does not
 establish that every macOS harness is non-login — an editor launched *from a terminal* would inherit
