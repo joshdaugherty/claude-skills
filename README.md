@@ -46,6 +46,11 @@ ps -p $$ -o comm=        # zsh -> ~/.zshrc ; bash -> ~/.bash_profile
 
 *A free tell in any terminal paste: `zsh` prompts with `%`, `bash` with `$`.*
 
+⚠ **If you try that from Git Bash on Windows it fails — `ps: unknown option -- o`.** That is MSYS's
+`ps` lacking `-o`, **not** the probe being wrong; the two point opposite ways. Don't "fix" the probe
+on the strength of it. *(Measured on Windows. The macOS behaviour below is attributed, not measured —
+this project has no Mac.)*
+
 ⚠ `~/.bashrc` is the wrong file on macOS even when you *are* on bash — an interactive login shell
 reads `~/.bash_profile`, and `~/.bashrc` is often absent entirely. Writing to both is harmless.
 
