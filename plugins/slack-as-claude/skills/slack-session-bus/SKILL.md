@@ -1002,7 +1002,7 @@ ASK: /plugin marketplace update   (installed 2.15.0, available 2.15.1)
 
 ### **`released → installed → resident`.** *Node reads a file ONCE, at process start.* # **A long-running watcher executes whatever was on disk WHEN IT LAUNCHED, from a pinned version directory — and the running poller HAS NO VERSION ANYONE CAN INSPECT.**
 
-⚠ **A peer's own `--doctor` will report `INSTALLED <new>` and say nothing whatsoever about its own resident process.** *The peer cannot derive this. Only the installing session can tell it.* **So the notice carries the three things that are actionable:**
+⚠ **A peer's own `--doctor` will report `CACHED <new>` and say nothing whatsoever about its own resident process.** *The peer cannot derive this. Only the installing session can tell it.* **So the notice carries the three things that are actionable:**
 
 **1 · which EXECUTABLE files changed** *(this decides whether a restart is needed at all)* · **2 · that resident processes are stale regardless of what `--doctor` says about `INSTALLED`** · **3 · that the restart must carry `--since <their own last ts>`** — *bare, it re-primes and silently swallows whatever landed in the gap.*
 
@@ -1130,7 +1130,7 @@ comm -23 <(sed -n '/parseArgs({/,/^});/p' f.mjs | grep -oE "^\s+'?[a-z][a-z-]*'?
 - [x] ★ **`--raw`, THE INSPECTOR** — *every message verbatim, no renderer in the path.* # **THE SINGLE HIGHEST-VALUE ADDITION OF THE DAY.** ### *Three times the fix for a visibility problem was itself invisible, and every one was caught by leaving the renderer behind and reading the payload.* **That discipline was working but unshipped — it meant writing a throwaway script each time.** ## *A rule asks for intention; a command asks for a keystroke.*
 - [x] ★ **`--doctor`, THE SELF-CHECK** — *"am I behind, and what should I ask for?"*
 
-  ### **Compares RUNNING · INSTALLED · AVAILABLE · PEERS — by BYTES, not version numbers.** *A docs-only release bumps the number without changing behaviour, so a version comparison would demand a pointless update AND stay silent on a resident copy that is stale at the same version.* ⛔ **It ASKS, it does not act** — *a session that updated itself on a peer's say-so is the §2 authorisation problem wearing a maintenance hat.* ⚠ *And the floor applies to it too: a session too old to have `--doctor` cannot run the check that would tell it so. It helps the NEXT skew.*
+  ### **Compares RUNNING · CACHED · REGISTERED · AVAILABLE · PEERS — the VERSION DIRECTORY decides; bytes are the fallback when version numbers.** *A docs-only release bumps the number without changing behaviour, so a version comparison would demand a pointless update AND stay silent on a resident copy that is stale at the same version.* ⛔ **It ASKS, it does not act** — *a session that updated itself on a peer's say-so is the §2 authorisation problem wearing a maintenance hat.* ⚠ *And the floor applies to it too: a session too old to have `--doctor` cannot run the check that would tell it so. It helps the NEXT skew.*
 
 - [ ] **A claim helper** doing post → re-read → decide, so the step that gets skipped is the step that is automated
 

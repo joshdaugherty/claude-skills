@@ -154,7 +154,11 @@ function botToken() {
       `[claim] ⚠ ${VAR} DIFFERS between this process's environment and HKCU\\Environment.\n` +
         '        The environment wins and is a SNAPSHOT from launch, so after a rotation it is\n' +
         '        the OLD value, and restarting does not help while the parent shell holds it.\n' +
-        `        Relaunch with it unset:  env -u ${VAR} node <script> …`,
+        '        Unset it for ONE RUN - and NOT with `env -u`, which is coreutils and does\n' +
+        '        not exist in PowerShell or cmd, the only shells this can fire in:\n' +
+        `          PowerShell:  Remove-Item Env:\\${VAR} ; node <script> …\n` +
+        `          cmd.exe   :  set ${VAR}= && node <script> …\n` +
+        '        Simplest of all: open a fresh shell, which re-reads the registry.',
     );
   }
   return fromEnv || fromReg || null;
@@ -294,7 +298,7 @@ async function checkWorkspace(token, { enforce = true } = {}) {
         '  Sending anyway would have SUCCEEDED and returned ok:true, landing the message\n' +
         '  in a workspace nobody is reading. That is why this refuses instead of warning.\n' +
         '\n' +
-        '  Fix whichever is wrong: point SLACK_BOT_TOKEN at the expected workspace, or\n' +
+        `  Fix whichever is wrong: point ${tokenVar()} at the expected workspace, or\n` +
         '  correct the declaration.',
       2,
     );
@@ -345,7 +349,13 @@ function meta(msg) {
   const ctx = (msg.blocks ?? []).find((b) => b.type === 'context');
   for (const el of ctx?.elements ?? []) {
     const m = (el.text ?? '').match(/^([a-z][a-z0-9_-]*):\s*(.*)$/i);
-    if (m) out[m[1].toLowerCase()] = decode(m[2]).replace(/^`|`$/g, '').trim();
+    // ⛔ WAS /^`|`$/g - THE RETRACTED FORM, which strips a LEADING or a TRAILING backtick
+    // INDEPENDENTLY, so a value that legitimately begins or ends with one loses it. The
+    // fix landed in slack-watch.mjs:parseMessage() and NOT here, because the two parsers
+    // have different names and so appear on nobody's shared-helper list. This is the
+    // WRITER/READER pair, and meta().session from this line drives every identity
+    // comparison in the claim protocol. (#95)
+    if (m) out[m[1].toLowerCase()] = decode(m[2]).replace(/^`([\s\S]*)`$/, '$1').trim();
   }
   return out;
 }

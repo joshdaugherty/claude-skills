@@ -195,8 +195,12 @@ function botToken() {
         '        The environment wins, and it is a SNAPSHOT taken when this process\n' +
         '        launched - so after a rotation it is the OLD value, and restarting does\n' +
         '        NOT help while the parent shell still carries it.\n' +
-        `        If you have just rotated: relaunch with the variable unset, e.g.\n` +
-        `          env -u ${VAR} node <script> …        (or open a fresh shell)`,
+        '        If you have just rotated: relaunch with the variable unset. NOT with\n' +
+        '        `env -u` - that is coreutils, and does not exist in PowerShell or cmd,\n' +
+        '        which are the only shells this warning can fire in:\n' +
+        `          PowerShell:  Remove-Item Env:\\${VAR} ; node <script> …\n` +
+        `          cmd.exe   :  set ${VAR}= && node <script> …\n` +
+        '        Simplest: open a fresh shell, which re-reads the registry.',
     );
   }
   return fromEnv || fromReg || null;
@@ -455,7 +459,7 @@ async function checkWorkspace(token, { enforce = true } = {}) {
         '  Sending anyway would have SUCCEEDED and returned ok:true, landing the message\n' +
         '  in a workspace nobody is reading. That is why this refuses instead of warning.\n' +
         '\n' +
-        '  Fix whichever is wrong: point SLACK_BOT_TOKEN at the expected workspace, or\n' +
+        `  Fix whichever is wrong: point ${tokenVar()} at the expected workspace, or\n` +
         '  correct the declaration.',
       2,
     );
@@ -1308,7 +1312,7 @@ if (!res.ok) {
   const hints = {
     not_in_channel: 'The bot is not a member of that channel. In Slack: /invite @<app display name>',
     channel_not_found: 'Unknown channel id. Resolve it with mcp__slack__slack_search_channels.',
-    invalid_auth: 'The bot token is stale - someone reinstalled the app. Re-copy it and re-set SLACK_BOT_TOKEN.',
+    invalid_auth: `The bot token is stale - someone reinstalled the app. Re-copy it and re-set ${tokenVar()}.`,
     token_revoked: 'The bot token was revoked. Re-copy it from OAuth & Permissions.',
     missing_scope: 'The app lacks a required scope. --username/--icon-emoji need chat:write.customize.',
   };
