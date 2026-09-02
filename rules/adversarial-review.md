@@ -95,6 +95,16 @@ Instead of shipping *"only one is reachable"*, print what **this run** measured 
 
 ★ It is the same escalation as the `PEERS` fix, one domain over: there, from *labelling a value* to *making the unlabelled form unrepresentable*; here, from *re-checking a world-claim* to *not storing one*. **Both end in the same place — the safe form is the only form the code can produce.**
 
+#### ⚠ And the boundary, or the principle eats itself
+
+Not every stored sentence ages. The distinction is what the claim is *about*:
+
+| **a claim about the WORLD** | must be **regenerated** — the world moves underneath it | *"both rows are reachable"* |
+| :-- | --- | --- |
+| **a claim about your own HISTORY** | safe to **store**, forever | *"this tool previously asserted otherwise and was wrong within the hour"* |
+
+**The past does not move.** One is a measurement with an expiry; the other is a fact about the artefact itself — and stating it *at the point of use* is worth more than any changelog, because a changelog is not on screen at the moment someone decides whether to trust the reading.
+
 ### 8 · Record the verdict
 
 A defect the review found and you fixed → the commit message, in the form the file uses (what was wrong, what it produced, what was measured). A finding you are **not** acting on → a GitHub issue, named rather than silent. A withdrawn claim → **banner the correction and keep the text**, so the next reader sees what was believed and why it failed.
