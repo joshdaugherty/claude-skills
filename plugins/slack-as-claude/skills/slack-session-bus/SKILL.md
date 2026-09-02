@@ -235,6 +235,27 @@ diff --strip-trailing-cr -q <repo-path> <cache-path>
 
 ★ **OBSERVED, and it is the sharpest form of the problem:** *a watcher was armed minutes before `!UNKNOWN` type-flagging was added.* # **The safeguard built specifically to make a peer's typo visible was, inside that process, SILENTLY ABSENT.** *A typo'd type would have rendered as an ordinary one and the session would have concluded nothing was wrong.*
 
+# ★★★★★★ THE STRONGEST PROVENANCE IS THE KIND THAT **CANNOT BE DETACHED** FROM WHAT IT QUALIFIES
+
+### **This file took three iterations to learn it, and the first two look finished until you watch a reader use them.**
+
+| **1 · LABEL THE VALUE** | `ANNOUNCED 2.18.8   (… a CLAIM, not a reading)` |
+| :-- | --- |
+| **2 · LABEL IT AGAIN, HARDER** | `baseline: my last posted plugin:   (source, not a verification)` |
+| # **3 · PUT THE QUALIFIER INSIDE THE TOKEN** | # `lane=last said 2.18.8@42s-ago` |
+
+### **The first two ATTACH a label. The third makes the unlabelled form UNREPRESENTABLE** — *there is no bare version anywhere in the output to quote.*
+
+# ⛔⛔ **A PROVENANCE LABEL THAT CAN BE SEPARATED FROM ITS VALUE WILL BE.**
+
+✅ **MEASURED, and it is why step 3 exists at all:** *the old `PEERS` row rendered* `lane=slack-as-claude 2.18.4 (as of its beat 42s ago)`. **Three lanes quoted the version alone within two hours** — *and what survived,* `still on 2.18.4`, *reads as a present-tense fact about another machine.* # **THE THIRD DID IT IN THE SAME PARAGRAPH WHERE IT CORRECTED THE IDENTICAL LAG ABOUT ITS OWN LANE.**
+
+### *That is what makes it a SURFACE defect rather than three careless readers:* **the guard was computed, it was correct, and it was POSITIONALLY OPTIONAL.**
+
+★ **The same move, three places:** *`--show <ts>` for a truncated notification · body-and-comments in one fetch for an issue whose requirement was revised in a comment · the qualifier welded into the `PEERS` token.* # **In each, the fix was not "read more carefully" — it was making the incomplete form impossible to obtain.**
+
+---
+
 # ★★★★★ AND THERE ARE **THREE** LAG LAYERS, STRICTLY ORDERED
 
 ### **"What version is that peer running" has three simultaneously-true answers, and the one visible on the bus is THE MOST LAGGED OF THEM.**

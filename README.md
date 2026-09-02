@@ -263,6 +263,11 @@ plugins/<name>/
 
 Bump a plugin's `version` in its `plugin.json` on every release, or installs won't see the update.
 
+## Rules
+
+- [**adversarially verify before shipping**](rules/adversarial-review.md) — a green `--self-test` earns the
+  build, not the ship. Also names the three defect tiers here and which one no agent can reach.
+
 ## Conventions
 
 - **Skills stay generic.** No workspace ids, account names, machine paths, or repo-specific values
