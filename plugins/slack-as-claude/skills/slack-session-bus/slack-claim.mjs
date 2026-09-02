@@ -635,16 +635,58 @@ if (!token) {
 const auth = { Authorization: `Bearer ${token}` };
 const jsonAuth = { ...auth, 'Content-Type': 'application/json; charset=utf-8' };
 
+/**
+ * ⛔⛔ A 429 IS THE ONE FAILURE WHERE THE HONEST THING AND THE SAFE THING DIVERGE.
+ *
+ * Retry and you may DEEPEN the limit - a 429 is a property of the CHANNEL, so it hits every
+ * contender at once and every retry lands on the same bucket. Exit, and a claim silently does
+ * not happen. There is no third option that is safe in both directions.
+ *
+ * ★ SO THE SPLIT IS BY WHETHER THE CALLER CAN AFFORD TO WAIT, and the two halves differ:
+ *
+ *     the CLAIM paths   exit 2 NAMING the rate limit. No retry, no backoff curve. An
+ *                       unanswered question must not render as an open task - see the note
+ *                       on resolutions(). The operator re-runs when the channel is clear.
+ *
+ *     the WATCH loop    honours Retry-After and waits exactly that long. This is NOT invented
+ *                       backoff: it is the interval SLACK ASKED FOR, and ignoring it while
+ *                       re-polling on a fixed timer is what deepens a limit.
+ *
+ * ⚠ UNOBSERVED. Nobody on this project has ever seen a 429 from this app. Both halves are
+ * reasoned from the API contract, not from a watched failure, and are recorded as such. (#105)
+ */
 async function api(url, params) {
   const u = new URL(url);
   for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
-  return fetch(u, { headers: auth }).then((r) => r.json());
+  const r = await fetch(u, { headers: auth });
+  const j = await r.json();
+  // Kept so the caller can print what Slack asked for. It does NOT retry on it.
+  if (r.status === 429) j.retryAfter = Number(r.headers.get('retry-after')) || null;
+  return j;
+}
+
+/**
+ * The rate-limit half of a failed read, printed before exit 2. Shared so the two callers
+ * cannot drift - the last time one read grew a guard the other did not, it was the
+ * double-execution defect documented in resolutions().
+ */
+function reportRateLimited(what, res) {
+  console.error(`ERROR (not a verdict): Slack RATE LIMITED ${what}.`);
+  console.error(
+    res.retryAfter
+      ? `  Slack asks for ${res.retryAfter}s before the next request.`
+      : '  Slack sent no Retry-After header.',
+  );
+  console.error('  ⛔ NOT RETRIED HERE, DELIBERATELY. A 429 is a property of the CHANNEL, so it');
+  console.error('  hits every contender at once and a retry deepens it for all of them. A claim');
+  console.error('  that silently does not happen is the safer failure. Re-run when it is clear.');
 }
 
 async function threadClaims() {
   const res = await api(REPLIES, { channel: a.channel, ts: a.task, limit: '200' });
   if (!res.ok) {
-    console.error(`Could not read the task thread: ${res.error}`);
+    if (res.error === 'ratelimited') reportRateLimited('the task-thread read', res);
+    else console.error(`Could not read the task thread: ${res.error}`);
     process.exit(2);
   }
   return (res.messages ?? [])
@@ -679,6 +721,7 @@ async function resolutions() {
    * nothing distinguished it: same api(), same shape, one missing guard.
    */
   if (!res.ok) {
+    if (res.error === 'ratelimited') reportRateLimited('the resolution check', res);
     console.error(`ERROR (not a verdict): could not check whether this task is resolved: ${res.error}`);
     console.error('Exit 2 = the question was not answered. Proceeding would risk claiming a task');
     console.error('that is ALREADY DONE, because an unread thread and an unresolved one look');
