@@ -149,7 +149,11 @@ function botToken() {
       `[watch] ⚠ ${VAR} DIFFERS between this process's environment and HKCU\\Environment.\n` +
         '        The environment wins and is a SNAPSHOT from launch, so after a rotation it\n' +
         '        is the OLD value and RESTARTING DOES NOT HELP while the parent shell holds\n' +
-        `        it. Relaunch with it unset:  env -u ${VAR} node <script> …`,
+        '        it. Unset it for ONE RUN - and NOT with `env -u`, which is coreutils and\n' +
+        '        does not exist in PowerShell or cmd, the only shells this can fire in:\n' +
+        `          PowerShell:  Remove-Item Env:\\${VAR} ; node <script> …\n` +
+        `          cmd.exe   :  set ${VAR}= && node <script> …\n` +
+        '        Simplest of all: open a fresh shell, which re-reads the registry.',
     );
   }
   return fromEnv || fromReg || null;
@@ -245,8 +249,9 @@ const USAGE =
       '               channel timeline - messages no watcher can see. --raw CANNOT find\n' +
       '               these: it reads history, and the failure IS absence from history.\n' +
       '               Exits 1 if any are found.\n' +
-      '  --doctor     Am I behind? Compares RUNNING / INSTALLED / AVAILABLE / PEERS by\n' +
-      '               BYTES, not version numbers, and prints what to ask a human for.\n' +
+      '  --doctor     Am I behind? Compares RUNNING / CACHED / REGISTERED / AVAILABLE /\n' +
+      '               PEERS. The decisive check is the VERSION DIRECTORY; bytes are the\n' +
+      '               fallback when the versions match. Prints what to ask a human for.\n' +
       '  --raw        INSPECTOR. Every message verbatim - raw ts, edited, every context\n' +
       '               element, undecoded body. No whitelist, no decode, no filtering.\n' +
       '               Reach for this the moment the rendering looks wrong: the renderer\n' +
@@ -351,11 +356,18 @@ function selfTest() {
    */
   const D = (paths) => paths.map((pp, i) => ({ version: `2.${i}.0`, scope: 'project', projectPath: pp }));
   const dupCases = [
-    ['case-variant pair is found', caseDuplicateRegistrations(D(['C:\a\b', 'c:\a\b'])).length, 1],
-    ['identical paths are NOT this defect', caseDuplicateRegistrations(D(['C:\a\b', 'C:\a\b'])).length, 0],
-    ['different directories are not a pair', caseDuplicateRegistrations(D(['C:\a', 'C:\b'])).length, 0],
+    // ⛔⛔ THESE WERE SINGLE-BACKSLASH STRINGS IN A NON-RAW LITERAL. `C:\a\b` is "C:a" plus
+    // U+0008 BACKSPACE - no path separator at all - while the comment above called them
+    // "the real rows off a real machine". Every case-dup fixture tested a mangled string,
+    // which is why the missing separator normalisation was invisible for so long. (#96)
+    ['case-variant pair is found', caseDuplicateRegistrations(D(['C:\\a\\b', 'c:\\a\\b'])).length, 1],
+    ['SEPARATOR variance is the same directory', caseDuplicateRegistrations(D(['D:\\Repos\\x', 'D:/Repos/x'])).length, 1],
+    ['case AND separator together', caseDuplicateRegistrations(D(['C:\\Repos\\x', 'c:/Repos/x'])).length, 1],
+    ['a trailing separator is the same directory', caseDuplicateRegistrations(D(['D:\\Repos\\x', 'D:\\Repos\\x\\'])).length, 1],
+    ['identical paths are NOT this defect', caseDuplicateRegistrations(D(['C:\\a\\b', 'C:\\a\\b'])).length, 0],
+    ['different directories are not a pair', caseDuplicateRegistrations(D(['C:\\a', 'C:\\b'])).length, 0],
     ['user scope has no path and is skipped', caseDuplicateRegistrations([{ version: '1.0.0', scope: 'user', projectPath: null }]).length, 0],
-    ['a single project is not a pair', caseDuplicateRegistrations(D(['D:\only'])).length, 0],
+    ['a single project is not a pair', caseDuplicateRegistrations(D(['D:\\only'])).length, 0],
   ];
   for (const [name, got, want] of dupCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  case-dup: ${name}`);
   const dupBad = dupCases.filter(([, got, want]) => got !== want).length;
@@ -744,7 +756,7 @@ async function checkWorkspace(token, { enforce = true } = {}) {
         '  Sending anyway would have SUCCEEDED and returned ok:true, landing the message\n' +
         '  in a workspace nobody is reading. That is why this refuses instead of warning.\n' +
         '\n' +
-        '  Fix whichever is wrong: point SLACK_BOT_TOKEN at the expected workspace, or\n' +
+        `  Fix whichever is wrong: point ${tokenVar()} at the expected workspace, or\n` +
         '  correct the declaration.',
       2,
     );
@@ -1690,7 +1702,9 @@ function caseDuplicateRegistrations(regs) {
   const byPath = new Map();
   for (const r of regs) {
     if (!r.projectPath) continue;
-    const key = String(r.projectPath).toLowerCase();
+    // ⛔ SEPARATOR TOO, not just case - see normPath(). Keying on toLowerCase() alone made
+    // this blind to the one variance its sibling containsPath() was fixed for. (#96)
+    const key = normPath(r.projectPath);
     if (!byPath.has(key)) byPath.set(key, []);
     byPath.get(key).push(r);
   }
@@ -1715,15 +1729,26 @@ function caseDuplicateRegistrations(regs) {
  * Equal, or followed by a separator. Case-folded because Windows matches paths that way -
  * see the case-duplicate note; both dimensions have to be handled and they are different bugs.
  */
+/**
+ * ⛔ ONE normaliser, used by BOTH path comparisons. It used to be a local arrow inside
+ * containsPath(), so caseDuplicateRegistrations() - which needs exactly the same rule -
+ * keyed on `.toLowerCase()` alone. `D:\\GitHub Repos\\x` and `D:/GitHub Repos/x` are ONE
+ * directory that the duplicate detector reported as two unrelated registrations, on the
+ * very case its sibling was fixed for. Sharing the function is what stops it drifting
+ * again. (#96)
+ */
+function normPath(p) {
+  return String(p).toLowerCase().replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
 function containsPath(dir, cwd) {
   // ⚠ NORMALISE THE SEPARATOR ON BOTH SIDES FIRST. A registration is recorded with
   // backslashes while a cwd can arrive with forward slashes - Git Bash, a path built by
   // join() elsewhere, a tool that already normalised - so comparing them raw rejects a
   // genuine child directory. Caught by this function's own fixtures before it shipped,
   // which is the only reason it is not another entry in the corrections list.
-  const norm = (p) => String(p).toLowerCase().replace(/\\/g, '/').replace(/\/+$/, '');
-  const d = norm(dir);
-  const c = norm(cwd);
+  const d = normPath(dir);
+  const c = normPath(cwd);
   return c === d || c.startsWith(`${d}/`);
 }
 
