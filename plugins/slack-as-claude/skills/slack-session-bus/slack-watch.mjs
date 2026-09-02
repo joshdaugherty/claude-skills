@@ -2230,8 +2230,19 @@ if (a.doctor) {
         '  This is definitive - it compares version directories, not bytes - and it holds\n' +
         '  even when the file you are executing is unchanged, because the OTHER scripts in\n' +
         '  the plugin may not be. Restart from the newer copy:\n' +
-        `  node "${installed.watcher}" --channel ${a.channel} --session <label> --since <last ts you saw>\n` +
-        '  ⚠ pass --since, or the restart silently drops anything posted during the handover.',
+        // ⛔⛔⛔ THE FOURTH SITE. #36 fixed --heartbeat in the x-update notice; #74 fixed it in
+        // the OTHER --doctor ask, sixty lines below; this one was still missing in 2.18.9 and
+        // was reported within minutes of that release.
+        //
+        // ★ Three separate fixes for one defect, each landing on the site that was reported.
+        // The lesson is not "look harder" - it is that the RESTART COMMAND WAS A STRING
+        // LITERAL IN FOUR PLACES, so correctness had to be re-established at each of them
+        // independently and nothing made them agree. A duplicated instruction is a
+        // duplicated bug with a delay fuse on each copy.
+        `  node "${installed.watcher}" --channel ${a.channel} --session <label> --heartbeat 60 --since <last ts you saw>\n` +
+        "  ⚠ KEEP --heartbeat: without it you publish no presence, cannot be --ping'd, are\n" +
+        '  absent from --presence entirely, and a stale takeover of your claims looks justified.\n' +
+        '  ⚠ And pass --since, or the restart silently drops anything posted during the handover.',
     );
   }
 
