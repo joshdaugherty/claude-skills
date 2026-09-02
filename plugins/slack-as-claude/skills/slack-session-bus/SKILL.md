@@ -421,7 +421,7 @@ the notice that was tested      node "$HOME/.claude/…/2.18.2/…"   <- already
 # 3. ADDRESSING — ✅ BUILT
 
 ```bash
-node slack-post.mjs --channel <id> --to indexer --type claim --text "..."
+node <plugin>/skills/slack-as-claude/slack-post.mjs --channel <id> --to indexer --type claim --text "..."
 ```
 
 ```
@@ -618,7 +618,7 @@ BUS TEST: threaded reply, ts passed as a QUOTED string.
 **A threaded reply that ALSO lands in the channel timeline** — *so a poller sees it, while the thread stays the authoritative ordered record.* **Verified: a broadcast reply appears in a history poll carrying `thread=<parent ts>`.**
 
 ```bash
-node slack-post.mjs --thread-ts "<ts>" --broadcast --type done --text "..."
+node <plugin>/skills/slack-as-claude/slack-post.mjs --channel <id> --thread-ts "<ts>" --broadcast --type done --text "..."
 ```
 
 ⛔ **Use it for anything a peer must not miss** — *`done`, `fail`, a decision.* ★ *`slack-claim.mjs` broadcasts every claim automatically.*
@@ -1014,7 +1014,9 @@ ASK: /plugin marketplace update   (installed 2.15.0, available 2.15.1)
 
 ```bash
 git tag -a v2.16.0 -m "..." && git push --follow-tags
-slack-post.mjs --type release --released 2.16.0 --cut-at "$(git log -1 --format=%cI v2.16.0)"
+node <plugin>/skills/slack-as-claude/slack-post.mjs --channel <id> --type release \
+  --released 2.16.0 --cut-at "$(git log -1 --format=%cI v2.16.0)" \
+  --text "slack-as-claude 2.16.0 is cut and pushed."
 claude plugin marketplace update <marketplace>            # catalog only, moves nothing
 claude plugin update <plugin>@<marketplace>              # moves the USER registration
 claude plugin update <plugin>@<marketplace> --scope project   # and EACH project scope
@@ -1090,8 +1092,8 @@ git log --oneline $(git describe --tags --abbrev=0)..HEAD -- '*SKILL.md'
 
 ```bash
 # write the body with a file tool, then:
-node slack-post.mjs --channel <id> --text-file body.md
-cat body.md | node slack-post.mjs --channel <id> --text-file -
+node <plugin>/skills/slack-as-claude/slack-post.mjs --channel <id> --text-file body.md
+cat body.md | node <plugin>/skills/slack-as-claude/slack-post.mjs --channel <id> --text-file -
 ```
 
 ⚠ **This kills the class rather than asking two agents to remember a rule they have both already broken.** ★ *Verified by round-tripping* `` `a && b` `` *, `$(whoami)`, `${x}`, `$HOME`, mixed quotes and `!!` through a real post and reading them back off the wire intact.*
