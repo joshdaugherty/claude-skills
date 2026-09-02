@@ -467,7 +467,27 @@ async function checkWorkspace(token, { enforce = true } = {}) {
 function workspaceLine({ who, want, verified }) {
   if (!who.ok) return `unverified (auth.test failed: ${who.error})`;
   const base = `${who.team} (${who.team_id})  ${who.url}`;
-  if (!want) return `${base}  [no repo declaration - unenforced]`;
+  /**
+   * ⛔⛔ TWO DIFFERENT STATES RENDERED AS ONE VERDICT, AND THE HIDDEN ONE PICKS A DIFFERENT
+   * WORKSPACE.
+   *
+   * `[no repo declaration - unenforced]` was emitted both when a git root exists and simply
+   * declares nothing - the documented default - AND when THERE IS NO GIT ROOT AT ALL, so the
+   * question was never asked. On a machine holding more than one workspace token the second
+   * silently falls back to SLACK_BOT_TOKEN and selects a DIFFERENT DESTINATION, rendered as
+   * clean output.
+   *
+   * ⚠ AND IT IS REACHABLE BY THE DOCUMENTED PATH, WHICH IS WHY IT IS NOT AN EDGE CASE: the
+   * skill header hands the reader the plugin's own directory, §0 tells them to run a
+   * --dry-run as its first act, and `cd`-ing to the script just named lands exactly here.
+   * MEASURED on a released copy - same command, same channel, only cwd differing, two
+   * different workspaces, both reported as fine.
+   */
+  if (!want) {
+    return gitRoot()
+      ? `${base}  [no repo declaration - unenforced]`
+      : `${base}  ⛔ [NO GIT ROOT HERE - nothing was consulted, so this is whatever ${tokenVar()} points at]`;
+  }
   return `${base}  [${verified ? 'matches' : 'DOES NOT MATCH'} ${want.path}]`;
 }
 
