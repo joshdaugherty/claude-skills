@@ -20,7 +20,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -315,7 +315,7 @@ function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 51; // raise when adding cases - a constant, reviewed on change
+  const CASE_FLOOR = 55; // raise when adding cases - a constant, reviewed on change
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -405,6 +405,27 @@ function selfTest() {
   for (const [name, got, want] of pathCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  path: ${name}`);
   const pathBad = pathCases.filter(([, got, want]) => got !== want).length;
 
+  /**
+   * The x-update notice's blocks (#151). `machine:` is the one facet the notice's own
+   * body text depends on and it was missing entirely; context-before-section is the
+   * order every other post type uses. Fixture values are arbitrary but distinct, so a
+   * mixed-up field would show up as the wrong VALUE, not just a missing key.
+   */
+  const xu = xUpdateBlocks({
+    session: 'fixture-session', machine: 'fixture-machine', cached: '9.9.9', from: '9.8.0',
+    baselineSrc: 'my own last posted plugin:', restartRequired: true, ownPlugin: 'slack-as-claude 9.9.9',
+    bodyText: 'fixture body',
+  });
+  const xuCtx = xu[0]?.elements ?? [];
+  const xuCases = [
+    ['context block comes before the section block', xu.map((b) => b.type).join(','), 'context,section'],
+    ['machine element is present', xuCtx.some((e) => e.text === 'machine: fixture-machine'), true],
+    ['restart element reflects restartRequired', xuCtx.some((e) => e.text === 'restart: `required`'), true],
+    ['plugin element is present when ownPlugin is given', xuCtx.some((e) => e.text === 'plugin: `slack-as-claude 9.9.9`'), true],
+  ];
+  for (const [name, got, want] of xuCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  x-update: ${name}`);
+  const xuBad = xuCases.filter(([, got, want]) => got !== want).length;
+
   // ⚠ EVERY counter must appear in BOTH the summary and the exit code. regBad was computed
   // and left out of both for one edit - seven cases that printed pass/FAIL and could not
   // fail the suite. A test that cannot fail is the defect this file documents two functions
@@ -421,12 +442,12 @@ function selfTest() {
   const tooFew = ran < CASE_FLOOR;
   if (tooFew) console.log(`\n⛔ ONLY ${ran} CASES RAN, floor is ${CASE_FLOOR} - a block stopped running.`);
   console.log(
-    missing.length || bad || regBad || dupBad || pathBad || tooFew
+    missing.length || bad || regBad || dupBad || pathBad || xuBad || tooFew
       ? `\n${tooFew ? `ONLY ${ran} CASES RAN, FLOOR IS ${CASE_FLOOR} - A BLOCK STOPPED RUNNING. ` : ''}${missing.length} FLAG(S) MISSING FROM USAGE${missing.length ? `: ${missing.join(', ')}` : ''}` +
-        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}`
+        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}${xuBad ? `, ${xuBad} X-UPDATE CASE(S) WRONG` : ''}`
       : `\n${ran} cases, all pass`,
   );
-  process.exit(missing.length || bad || regBad || dupBad || pathBad || tooFew ? 1 : 0);
+  process.exit(missing.length || bad || regBad || dupBad || pathBad || xuBad || tooFew ? 1 : 0);
 }
 
 if (a['self-test']) selfTest();
@@ -3000,6 +3021,58 @@ if (a.doctor) {
  * PROVING SEMANTIC EQUIVALENCE, which nothing here can do; the docs-only guard is safe
  * precisely because .md and .json cannot alter a running process at all.
  */
+/**
+ * The x-update notice's blocks, extracted so it is testable without a network call.
+ *
+ * ⚠ CONTEXT BEFORE SECTION, deliberately - every other post type (slack-post.mjs's
+ * shared builder, --retire) orders context first; this notice had it last, where a
+ * long body (code blocks, warnings, a file list) pushed `restart:` - the one element
+ * that decides whether the reader acts at all - below the fold. (#151)
+ *
+ * ⚠ `machine:` is REQUIRED, not optional like the other context facets this notice
+ * carries - the body text says "Files below are MY delta ... yours may differ", a
+ * caveat that is entirely about the sender's machine, and unusable without it. (#151)
+ */
+function xUpdateBlocks({ session, machine, cached, from, baselineSrc, restartRequired, ownPlugin, bodyText }) {
+  return [
+    {
+      type: 'context',
+      elements: [
+        { type: 'mrkdwn', text: 'type: `x-update`' },
+        { type: 'mrkdwn', text: `session: \`${session}\`` },
+        { type: 'mrkdwn', text: `machine: ${machine}` },
+        { type: 'mrkdwn', text: `cached: \`${cached}\`` },
+        { type: 'mrkdwn', text: `from: \`${from}\`` },
+        // ⛔ WHETHER `from:` IS A FACT OR A GUESS, SAID ON THE MESSAGE ITSELF. Without
+        // --from it is the second-newest directory IN THE CACHE, which is NOT "what you
+        // were running before": a machine that jumped 2.12 -> 2.17 still has the
+        // intermediate directories sitting there, and the notice would confidently name
+        // a baseline the reader never ran. This file's own text says the RESIDENT version
+        // is uninspectable - so `from:` cannot be read, only inferred, and it must not be
+        // stated in the same voice as `cached:`, which really is read off disk.
+        // ★★★ A PROVENANCE LABEL MUST NAME THE SOURCE WITHOUT IMPLYING THE VALUE WAS
+        // CHECKED. A peer's formulation, and it resolves a real tension: the label is what
+        // made a wrong `2.7.0` REPORTABLE, and the label is also why it read as
+        // authoritative enough to ship. Naming where a value came from is not a claim that
+        // anyone verified it arrived correctly.
+        // `ANNOUNCED … a CLAIM, not a reading` already had this right; `baseline:` did not.
+        // ⚠ The qualifier goes INSIDE the code span. Split across it, the value neither
+        // wraps nor doesn't: the reader's strip is correct to leave both backticks, and
+        // they then render as literal punctuation. Emitter and parser have to agree about
+        // where the value ends, and the value is the whole thing.
+        { type: 'mrkdwn', text: `baseline: \`${baselineSrc} (source, not a verification)\`` },
+        { type: 'mrkdwn', text: `restart: \`${restartRequired ? 'required' : 'not needed'}\`` },
+        // ⚠ THE ONE MESSAGE TYPE WHOSE SUBJECT IS VERSIONS SHIPPED WITHOUT DECLARING ITS
+        // OWN. Every other message carries `plugin:`, skew detection KEYS on it, and this
+        // one omitted it - so an x-update could never be skew-flagged. A version
+        // announcement is the last place that facet should be optional.
+        ...(ownPlugin ? [{ type: 'mrkdwn', text: `plugin: \`${ownPlugin}\`` }] : []),
+      ],
+    },
+    { type: 'section', text: { type: 'mrkdwn', text: bodyText } },
+  ];
+}
+
 if (a['announce-install']) {
   if (!a.session) die('--announce-install needs --session <label>: the notice says who moved.', 2);
 
@@ -3307,45 +3380,27 @@ if (a['announce-install']) {
     );
   }
 
+  // ⛔ THE ONE FACET THIS NOTICE'S OWN BODY DEPENDS ON, AND IT WAS MISSING. The body
+  // above says "Files below are MY delta ... yours may differ" - a caveat that is
+  // entirely about the sender's machine, in a message that never named it. `session`
+  // is not a substitute: a reader needs the label-to-machine mapping already, and
+  // none is registered anywhere. Same env/registry/hostname fallback slack-post.mjs
+  // uses, minus its leading --machine CLI override - this script has no such flag. (#151)
+  const machine = process.env.CLAUDE_SLACK_MACHINE ?? envFromRegistry('CLAUDE_SLACK_MACHINE') ?? hostname();
+
   const res = await slackPost('chat.postMessage', {
     channel: a.channel,
     text: `${a.session} installed ${pluginName} ${now.version}`,
-    blocks: [
-      { type: 'section', text: { type: 'mrkdwn', text: lines.join('\n') } },
-      {
-        type: 'context',
-        elements: [
-          { type: 'mrkdwn', text: 'type: `x-update`' },
-          { type: 'mrkdwn', text: `session: \`${a.session}\`` },
-          { type: 'mrkdwn', text: `cached: \`${now.version}\`` },
-          { type: 'mrkdwn', text: `from: \`${prev.version}\`` },
-          // ⛔ WHETHER `from:` IS A FACT OR A GUESS, SAID ON THE MESSAGE ITSELF. Without
-          // --from it is the second-newest directory IN THE CACHE, which is NOT "what you
-          // were running before": a machine that jumped 2.12 -> 2.17 still has the
-          // intermediate directories sitting there, and the notice would confidently name
-          // a baseline the reader never ran. This file's own text says the RESIDENT version
-          // is uninspectable - so `from:` cannot be read, only inferred, and it must not be
-          // stated in the same voice as `cached:`, which really is read off disk.
-          // ★★★ A PROVENANCE LABEL MUST NAME THE SOURCE WITHOUT IMPLYING THE VALUE WAS
-          // CHECKED. A peer's formulation, and it resolves a real tension: the label is what
-          // made a wrong `2.7.0` REPORTABLE, and the label is also why it read as
-          // authoritative enough to ship. Naming where a value came from is not a claim that
-          // anyone verified it arrived correctly.
-          // `ANNOUNCED … a CLAIM, not a reading` already had this right; `baseline:` did not.
-          // ⚠ The qualifier goes INSIDE the code span. Split across it, the value neither
-          // wraps nor doesn't: the reader's strip is correct to leave both backticks, and
-          // they then render as literal punctuation. Emitter and parser have to agree about
-          // where the value ends, and the value is the whole thing.
-          { type: 'mrkdwn', text: `baseline: \`${baselineSrc} (source, not a verification)\`` },
-          { type: 'mrkdwn', text: `restart: \`${code.length ? 'required' : 'not needed'}\`` },
-          // ⚠ THE ONE MESSAGE TYPE WHOSE SUBJECT IS VERSIONS SHIPPED WITHOUT DECLARING ITS
-          // OWN. Every other message carries `plugin:`, skew detection KEYS on it, and this
-          // one omitted it - so an x-update could never be skew-flagged. A version
-          // announcement is the last place that facet should be optional.
-          ...(OWN_PLUGIN ? [{ type: 'mrkdwn', text: `plugin: \`${OWN_PLUGIN}\`` }] : []),
-        ],
-      },
-    ],
+    blocks: xUpdateBlocks({
+      session: a.session,
+      machine,
+      cached: now.version,
+      from: prev.version,
+      baselineSrc,
+      restartRequired: code.length > 0,
+      ownPlugin: OWN_PLUGIN,
+      bodyText: lines.join('\n'),
+    }),
   });
   if (!res.ok) die(`could not post the update notice: ${res.error}`, 1);
   console.log(
