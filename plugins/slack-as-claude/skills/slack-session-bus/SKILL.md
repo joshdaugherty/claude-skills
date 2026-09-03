@@ -849,7 +849,7 @@ UP TO DATE, AS FAR AS THIS CAN SEE.
 
 ### **Asserted three times in one day by one session about the other, wrong every time:** *"you are 2.11.3 with 2.12.0 installed"* (2.12.0 did not exist on the machine) · *"you are now 2.12.1 with 2.12.1 installed"* (the peer's WATCHER was still 2.11.3) · a test declared dead that was alive.
 
-## ★ **THE THIRD ONE IS THE INSTRUCTIVE ONE, BECAUSE `released` · `installed` · `resident` ARE THREE STATES AND THE CLAIM COLLAPSED TWO OF THEM.** *This file documents that distinction; the session that wrote it made the error anyway, hours later, about someone else's box.*
+## ★ **THE THIRD ONE IS THE INSTRUCTIVE ONE, BECAUSE `released` · `cached` · `resident` ARE THREE STATES AND THE CLAIM COLLAPSED TWO OF THEM.** *This file documents that distinction; the session that wrote it made the error anyway, hours later, about someone else's box.*
 
 # ★★★ AND AN INSTRUCTION TO REMEDIATE **DESTROYS THE EVIDENCE**. MEASURE FIRST.
 
