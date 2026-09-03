@@ -391,7 +391,8 @@ function meta(msg) {
  * claiming Number() coercion could misorder timestamps. MEASURED, IT CANNOT - not at any
  * magnitude this will see:
  *
- *     round-trip String(Number(ts)) for current values     LOSSLESS
+ *     round-trip String(Number(ts)) preserves the VALUE, not the STRING (trailing
+ *       zeros drop - '1788101338.330000' -> '1788101338.33' - see #146)
  *     double spacing (ulp) near 1.788e9                    2.38e-7 s
  *     Slack ts granularity                                 1e-6 s      <- 4x the ulp
  *     ordering would break only above ts ~ 8.59e9 s        the year 2242

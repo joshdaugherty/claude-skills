@@ -1925,7 +1925,8 @@ function normPath(p) {
  * the boundary", and #110 was filed on that basis. MEASURED, IT DOES NOT - not at any
  * magnitude this will ever see:
  *
- *     round-trip String(Number(ts)) for current values     LOSSLESS
+ *     round-trip String(Number(ts)) preserves the VALUE, not the STRING (trailing
+ *       zeros drop - '1788101338.330000' -> '1788101338.33' - see #146)
  *     double spacing (ulp) near 1.788e9                    2.38e-7 s
  *     Slack ts granularity                                 1e-6 s      <- 4x the ulp
  *     ordering would break only above ts ~ 8.59e9 s        the year 2242
@@ -1942,9 +1943,19 @@ function normPath(p) {
  */
 function tsCmp(a, b) {
   const x = String(a ?? ''); const y = String(b ?? '');
-  const xi = x.split('.', 1)[0]; const yi = y.split('.', 1)[0];
+  const [xi, xf = ''] = x.split('.');
+  const [yi, yf = ''] = y.split('.');
   if (xi.length !== yi.length) return xi.length < yi.length ? -1 : 1;
-  return x < y ? -1 : x > y ? 1 : 0;
+  if (xi !== yi) return xi < yi ? -1 : 1;
+  // ⚠ CANONICALISE THE FRACTIONAL PART BEFORE COMPARING. Two timestamps with the same
+  // integer part can still differ only in how many trailing zeros survived - the lossy
+  // String(Number(ts)) round-trip named in #124/#125 trims them - and comparing the raw
+  // strings then treats the shorter one as a PREFIX, sorting it before the numerically
+  // identical longer one. Padding to Slack's 6-digit fraction width first makes '.33' and
+  // '.330000' compare equal, as they must. (#146)
+  const xfPad = xf.padEnd(6, '0');
+  const yfPad = yf.padEnd(6, '0');
+  return xfPad < yfPad ? -1 : xfPad > yfPad ? 1 : 0;
 }
 
 function containsPath(dir, cwd) {
