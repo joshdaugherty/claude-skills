@@ -31,7 +31,7 @@ claude plugin install slack-as-claude@claude-skills
 
 ⚠ **This used to say "from the repo root", on the stated grounds that the repo's own
 `.claude/settings.json` registers the marketplace. There is no such file in this repo and there
-never has been** — `git ls-files .claude/` lists one rule file. The cwd does not register a
+never has been** — `git ls-files .claude/` lists a rule file and a skill, no settings file. The cwd does not register a
 marketplace; the `marketplace add` above is what does.
 
 ⛔ **And if that reports `claude: command not found` — the IDE extension does not install a CLI.**
@@ -162,8 +162,12 @@ cheerful tick while the version your sessions actually load stays exactly where 
 check that hid this for weeks. **Verify the REGISTRATION:**
 
 ```
-node <plugin>/skills/slack-session-bus/slack-watch.mjs --consistency --channel <id>
+node <plugin>/skills/slack-session-bus/slack-watch.mjs --consistency
 ```
+
+⚠ **Needs no `--channel` and no token.** It reads only the plugin cache and
+`installed_plugins.json`, so it still works on a machine whose credential is missing or
+revoked — which is when you most want to run it.
 
 It prints every registration on the machine with its scope and path, and says plainly when it had
 nothing to compare against rather than calling that a pass.
