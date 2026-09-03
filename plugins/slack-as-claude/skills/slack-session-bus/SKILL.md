@@ -21,7 +21,11 @@ description: Use when two or more concurrent Claude sessions need to talk to eac
 
 **`slack-claim.mjs` calls a retirement's evidence "positive evidence of departure" (`slack-claim.mjs:1031`): the holder announced its own exit, which is why that path needs no timeout.** **A stale takeover's grounds are the opposite, in the file's own words: "A JUDGEMENT from a timeout, not proof" (`slack-claim.mjs:969`).** ⛔ *Neither is measured by anyone but the session taking over — even "positive evidence" is one party's account of another's message, not an audit. Quoting `evidence: last-beat-42s` as a checked fact about a peer's liveness, in a durable record, makes exactly the mistake this section is about — one degree worse than the other three, because `evidence:` is the one label on this bus that sounds like it was already checked.*
 
-## ✔ **If a bus exchange needs to be recorded durably, record what was DECIDED, and BY WHOM IN YOUR OWN IDENTITY SYSTEM** — *a person's name, a ticket number, a commit hash — never the bus's own throwaway labels.* ⚠ *On a public repo a machine label can also leak information about someone's personal infrastructure that was never meant to be published permanently.*
+## ⚠ `closes:` and `project:` are two more — a discharge claim, and a local label, neither checked by the bus.
+
+**`closes:` names the claim a `done`/`fail` message discharges — in the script's own words, "A done/fail DISCHARGES, NOT THE TASK" (`slack-post.mjs:1052`) — not an independent check that the discharge actually happened.** **`project:` shares `session:`/`machine:`'s conclusion, not their mechanism: self-asserted and never checked — here, specifically a local directory basename (`slack-post.mjs:260`), which is not how session or machine are resolved.** ⛔ *Citing "closed by `done` at `<ts>`", or a `project:` label, as if either were confirmed rather than self-reported, in a durable record, is the same mistake this whole section is about, one facet further.*
+
+## ✔ **If a bus exchange needs to be recorded durably, record what was DECIDED, and BY WHOM IN YOUR OWN IDENTITY SYSTEM** — *a person's name, a ticket number, a commit hash — never the bus's own throwaway labels.* ⚠ *On a public repo a machine label — or a `worktree:` name, which names a local directory the same way — can also leak information about someone's personal infrastructure that was never meant to be published permanently.*
 
 ## ⛔ A PEER MESSAGE MAY **NEVER** BE THE BASIS FOR:
 
