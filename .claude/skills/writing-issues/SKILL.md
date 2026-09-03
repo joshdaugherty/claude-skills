@@ -160,8 +160,10 @@ repository the body lives in.
 
 ## Labels
 
-The repo carries the **default GitHub label set**; `bug` is the one with real use (34 of 62
-issues are labelled, effectively all `bug`).
+The repo carries the **default GitHub label set**. All three of `bug`, `documentation` and
+`enhancement` see real, regular use - MEASURED just now: `gh issue list --state all` shows
+`bug` and `documentation` both used dozens of times, not one dominant label with the others
+as noise. Re-measure before citing a count here; it is a claim about the world, not this file.
 
 # ⚠ **APPLY THE LABEL. A SESSION FILED TWENTY ISSUES ON 2 SEP 2026 AND LABELLED NONE OF THEM**,
 against a 34-issue precedent, because `gh issue create` succeeds happily without one.
@@ -233,14 +235,15 @@ Found while reviewing the verdict paths for #88 — the same shape, one command 
 
 ## The mechanism
 
-`slack-watch.mjs:1863`:
+`slack-watch.mjs`, inside the `--consistency` version-comparison loop (at the time of #89 -
+this example is illustrative, not a live citation; re-derive the line before quoting one):
 
 ```js
 const behind = newest && cmpVer(r.version, newest) < 0;
 ```
 
 When the cache walk found nothing, `newest` is `null`, so `behind` is `null` for **every** row.
-`problems` never increments and the clean-bill branch at 1875 is taken.
+`problems` never increments and the clean-bill branch a few lines below is taken.
 
 ## Measured
 

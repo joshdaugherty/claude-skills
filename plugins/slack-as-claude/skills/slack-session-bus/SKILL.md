@@ -55,7 +55,7 @@ description: Use when two or more concurrent Claude sessions need to talk to eac
   ### The honest status is **`ASSERTED IN CODE, UNREACHABLE BY TRANSPORT`** — *which is better than "proven" would have been.* ★ *Three live tasks failed to reach that branch; an assertion reaches it in milliseconds. And the ULP figures that were wrong TWICE today are now pinned in the test names, so the number is held by something that runs.*
 - ⚠ **The claim protocol with an UNPROMPTED agent — NARROWED, NOT CLOSED.** *`slack-post --type claim` now REFUSES and names `slack-claim.mjs`, so the default wrong path routes to the right one.* **But no genuinely unprompted agent has yet been observed running it end to end.**
 - ⚠ **Concurrency — EXERCISED AT 8 SIMULTANEOUS CLAIMANTS, HELD ONCE.** **8 `slack-claim` processes fired at one task from a shell: 8 claims posted in a 108ms window, every loser re-reading a thread that was still filling, EXACTLY ONE exit 0, and the winner was the lowest `ts` — ranking and exit codes agreeing.** ### *That is the read-after-write race §4 rests on, run for real.* ⛔ **It is a TIMING property, so ONE CLEAN RUN IS NOT A PASS** — *evidence the window is adequate at 8-way concurrency on one machine, not proof the race is closed.* ⚠ **AND AN 8-AGENT RUN OF THE SAME TASKS TESTED NOTHING**: *agent orchestration serialised them ~20s apart, so each found an existing claim and stood down — **one claim per thread, no race at all.*** # **A concurrency test that does not produce concurrency looks exactly like a concurrency test that passes.**
-- ⛔ **Sustained load, and RATE LIMITS.** *8 simultaneous posts drew **zero** 429s, so the ceiling was never found — that is UNTESTED, not proven safe.* ⚠ **Neither script contains any retry or `Retry-After` handling**, *and an unhandled 429 landing as exit 1 would be indistinguishable from losing a claim.*
+- ⛔ **Sustained load, and RATE LIMITS.** *8 simultaneous posts drew **zero** 429s, so the ceiling was never found — that is UNTESTED, not proven safe.* ⚠ **All three scripts now read and report `Retry-After` on a 429** — `slack-claim` exits 2 NAMING the rate limit (never silently exits 1), `slack-post` and the write paths in `slack-watch` report it and do not retry, and the watch loop (both `poll()` and the heartbeat) waits at least as long as Slack asked for. *Still UNOBSERVED IN PRODUCTION: nobody here has ever seen a real 429 from this app — the above is reasoned from the API contract and exercised only against local fixtures.*
 
 ★ **FOURTEEN defects were found here, and essentially all of them by USING the thing rather than reading it.** ### **Every one was a SURFACE reporting something the underlying state did not support** — *a claim body, a changelog, a version string, a usage string, a dry run, a roster, an auth error, `--doctor` itself, and a FLAG AUDIT that passed a flag it had never checked.* # **That is not a bug class, it is the failure mode of this design, and every instance fell in under two minutes to going at the thing itself rather than the thing describing it.** ⚠ *Five were the author's own path diverging from the documented one — see §7.*
 
@@ -278,7 +278,7 @@ diff --strip-trailing-cr -q <repo-path> <cache-path>
 ## ✔ **THE FIX IS STILL THE `AVAILABLE` FIX — RENDER THE AGE:**
 
 ```
-PEERS      peer-session=slack-as-claude 2.9.1 (as of its beat 12s ago)
+PEERS      peer-session=last said 2.9.1@12s-ago
 ```
 
 ### **A number that arrives with its own expiry cannot be read as current** — *and the age is what tells you whether you are looking at the layer above or merely at time having passed.*
@@ -733,8 +733,8 @@ active posts-never-beats  no beat, but POSTED 2s ago  <- present, NOT reachable
 ### **A session cannot heartbeat for itself.** *It only executes during a turn, so anything it posts proves ACTIVITY — the very thing that was never the problem.* # **The WATCHER can**, *because it is a continuously running process whose lifetime tracks the session's under a persistent `Monitor`.*
 
 ```bash
-node slack-watch.mjs --channel <id> --session <label> --heartbeat 60   # publish
-node slack-watch.mjs --channel <id> --presence                          # read the roster
+node <plugin>/skills/slack-session-bus/slack-watch.mjs --channel <id> --session <label> --heartbeat 60   # publish
+node <plugin>/skills/slack-session-bus/slack-watch.mjs --channel <id> --presence                          # read the roster
 ```
 
 **It maintains ONE presence message, refreshed in place with `chat.update`** *(same `ts`, no channel spam, needs only `chat:write`)*. **A roster read compares each `beat` against now:**
@@ -760,7 +760,7 @@ STALE session-two   last beat 94s ago (every 5s)
 # ★★★ AND THE ONLY POSITIVE SIGNAL: **ASK.** `--ping <session>`
 
 ```bash
-node slack-watch.mjs --channel <id> --session me --ping other-session --wait 45
+node <plugin>/skills/slack-session-bus/slack-watch.mjs --channel <id> --session me --ping other-session --wait 45
 → PONG from "other-session" after 44.8s   exit 0
 → no pong within 45s                      exit 1
 ```
@@ -1004,7 +1004,7 @@ ASK: /plugin marketplace update   (installed 2.15.0, available 2.15.1)
 
 ⚠ **A peer's own `--doctor` will report `CACHED <new>` and say nothing whatsoever about its own resident process.** *The peer cannot derive this. Only the installing session can tell it.* **So the notice carries the three things that are actionable:**
 
-**1 · which EXECUTABLE files changed** *(this decides whether a restart is needed at all)* · **2 · that resident processes are stale regardless of what `--doctor` says about `INSTALLED`** · **3 · that the restart must carry `--since <their own last ts>`** — *bare, it re-primes and silently swallows whatever landed in the gap.*
+**1 · which EXECUTABLE files changed** *(this decides whether a restart is needed at all)* · **2 · that resident processes are stale regardless of what `--doctor` says about `CACHED`** · **3 · that the restart must carry `--since <their own last ts>`** — *bare, it re-primes and silently swallows whatever landed in the gap.*
 
 ✔ **`--announce-install` computes all of it and posts it, so the wording lives under version control instead of being re-derived by each session.** *It reuses the same CRLF-normalising comparison `--doctor` uses —* ⚠ *a bare `cmp` between a cache copy and a checkout reports over a thousand line endings as a difference that is not one.*
 
@@ -1132,7 +1132,7 @@ comm -23 <(sed -n '/parseArgs({/,/^});/p' f.mjs | grep -oE "^\s+'?[a-z][a-z-]*'?
 - [x] ★ **`--raw`, THE INSPECTOR** — *every message verbatim, no renderer in the path.* # **THE SINGLE HIGHEST-VALUE ADDITION OF THE DAY.** ### *Three times the fix for a visibility problem was itself invisible, and every one was caught by leaving the renderer behind and reading the payload.* **That discipline was working but unshipped — it meant writing a throwaway script each time.** ## *A rule asks for intention; a command asks for a keystroke.*
 - [x] ★ **`--doctor`, THE SELF-CHECK** — *"am I behind, and what should I ask for?"*
 
-  ### **Compares RUNNING · CACHED · REGISTERED · AVAILABLE · PEERS — the VERSION DIRECTORY decides; bytes are the fallback when version numbers.** *A docs-only release bumps the number without changing behaviour, so a version comparison would demand a pointless update AND stay silent on a resident copy that is stale at the same version.* ⛔ **It ASKS, it does not act** — *a session that updated itself on a peer's say-so is the §2 authorisation problem wearing a maintenance hat.* ⚠ *And the floor applies to it too: a session too old to have `--doctor` cannot run the check that would tell it so. It helps the NEXT skew.*
+  ### **Compares RUNNING · CACHED · REGISTERED · AVAILABLE · PEERS — the VERSION DIRECTORY decides; bytes are the fallback when the versions match.** *A docs-only release bumps the number without changing behaviour, so a version comparison would demand a pointless update AND stay silent on a resident copy that is stale at the same version.* ⛔ **It ASKS, it does not act** — *a session that updated itself on a peer's say-so is the §2 authorisation problem wearing a maintenance hat.* ⚠ *And the floor applies to it too: a session too old to have `--doctor` cannot run the check that would tell it so. It helps the NEXT skew.*
 
 - [ ] **A claim helper** doing post → re-read → decide, so the step that gets skipped is the step that is automated
 
