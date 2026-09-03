@@ -149,8 +149,9 @@ function botToken() {
       `[watch] ⚠ ${VAR} DIFFERS between this process's environment and HKCU\\Environment.\n` +
         '        The environment wins and is a SNAPSHOT from launch, so after a rotation it\n' +
         '        is the OLD value and RESTARTING DOES NOT HELP while the parent shell holds\n' +
-        '        it. Unset it for ONE RUN - and NOT with `env -u`, which is coreutils and\n' +
-        '        does not exist in PowerShell or cmd, the only shells this can fire in:\n' +
+        '        it. Unset it for ONE RUN, in whichever shell you are in - MEASURED: this\n' +
+        '        also fires in Git Bash, where `env -u` works and neither remedy below does:\n' +
+        `          Git Bash  :  env -u ${VAR} node <script> …\n` +
         `          PowerShell:  Remove-Item Env:\\${VAR} ; node <script> …\n` +
         `          cmd.exe   :  set ${VAR}= && node <script> …\n` +
         '        Simplest of all: open a fresh shell, which re-reads the registry.',
@@ -442,7 +443,7 @@ if (a['self-test']) selfTest();
  * reachable by following the tool's own advice. A required argument that is never read is an
  * instruction to go hunting for a credential you do not need. (#112)
  */
-const LOCAL_ONLY = Boolean(a.consistency);
+const LOCAL_ONLY = Boolean(a.consistency) && !a.presence && !a.ping && !a.audit && !a.retire;
 
 if (a.help || (!a.channel && !LOCAL_ONLY)) {
   console.error(USAGE);
@@ -479,6 +480,18 @@ const intervalMs = Math.max(5, Number(a.interval) || 30) * 1000;
 
 // Set by poll() when Slack answers 429; consumed and cleared by the loop at the bottom.
 let rateLimitWaitMs = 0;
+// Whether the 429 that set rateLimitWaitMs actually carried a Retry-After header - the
+// `|| 60` default below makes rateLimitWaitMs truthy even with no header, so that alone
+// cannot tell the message which case it is in. (#117)
+let rateLimitHadHeader = false;
+// Absolute time (ms since epoch) before which beat() must not issue its own requests -
+// a 429 on the poll bucket is a property of the CHANNEL and the heartbeat shares it, so
+// letting the heartbeat's own setInterval keep ticking through a stand-off deepens the
+// same limit the poll loop just backed off from. (#143)
+let rateLimitedUntil = 0;
+// Set by poll() on a 429 so --once can exit 1 (nothing was read) rather than 0 (a clean,
+// quiet channel) - the two are otherwise indistinguishable to a script gating on $?. (#133)
+let wasRateLimited = false;
 const GONE_AFTER_SEC = Math.max(60, Number(a['gone-after']) || GONE_AFTER_DEFAULT);
 
 // A session should not react to its own messages: it would see its own request as
@@ -648,11 +661,15 @@ const RETIRED_TYPE = 'x-retired';
 
 
 async function slackPost(method, body) {
-  return fetch(`https://slack.com/api/${method}`, {
+  const r = await fetch(`https://slack.com/api/${method}`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json; charset=utf-8' },
     body: JSON.stringify(body),
-  }).then((r) => r.json());
+  });
+  const j = await r.json();
+  // Kept so a 429 caller (beat(), --retire) can see what Slack asked for. (#119)
+  if (r.status === 429) j.retryAfter = Number(r.headers.get('retry-after')) || null;
+  return j;
 }
 
 async function recentMessages(limit = 200) {
@@ -685,7 +702,15 @@ async function recentMessages(limit = 200) {
    * The shape is deliberate: callers must destructure, so a site that ignores `ok` reads
    * as obviously wrong rather than quietly wrong.
    */
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } }).then((r) => r.json());
+  const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  // Shares the poll bucket's backoff clock with poll() and beat() - a 429 seen here must
+  // also stand the heartbeat down, or it keeps hitting the same limit on its own timer. (#143)
+  if (r.status === 429) {
+    const headerSecs = Number(r.headers.get('retry-after'));
+    const waitMs = (Number.isFinite(headerSecs) && headerSecs > 0 ? headerSecs : 60) * 1000;
+    rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + waitMs);
+  }
+  const res = await r.json();
   return res.ok ? { ok: true, messages: res.messages ?? [] } : { ok: false, error: res.error, messages: [] };
 }
 
@@ -946,6 +971,11 @@ function warnIfColliding(p, label) {
 }
 
 async function beat(label, every) {
+  // ⛔ SHARES THE POLL BUCKET'S BACKOFF. This runs on its own setInterval, independent of
+  // the poll loop's wait - without this check it keeps issuing chat.update/chat.postMessage
+  // through a stand-off poll() just announced, deepening the exact limit that message
+  // says is being honoured. (#143)
+  if (Date.now() < rateLimitedUntil) return;
   // Reuse this session's existing presence message if there is one, so a restart does
   // not litter the channel with orphans that a roster would then report as dead.
   if (!presenceTs) {
@@ -968,7 +998,13 @@ async function beat(label, every) {
     ? await slackPost('chat.update', { channel: a.channel, ts: presenceTs, ...body })
     : await slackPost('chat.postMessage', { channel: a.channel, ...body });
   if (res.ok) presenceTs = res.ts;
-  else console.error(`[watch] heartbeat failed: ${res.error}`);
+  else {
+    console.error(`[watch] heartbeat failed: ${res.error}`);
+    if (res.error === 'ratelimited') {
+      const waitMs = (res.retryAfter || 60) * 1000;
+      rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + waitMs);
+    }
+  }
 }
 
 /**
@@ -1153,7 +1189,12 @@ async function poll() {
     // ⛔ The Response is kept, not discarded by .then(r => r.json()). Slack sends Retry-After
     // on 429 and the old form threw it away with the object that carried it.
     const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-    if (r.status === 429) rateLimitWaitMs = (Number(r.headers.get('retry-after')) || 60) * 1000;
+    if (r.status === 429) {
+      const headerSecs = Number(r.headers.get('retry-after'));
+      rateLimitHadHeader = Number.isFinite(headerSecs) && headerSecs > 0;
+      rateLimitWaitMs = (rateLimitHadHeader ? headerSecs : 60) * 1000;
+      rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + rateLimitWaitMs);
+    }
     res = await r.json();
   } catch (err) {
     // Transient: a failed request must not kill a long-running watch.
@@ -1175,9 +1216,19 @@ async function poll() {
       return false; // permanent - do not loop on it
     }
     if (res.error === 'ratelimited') {
-      const secs = Math.round(rateLimitWaitMs / 1000);
-      console.error(`[watch] RATE LIMITED by Slack. Waiting ${secs}s before the next poll` +
-        (rateLimitWaitMs ? ' - the interval Slack asked for in Retry-After.' : ' (no Retry-After header; using the default).'));
+      wasRateLimited = true;
+      if (a.once) {
+        // Nothing was read and there is no next poll to wait for - see wasRateLimited.
+        console.error('[watch] RATE LIMITED by Slack. Nothing was read; --once does not wait or retry.');
+      } else {
+        // The real wait honours --interval too (see the loop below); print THAT number,
+        // not rateLimitWaitMs alone, or the two can disagree by tens of seconds.
+        const secs = Math.round(Math.max(intervalMs, rateLimitWaitMs) / 1000);
+        console.error(`[watch] RATE LIMITED by Slack. Waiting ${secs}s before the next poll` +
+          (rateLimitHadHeader
+            ? ' - honouring the Retry-After Slack sent (never shorter than --interval).'
+            : ' - Slack sent no Retry-After header; falling back to --interval.'));
+      }
       return true;
     }
     console.error(`[watch] ${res.error}`);
@@ -1350,8 +1401,10 @@ async function poll() {
      * is the PEERS escalation one field over: from LABELLING a value in a document to making the
      * unlabelled form UNREPRESENTABLE in the string. (#106)
      *
-     * ⚠ DISPLAY ONLY - the wire facet stays `session:`. Verified before changing: `from=` occurs
-     * at exactly this one site and nothing parses it, so no reader or peer breaks.
+     * ⚠ DISPLAY ONLY - the wire facet stays `session:`. `from=` also occurred at the --audit
+     * per-reply line (renamed alongside this one, (#116) - "exactly this one site" was false
+     * when first written here, by three days) - and nothing parses either, so no reader or
+     * peer breaks.
      */
     const head = `[bus] ts=${m.ts} said-by=${from}${to}${type}${thread}${plugin}${edited}${seamWarn}`;
     if (flat.length <= BUS_EXCERPT) {
@@ -1553,7 +1606,7 @@ if (a.audit) {
   for (const m of replies) {
     const { meta } = parseMessage(m);
     const seen = timeline.has(m.ts);
-    console.log(`  ${seen ? 'visible  ' : 'INVISIBLE'} ${m.ts}  type=${meta.type ?? '?'} from=${meta.session ?? '?'}`);
+    console.log(`  ${seen ? 'visible  ' : 'INVISIBLE'} ${m.ts}  type=${meta.type ?? '?'} said-by=${meta.session ?? '?'}`);
   }
   if (invisible.length) {
     console.log('');
@@ -1847,7 +1900,7 @@ function normPath(p) {
  *     round-trip String(Number(ts)) for current values     LOSSLESS
  *     double spacing (ulp) near 1.788e9                    2.38e-7 s
  *     Slack ts granularity                                 1e-6 s      <- 4x the ulp
- *     ordering would break only above ts ~ 4.5e9 s         the year 2112
+ *     ordering would break only above ts ~ 8.59e9 s        the year 2242
  *
  * So this is NOT a bug fix. It is exactness BY CONSTRUCTION on the comparisons that decide
  * ORDER or IDENTITY, matching the sites that already compared as strings. It does NOT replace
@@ -1861,7 +1914,8 @@ function normPath(p) {
  */
 function tsCmp(a, b) {
   const x = String(a ?? ''); const y = String(b ?? '');
-  if (x.length !== y.length) return x.length < y.length ? -1 : 1;
+  const xi = x.split('.', 1)[0]; const yi = y.split('.', 1)[0];
+  if (xi.length !== yi.length) return xi.length < yi.length ? -1 : 1;
   return x < y ? -1 : x > y ? 1 : 0;
 }
 
@@ -2054,12 +2108,15 @@ if (a.consistency) {
     }
   } else if (!problems) {
     console.log('  Every registration matches the newest cached version, and no directory is');
-    console.log('  registered twice. ⚠ This says nothing about which copy a SKILL INVOCATION');
-    console.log('  resolves - that remains unverified.');
+    // ⚠ "no directory is registered twice" over-claimed: caseDuplicateRegistrations()
+    // deliberately excludes byte-identical duplicates (see its own comment) - it checks
+    // for TWO SPELLINGS of one directory, not for one directory registered more than once.
+    // Scoped to what was actually checked. (#126)
+    console.log('  registered under two different spellings. ⚠ This says nothing about which copy');
+    console.log('  a SKILL INVOCATION resolves - that remains unverified.');
   } else {
     console.log(`  ${problems} thing(s) to look at. A registration behind the cache is fixed FROM`);
     console.log('  THAT PROJECT\'S DIRECTORY:  claude plugin update <plugin>@<mkt> --scope project');
-    console.log('  ⚠ A row flagged unreachable above is NOT fixable by that command, or any other.');
   }
   process.exit(0);
 }
@@ -2574,7 +2631,7 @@ if (a.doctor) {
    */
   if (announced && installed && cmpVer(announced.version, installed.version) < 0) {
     askPeer(
-      `THE INSTALLED ${installed.version} WAS NEVER ANNOUNCED - newest announcement is ${announced.version}.\n` +
+      `THE CACHED ${installed.version} WAS NEVER ANNOUNCED - newest announcement is ${announced.version}.\n` +
         '  A gap in the record, not evidence the release is unreal: an announcement is a\n' +
         '  claim someone has to make, and nobody made this one. Post it with:\n' +
         `    slack-post.mjs --type release --released ${installed.version} --cut-at <iso>\n` +
@@ -2657,7 +2714,7 @@ if (a.doctor) {
    */
   if (inCache && installed && cmpVer(runningVer, installed.version) < 0) {
     askBehind(
-      `YOU ARE RUNNING AN OLDER INSTALLED COPY: ${runningVer}, while ${installed.version} is installed.\n` +
+      `YOU ARE RUNNING AN OLDER CACHED COPY: ${runningVer}, while ${installed.version} is cached.\n` +
         '  This is definitive - it compares version directories, not bytes - and it holds\n' +
         '  even when the file you are executing is unchanged, because the OTHER scripts in\n' +
         '  the plugin may not be. Restart from the newer copy:\n' +
@@ -2752,22 +2809,25 @@ if (a.doctor) {
 
   /**
    * ⛔⛔ A DISK-DERIVED ASK SURVIVES A FAILED CHANNEL READ. The entire ask-printing chain
-   * used to hang off the `else` of this branch, so a failed read computed all thirteen asks
-   * and printed NONE - including TWO REGISTRATIONS FOR ONE DIRECTORY and YOU ARE RUNNING AN
-   * OLDER INSTALLED COPY, which never touch Slack - while the arm's own closing sentence
-   * told the reader the disk-derived information had survived.
+   * used to hang off the `else` of this branch, so a failed read printed NONE of the
+   * disk-derived asks either - including TWO REGISTRATIONS FOR ONE DIRECTORY and YOU ARE
+   * RUNNING AN OLDER INSTALLED COPY, which never touch Slack - while the arm's own closing
+   * sentence told the reader the disk-derived information had survived.
    *
    * A revoked or expired token is PRECISELY when someone runs --doctor. (#90)
+   *
+   * ⚠ Every askPeer() site already requires a successful read (readable, or the announced
+   * roster it builds), so on a failed read `asks` never contains a peer-derived entry to
+   * withhold in the first place - there is nothing here for a "withheld" counter to count.
+   * (#128)
    */
   const shown = readable ? asks : asks.filter((x) => x.disk);
-  const withheld = asks.length - shown.length;
 
   if (!readable) {
     console.log('');
     console.log(`⛔ THE CHANNEL READ FAILED (${read.error}). Everything above about PEERS is`);
     console.log('UNKNOWN, not empty, and no ACTION has been suggested FROM IT - advice derived');
     console.log('from an unanswered question is worse than none, because it is actionable.');
-    if (withheld) console.log(`${withheld} peer-derived action(s) withheld for that reason.`);
     console.log('The version lines ARE still trustworthy: they come from disk, not from Slack.');
     if (shown.length) {
       console.log(`So are the ${shown.length} action(s) below - every one is derived from disk, which`);
@@ -2776,34 +2836,45 @@ if (a.doctor) {
     console.log('');
   }
 
-  if (!shown.length) {
-    // ⛔ WAS: "...and nothing newer is available." THAT SENTENCE WAS A LIE THIS TOOL
-    // COULD NOT DETECT. It asserts a fact about the MARKETPLACE while knowing only a
-    // fact about a LOCAL CLONE, and it was printed verbatim while v2.9.0 sat tagged
-    // and pushed on origin. The words told the reader to stop looking, which is the
-    // most expensive thing a wrong status line can do.
-    //
-    // The claim is now scoped to what was actually checked, and the caveat is
-    // UNCONDITIONAL - not shown only when the clone looks old, because "old" is
-    // exactly the judgement this tool has already proved it cannot make.
-    //
-    // ⛔⛔ AND IT STILL PRINTED A VERDICT FOR TWO COMPARISONS WITHOUT CHECKING THAT EITHER
-    // HAD RUN. Both halves were unconditional, while EVERY ask that could contradict them
-    // sits behind `installed &&`. With no non-orphaned cache directory `installed` is null,
-    // nothing is compared, no ask is pushed, and THE ABSENCE OF A COMPARISON WAS REPORTED
-    // AS A PASS - in the exact words the comment above calls the most expensive thing a
-    // wrong status line can do.
-    //
-    // ⚠ The second half was not merely vacuous but FALSE: nothing anywhere compared the
-    // clone to what is RUNNING, only to `installed`. A clone at 9.9.9 printed `AVAILABLE
-    // 9.9.9` five lines above `nothing newer is present in the marketplace clone`. (#88)
-    //
-    // EMIT THE OBSERVATION, NOT THE CONCLUSION. Each half now says whether it ran.
-    const comparedToCache = Boolean(installed && existsSync(installed.watcher));
-    const knowRunning = Boolean(runningVer) && runningVer !== 'unknown';
-    const cloneComparable = Boolean(available) && knowRunning;
-    const cloneNewer = cloneComparable && cmpVer(available.version, runningVer) > 0;
+  // ⛔ WAS: "...and nothing newer is available." THAT SENTENCE WAS A LIE THIS TOOL
+  // COULD NOT DETECT. It asserts a fact about the MARKETPLACE while knowing only a
+  // fact about a LOCAL CLONE, and it was printed verbatim while v2.9.0 sat tagged
+  // and pushed on origin. The words told the reader to stop looking, which is the
+  // most expensive thing a wrong status line can do.
+  //
+  // The claim is now scoped to what was actually checked, and the caveat is
+  // UNCONDITIONAL - not shown only when the clone looks old, because "old" is
+  // exactly the judgement this tool has already proved it cannot make.
+  //
+  // ⛔⛔ AND IT STILL PRINTED A VERDICT FOR TWO COMPARISONS WITHOUT CHECKING THAT EITHER
+  // HAD RUN. Both halves were unconditional, while EVERY ask that could contradict them
+  // sits behind `installed &&`. With no non-orphaned cache directory `installed` is null,
+  // nothing is compared, no ask is pushed, and THE ABSENCE OF A COMPARISON WAS REPORTED
+  // AS A PASS - in the exact words the comment above calls the most expensive thing a
+  // wrong status line can do.
+  //
+  // ⚠ The second half was not merely vacuous but FALSE: nothing anywhere compared the
+  // clone to what is RUNNING, only to `installed`. A clone at 9.9.9 printed `AVAILABLE
+  // 9.9.9` five lines above `nothing newer is present in the marketplace clone`. (#88)
+  //
+  // EMIT THE OBSERVATION, NOT THE CONCLUSION. Each half now says whether it ran.
+  const comparedToCache = Boolean(installed && existsSync(installed.watcher));
+  const knowRunning = Boolean(runningVer) && runningVer !== 'unknown';
+  const cloneComparable = Boolean(available) && knowRunning;
+  const cloneNewer = cloneComparable && cmpVer(available.version, runningVer) > 0;
 
+  // ⛔⛔ MUST FIRE REGARDLESS OF WHETHER ANY OTHER ASK DID. This used to sit inside the
+  // `if (!shown.length)` arm below, so ONE unrelated ask - the presence ask fires on every
+  // run not made from a currently-heartbeating lane, and the duplicate-registration ask can
+  // be permanent on a machine - suppressed the clone-vs-running alarm entirely. (#122)
+  if (cloneNewer) {
+    console.log(`⛔ THE MARKETPLACE CLONE HAS ${available.version} AND YOU ARE RUNNING ${runningVer}.`);
+    console.log('  No ask fired for it: every version ask is guarded on a CACHE entry that does');
+    console.log('  not exist here, so the clone was compared to the cache and never to you.');
+    console.log('');
+  }
+
+  if (!shown.length) {
     const checked = [];
     if (comparedToCache) checked.push(`running code matches the newest CACHED copy (${installed.version})`);
     if (cloneComparable && !cloneNewer) {
@@ -2811,16 +2882,13 @@ if (a.doctor) {
     }
 
     const unchecked = [];
-    if (!comparedToCache) unchecked.push('RUNNING vs CACHED - no non-orphaned cache directory for this plugin exists, so nothing was compared.');
+    // ⚠ comparedToCache is a TWO-term conjunction (installed && existsSync(installed.watcher)).
+    // Naming only the first term here asserted a cause this line never measured, on a
+    // truncated-install or renamed-skill-folder state where the SECOND term is what failed. (#144)
+    if (!comparedToCache) unchecked.push('RUNNING vs CACHED - either no non-orphaned cache directory exists for this plugin, or its watcher file is missing, so nothing was compared.');
     if (!available) unchecked.push('the MARKETPLACE CLONE - none on disk, so no available version was read.');
     else if (!knowRunning) unchecked.push('the MARKETPLACE CLONE - the running version is unknown, so it could not be compared.');
 
-    if (cloneNewer) {
-      console.log(`⛔ THE MARKETPLACE CLONE HAS ${available.version} AND YOU ARE RUNNING ${runningVer}.`);
-      console.log('  No ask fired for it: every version ask is guarded on a CACHE entry that does');
-      console.log('  not exist here, so the clone was compared to the cache and never to you.');
-      console.log('');
-    }
     if (!checked.length) {
       console.log('⛔ NOTHING WAS COMPARED. THIS IS NOT A CLEAN BILL OF HEALTH - it is an empty');
       console.log('read, the same as an unreadable installed_plugins.json, and it means only that');
@@ -2991,7 +3059,8 @@ if (a['announce-install']) {
     //
     // ⚠ The ordering was misread TWICE in five minutes, which is the argument for not
     // depending on it: `ts` is in the data, so compare that and the question disappears.
-    // Compared as STRINGS - a Slack ts has 16 significant digits and Number() rounds it.
+    // Compared with tsCmp(), not Number() - see tsCmp's own comment for why, and note the
+    // "Number() rounds it" justification this line used to carry was itself retracted (#125).
     let bestTs = '';
     for (const m of seen.ok ? seen.messages : []) {
       const { meta } = parseMessage(m);
@@ -3000,7 +3069,7 @@ if (a['announce-install']) {
       // BASED on rather than what it runs, so it cannot serve as a baseline - skip it.
       const mm = /\s(\d+\.\d+\.\d+)$/.exec(meta.plugin.trim());
       if (!mm || mm[1] === now.version) continue;
-      if (m.ts.length === bestTs.length ? m.ts > bestTs : m.ts.length > bestTs.length) {
+      if (tsCmp(m.ts, bestTs) > 0) {
         bestTs = m.ts;
         wireVer = mm[1];
       }
@@ -3135,7 +3204,7 @@ if (a['announce-install']) {
   if (code.length) {
     lines.push(
       '*IF YOU HAVE A WATCHER ARMED IT IS RUNNING THE OLD CODE* — regardless of what your',
-      '`--doctor` says about INSTALLED. *Two steps, and the order is the point:*',
+      '`--doctor` says about CACHED. *Two steps, and the order is the point:*',
       '',
       '*1 · UPDATE FIRST — you cannot restart onto code you do not have yet:*',
       '```',
@@ -3277,6 +3346,9 @@ if (a.show) {
     );
   }
   const { meta, body, seams, bareSeams } = parseMessage(hit);
+  // ⚠ DELIBERATELY NOT RENAMED to said-by=. This prints the wire facets verbatim, including
+  // `session:` - the exact token §0 already documents as self-asserted. Framing it here would
+  // contradict --show's own job (an unmediated look at what is on the wire). (#136)
   const facets = Object.entries(meta).map(([k, v]) => `${k}: ${v}`).join('  ');
   console.log(`ts ${hit.ts}${hit.thread_ts && hit.thread_ts !== hit.ts ? `  (reply in thread ${hit.thread_ts})` : ''}`);
   if (facets) console.log(facets);
@@ -3289,7 +3361,11 @@ if (a.show) {
 }
 
 if (a.raw) {
-  const read = await recentMessages(a.since ? 200 : 20);
+  // ⚠ ALWAYS 200, not a smaller default without --since. The summary below tells a reader
+  // withheld by --since to "Drop --since to see all of them" - if dropping it also shrank
+  // the fetch window, that advice would show FEWER messages than the run it was printed
+  // from. (#118)
+  const read = await recentMessages(200);
   if (!read.ok) {
     console.error(`could not read the channel: ${read.error}`);
     console.error('⛔ This is NOT "0 messages". --raw is the INSPECTOR - it is reached for when');
@@ -3356,7 +3432,7 @@ if (heartbeatSec > 0) {
 }
 
 const keepGoing = await poll();
-if (a.once || !keepGoing) process.exit(keepGoing ? 0 : 1);
+if (a.once || !keepGoing) process.exit(keepGoing ? (wasRateLimited ? 1 : 0) : 1);
 
 // eslint-disable-next-line no-constant-condition
 while (true) {

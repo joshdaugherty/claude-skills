@@ -154,8 +154,9 @@ function botToken() {
       `[claim] ⚠ ${VAR} DIFFERS between this process's environment and HKCU\\Environment.\n` +
         '        The environment wins and is a SNAPSHOT from launch, so after a rotation it is\n' +
         '        the OLD value, and restarting does not help while the parent shell holds it.\n' +
-        '        Unset it for ONE RUN - and NOT with `env -u`, which is coreutils and does\n' +
-        '        not exist in PowerShell or cmd, the only shells this can fire in:\n' +
+        '        Unset it for ONE RUN, in whichever shell you are in - MEASURED: this also\n' +
+        '        fires in Git Bash, where `env -u` works and neither remedy below does:\n' +
+        `          Git Bash  :  env -u ${VAR} node <script> …\n` +
         `          PowerShell:  Remove-Item Env:\\${VAR} ; node <script> …\n` +
         `          cmd.exe   :  set ${VAR}= && node <script> …\n` +
         '        Simplest of all: open a fresh shell, which re-reads the registry.',
@@ -393,7 +394,7 @@ function meta(msg) {
  *     round-trip String(Number(ts)) for current values     LOSSLESS
  *     double spacing (ulp) near 1.788e9                    2.38e-7 s
  *     Slack ts granularity                                 1e-6 s      <- 4x the ulp
- *     ordering would break only above ts ~ 4.5e9 s         the year 2112
+ *     ordering would break only above ts ~ 8.59e9 s        the year 2242
  *
  * So this is NOT a bug fix. It is exactness BY CONSTRUCTION on the four comparisons that
  * decide order or identity, matching the two sites that already compared as strings.
@@ -412,7 +413,8 @@ function meta(msg) {
  */
 function tsCmp(a, b) {
   const x = String(a ?? ''); const y = String(b ?? '');
-  if (x.length !== y.length) return x.length < y.length ? -1 : 1;
+  const xi = x.split('.', 1)[0]; const yi = y.split('.', 1)[0];
+  if (xi.length !== yi.length) return xi.length < yi.length ? -1 : 1;
   return x < y ? -1 : x > y ? 1 : 0;
 }
 
@@ -527,7 +529,10 @@ function selfTest() {
   // it guards, which would move with them and assert nothing. Raise it when adding cases.
   const tooFew = ran < CASE_FLOOR;
   if (tooFew) console.log(`\n⛔ ONLY ${ran} CASES RAN, floor is ${CASE_FLOOR} - a block stopped running.`);
-  console.log(failed ? `\n${failed} FAILED of ${ran}` : `\n${ran} cases, all pass`);
+  // ⚠ tooFew must reach this line too, not just the exit code below - the siblings fold it
+  // into their summary (slack-watch prefixes it, slack-post folds it into `bad`); this copy
+  // did not, so the LAST LINE of a floor-tripped run could still read "all pass". (#120)
+  console.log(failed ? `\n${failed} FAILED of ${ran}` : tooFew ? `\n${ran} cases, NOT all pass - see ⛔ above` : `\n${ran} cases, all pass`);
   process.exit(failed || tooFew ? 1 : 0);
 }
 
@@ -624,9 +629,9 @@ if (!/^\d{10,}\.\d{6}$/.test(a.task)) {
 // The claim protocol is worthless across a workspace boundary: a claim posted to the
 // wrong workspace is invisible to every peer, so the claimant reads an empty thread and
 // concludes it holds the task. Verified before any claim is written.
-if (!a.help) await checkWorkspace(botToken() ?? '');
-
 const token = botToken();
+if (!a.help) await checkWorkspace(token ?? '');
+
 if (!token) {
   console.error(`${tokenVar()} is not set.`);
   process.exit(2);
@@ -665,10 +670,21 @@ async function api(url, params) {
   return j;
 }
 
+async function apiPost(url, body) {
+  const r = await fetch(url, { method: 'POST', headers: jsonAuth, body: JSON.stringify(body) });
+  const j = await r.json();
+  if (r.status === 429) j.retryAfter = Number(r.headers.get('retry-after')) || null;
+  return j;
+}
+
 /**
- * The rate-limit half of a failed read, printed before exit 2. Shared so the two callers
- * cannot drift - the last time one read grew a guard the other did not, it was the
+ * The rate-limit half of a failed PRE-write read, printed before exit 2. Shared so the two
+ * callers cannot drift - the last time one read grew a guard the other did not, it was the
  * double-execution defect documented in resolutions().
+ *
+ * ⛔ NOT for a read that runs AFTER a write has already succeeded - see
+ * reportRateLimitedAfterWrite(). Using this one there says "silently does not happen" about
+ * something that already happened. (#142)
  */
 function reportRateLimited(what, res) {
   console.error(`ERROR (not a verdict): Slack RATE LIMITED ${what}.`);
@@ -682,11 +698,30 @@ function reportRateLimited(what, res) {
   console.error('  that silently does not happen is the safer failure. Re-run when it is clear.');
 }
 
-async function threadClaims() {
+/**
+ * The rate-limit half of a failed read whose WRITE already succeeded. reportRateLimited()'s
+ * text is wrong here: the claim was already posted, so "re-run when it is clear" would post a
+ * second one into the thread. (#142)
+ */
+function reportRateLimitedAfterWrite(what, res) {
+  console.error(`ERROR (not a verdict): Slack RATE LIMITED ${what}.`);
+  console.error(
+    res.retryAfter
+      ? `  Slack asks for ${res.retryAfter}s before the next request.`
+      : '  Slack sent no Retry-After header.',
+  );
+  console.error('  ⛔⛔ THE WRITE ALREADY SUCCEEDED. This is only the CONFIRMATION read failing.');
+  console.error('  Do NOT re-run this command - that would post a SECOND claim into this thread.');
+  console.error('  Check the thread directly (--show, or the channel) once the limit clears.');
+}
+
+async function threadClaims({ afterWrite = false } = {}) {
   const res = await api(REPLIES, { channel: a.channel, ts: a.task, limit: '200' });
   if (!res.ok) {
-    if (res.error === 'ratelimited') reportRateLimited('the task-thread read', res);
-    else console.error(`Could not read the task thread: ${res.error}`);
+    if (res.error === 'ratelimited') {
+      if (afterWrite) reportRateLimitedAfterWrite('the post-claim confirmation read', res);
+      else reportRateLimited('the task-thread read', res);
+    } else console.error(`Could not read the task thread: ${res.error}`);
     process.exit(2);
   }
   return (res.messages ?? [])
@@ -722,7 +757,7 @@ async function resolutions() {
    */
   if (!res.ok) {
     if (res.error === 'ratelimited') reportRateLimited('the resolution check', res);
-    console.error(`ERROR (not a verdict): could not check whether this task is resolved: ${res.error}`);
+    else console.error(`ERROR (not a verdict): could not check whether this task is resolved: ${res.error}`);
     console.error('Exit 2 = the question was not answered. Proceeding would risk claiming a task');
     console.error('that is ALREADY DONE, because an unread thread and an unresolved one look');
     console.error('identical from here. UNKNOWN MUST NOT RENDER AS OPEN.');
@@ -818,19 +853,16 @@ if (a.done || a.fail) {
   const pl = ownPlugin();
   if (pl) els.push({ type: 'mrkdwn', text: `plugin: \`${pl}\`` });
   const body = a.note || `${label} finished this task.`;
-  const res = await fetch(POST, {
-    method: 'POST',
-    headers: jsonAuth,
-    body: JSON.stringify({
-      channel: a.channel,
-      thread_ts: a.task,
-      reply_broadcast: true, // a resolution no watcher can see is how a task looks permanently open
-      text: body,
-      blocks: [{ type: 'context', elements: els }, { type: 'section', text: { type: 'mrkdwn', text: body } }],
-    }),
-  }).then((r) => r.json());
+  const res = await apiPost(POST, {
+    channel: a.channel,
+    thread_ts: a.task,
+    reply_broadcast: true, // a resolution no watcher can see is how a task looks permanently open
+    text: body,
+    blocks: [{ type: 'context', elements: els }, { type: 'section', text: { type: 'mrkdwn', text: body } }],
+  });
   if (!res.ok) {
-    console.error(`ERROR (not a verdict): could not post the ${kind}: ${res.error}`);
+    if (res.error === 'ratelimited') reportRateLimited(`the ${kind} post`, res);
+    else console.error(`ERROR (not a verdict): could not post the ${kind}: ${res.error}`);
     process.exit(2);
   }
   console.log(`Posted ${kind} at ${res.ts}, closing your claim ${mine.ts}.`);
@@ -848,6 +880,14 @@ if (done.length) {
 
 const before = await threadClaims();
 const holder = rankClaims(before)[0] ?? null;
+
+// ⛔ WITHOUT THIS, A RE-RUN DOUBLE-POSTS. If this session already holds the winning claim -
+// including a re-run after a rate-limited POST-claim confirm read (see reportRateLimitedAfterWrite)
+// - falling through to the post below would write a second claim into the thread. (#142)
+if (holder && holder.session === label) {
+  console.log(`You already hold the winning claim (${holder.ts}). Not posting a second one.`);
+  process.exit(0);
+}
 
 // Set when we decide a stale holder is abandoned. Its claim must then be excluded from
 // the final ranking - otherwise the takeover is announced and immediately undone, because
@@ -946,50 +986,47 @@ if (supersede) {
 const plugin = ownPlugin();
 if (plugin) elements.push({ type: 'mrkdwn', text: `plugin: \`${plugin}\`` });
 
-const posted = await fetch(POST, {
-  method: 'POST',
-  headers: jsonAuth,
-  body: JSON.stringify({
-    channel: a.channel,
-    thread_ts: a.task,
-    // ⚠⚠ reply_broadcast IS LOAD-BEARING, NOT COSMETIC.
-    //
-    // conversations.history returns CHANNEL messages. A threaded reply is not in the
-    // channel timeline, so a cursor poll structurally cannot see it - and §4 puts
-    // claiming, done and fail IN THREADS while §5 makes the poller the delivery
-    // mechanism. The consequence: a watching session sees tasks appear and NEVER sees
-    // them resolved. Every announced task looks permanently open.
-    //
-    // Observed: a session claimed a task that had been completed thirteen seconds
-    // earlier. Not carelessness - its instrument could not show thread activity at all.
-    //
-    // Broadcasting puts the claim in the channel timeline too, so a poller sees it,
-    // while the thread stays the authoritative ordered record.
-    reply_broadcast: true,
-    text: `claim: ${label}`,
-    blocks: [
-      { type: 'context', elements },
-      {
-        type: 'section',
-        text: {
-          type: 'mrkdwn',
-          text: supersede
-            ? takeoverReason === 'retired'
-              ? `Claiming this task, superseding *${supersede}*, which ANNOUNCED ITS RETIREMENT at ${takeoverEvidence}. ` +
-                'That is positive evidence of departure, not a timeout: no staleness window was waited out.'
-              : `Claiming this task, superseding *${supersede}* whose heartbeat has gone stale (${takeoverEvidence}). ` +
-              'That is a judgement from a timeout, not proof it is dead - a reader evaluating ' +
-              'before the timeout would still compute the earlier claim as the winner.' +
-              note
-            : `Claiming this task.${note}`,
-        },
+const posted = await apiPost(POST, {
+  channel: a.channel,
+  thread_ts: a.task,
+  // ⚠⚠ reply_broadcast IS LOAD-BEARING, NOT COSMETIC.
+  //
+  // conversations.history returns CHANNEL messages. A threaded reply is not in the
+  // channel timeline, so a cursor poll structurally cannot see it - and §4 puts
+  // claiming, done and fail IN THREADS while §5 makes the poller the delivery
+  // mechanism. The consequence: a watching session sees tasks appear and NEVER sees
+  // them resolved. Every announced task looks permanently open.
+  //
+  // Observed: a session claimed a task that had been completed thirteen seconds
+  // earlier. Not carelessness - its instrument could not show thread activity at all.
+  //
+  // Broadcasting puts the claim in the channel timeline too, so a poller sees it,
+  // while the thread stays the authoritative ordered record.
+  reply_broadcast: true,
+  text: `claim: ${label}`,
+  blocks: [
+    { type: 'context', elements },
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: supersede
+          ? takeoverReason === 'retired'
+            ? `Claiming this task, superseding *${supersede}*, which ANNOUNCED ITS RETIREMENT at ${takeoverEvidence}. ` +
+              'That is positive evidence of departure, not a timeout: no staleness window was waited out.'
+            : `Claiming this task, superseding *${supersede}* whose heartbeat has gone stale (${takeoverEvidence}). ` +
+            'That is a judgement from a timeout, not proof it is dead - a reader evaluating ' +
+            'before the timeout would still compute the earlier claim as the winner.' +
+            note
+          : `Claiming this task.${note}`,
       },
-    ],
-  }),
-}).then((r) => r.json());
+    },
+  ],
+});
 
 if (!posted.ok) {
-  console.error(`Could not post the claim: ${posted.error}`);
+  if (posted.error === 'ratelimited') reportRateLimited('the claim post', posted);
+  else console.error(`Could not post the claim: ${posted.error}`);
   process.exit(2);
 }
 
@@ -1000,7 +1037,7 @@ if (!posted.ok) {
 const settle = Math.max(0, Number(a.settle) || 0);
 if (settle) await new Promise((r) => setTimeout(r, settle * 1000));
 
-const after = await threadClaims();
+const after = await threadClaims({ afterWrite: true });
 // A superseded claim is shown but does not compete. Without this the takeover branch
 // announces itself and then loses to the very claim it just declared abandoned.
 const ranked = rankClaims(after, { exclude: supersede });
