@@ -1550,15 +1550,33 @@ if (a.ping) {
  * The only way to detect it is to compare two views that no single command compared:
  * the thread, and the timeline. That is this.
  */
+// Shared with --audit's two fetches below - a 429 on either read must say what Slack
+// asked for, not just fail generically. (#119)
+function reportRateLimited(what, headerSecs) {
+  console.error(`ERROR (not a verdict): Slack RATE LIMITED ${what}.`);
+  console.error(
+    Number.isFinite(headerSecs) && headerSecs > 0
+      ? `  Slack asks for ${headerSecs}s before the next request.`
+      : '  Slack sent no Retry-After header.',
+  );
+  console.error('  ⛔ NOT RETRIED HERE, DELIBERATELY. A 429 is a property of the CHANNEL, so it');
+  console.error('  hits every contender at once and a retry deepens it for all of them.');
+}
+
 if (a.audit) {
   if (!/^\d{10,}\.\d{6}$/.test(a.audit)) {
     console.error(`--audit "${a.audit}" is not a Slack timestamp. Quote it.`);
     process.exit(2);
   }
-  const rep = await fetch(
+  const repRes = await fetch(
     `https://slack.com/api/conversations.replies?channel=${a.channel}&ts=${a.audit}&limit=200`,
     { headers: { Authorization: `Bearer ${token}` } },
-  ).then((r) => r.json());
+  );
+  if (repRes.status === 429) {
+    reportRateLimited('the thread read', Number(repRes.headers.get('retry-after')));
+    process.exit(2);
+  }
+  const rep = await repRes.json();
   if (!rep.ok) {
     console.error(`Could not read the thread: ${rep.error}`);
     process.exit(2);
@@ -1590,7 +1608,13 @@ if (a.audit) {
     u.searchParams.set('inclusive', 'true');
     u.searchParams.set('limit', '200');
     if (cur) u.searchParams.set('cursor', cur);
-    const page = await fetch(u, { headers: { Authorization: `Bearer ${token}` } }).then((r) => r.json());
+    const pageRes = await fetch(u, { headers: { Authorization: `Bearer ${token}` } });
+    if (pageRes.status === 429) {
+      reportRateLimited('the channel-timeline read', Number(pageRes.headers.get('retry-after')));
+      console.error(`  ${pages} page(s) already read; the verdict below would be incomplete without this one.`);
+      process.exit(2);
+    }
+    const page = await pageRes.json();
     if (!page.ok) {
       console.error(`Could not read the channel timeline: ${page.error}`);
       process.exit(2);
@@ -2611,7 +2635,7 @@ if (a.doctor) {
   // checked. So this prompts a HUMAN to look; it never asserts the version is real and
   // never tells anyone to install it. Reported, not acted on.
   /**
-   * ⛔ AN INSTALLED RELEASE THAT WAS NEVER ANNOUNCED IS A FINDING, NOT A BLANK.
+   * ⛔ A CACHED RELEASE THAT WAS NEVER ANNOUNCED IS A FINDING, NOT A BLANK.
    *
    * The ANNOUNCED line showed an OLDER version for 4790 seconds after 2.14.0 shipped
    * unannounced, and nothing distinguished those two readings:
@@ -2943,7 +2967,7 @@ if (a.doctor) {
  * ★ WHAT IS WORTH POSTING IS THE HOP A PEER CANNOT SEE. Node reads a file ONCE, at process
  * start: a long-running watcher executes whatever was on disk WHEN IT LAUNCHED, from a
  * PINNED version directory, and THE RUNNING POLLER HAS NO VERSION ANYONE CAN INSPECT. A
- * peer's own --doctor will happily report INSTALLED <new> and say nothing about its own
+ * peer's own --doctor will happily report CACHED <new> and say nothing about its own
  * resident process. The peer cannot derive this. Only the installing session can tell it.
  *
  * ⚠ AND THE DOCS-ONLY GUARD IS THE POINT, NOT A DETAIL: if no executable file changed,
