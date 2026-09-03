@@ -1919,7 +1919,8 @@ function normPath(p) {
 }
 
 /**
- * Compare two Slack timestamps EXACTLY. Longer integer part wins; otherwise lexical.
+ * Compare two Slack timestamps EXACTLY. Longer integer part wins; otherwise by integer
+ * part, then by the fractional part padded to Slack's 6-digit width (#146).
  *
  * ⚠⚠ AND THE JUSTIFICATION THIS COMMENT SHIPPED WITH WAS WRONG. It said coercion "rounds at
  * the boundary", and #110 was filed on that basis. MEASURED, IT DOES NOT - not at any
@@ -1953,8 +1954,11 @@ function tsCmp(a, b) {
   // strings then treats the shorter one as a PREFIX, sorting it before the numerically
   // identical longer one. Padding to Slack's 6-digit fraction width first makes '.33' and
   // '.330000' compare equal, as they must. (#146)
-  const xfPad = xf.padEnd(6, '0');
-  const yfPad = yf.padEnd(6, '0');
+  // Slice to 6 as well as pad to it: Slack never sends more than 6 fractional digits, but
+  // padEnd() alone is a no-op on an already-longer string, which would let the same
+  // prefix bug resurface past the 6-digit boundary for malformed input.
+  const xfPad = xf.padEnd(6, '0').slice(0, 6);
+  const yfPad = yf.padEnd(6, '0').slice(0, 6);
   return xfPad < yfPad ? -1 : xfPad > yfPad ? 1 : 0;
 }
 

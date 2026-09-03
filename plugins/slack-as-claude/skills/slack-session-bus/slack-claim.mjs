@@ -385,7 +385,8 @@ function meta(msg) {
 // number is a chance to lose the low digits that are the only thing making it
 // unique. Do not "fix" this back to Number().
 /**
- * Compare two Slack timestamps EXACTLY. Longer integer part wins; otherwise lexical.
+ * Compare two Slack timestamps EXACTLY. Longer integer part wins; otherwise by integer
+ * part, then by the fractional part padded to Slack's 6-digit width (#146).
  *
  * ⚠⚠ AND THE HONEST JUSTIFICATION IS WEAKER THAN THE ISSUE THAT PROMPTED IT. #110 was filed
  * claiming Number() coercion could misorder timestamps. MEASURED, IT CANNOT - not at any
@@ -414,9 +415,22 @@ function meta(msg) {
  */
 function tsCmp(a, b) {
   const x = String(a ?? ''); const y = String(b ?? '');
-  const xi = x.split('.', 1)[0]; const yi = y.split('.', 1)[0];
+  const [xi, xf = ''] = x.split('.');
+  const [yi, yf = ''] = y.split('.');
   if (xi.length !== yi.length) return xi.length < yi.length ? -1 : 1;
-  return x < y ? -1 : x > y ? 1 : 0;
+  if (xi !== yi) return xi < yi ? -1 : 1;
+  // ⚠ CANONICALISE THE FRACTIONAL PART BEFORE COMPARING. Two timestamps with the same
+  // integer part can still differ only in how many trailing zeros survived - the lossy
+  // String(Number(ts)) round-trip named above trims them - and comparing the raw strings
+  // then treats the shorter one as a PREFIX, sorting it before the numerically identical
+  // longer one. Padding to Slack's 6-digit fraction width first makes '.33' and '.330000'
+  // compare equal, as they must. (#146)
+  // Slice to 6 as well as pad to it: Slack never sends more than 6 fractional digits, but
+  // padEnd() alone is a no-op on an already-longer string, which would let the same
+  // prefix bug resurface past the 6-digit boundary for malformed input.
+  const xfPad = xf.padEnd(6, '0').slice(0, 6);
+  const yfPad = yf.padEnd(6, '0').slice(0, 6);
+  return xfPad < yfPad ? -1 : xfPad > yfPad ? 1 : 0;
 }
 
 function rankClaims(claims, { exclude = null } = {}) {
