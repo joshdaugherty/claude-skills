@@ -34,10 +34,10 @@ of a genuine rule in `SKILL.md:574` about float coercion. **The rule is real. Th
 it was wrong**, and one measurement would have shown it:
 
 ```
-round-trip String(Number(ts))        LOSSLESS
+round-trip String(Number(ts))        preserves the VALUE, not the STRING (trailing zeros drop)
 ulp near 1.788e9                     2.38e-7 s
 Slack ts granularity                 1e-6 s      ← 4x the ulp
-ordering breaks above ts ~ 4.5e9 s   the year 2112
+ordering breaks above ts ~ 8.59e9 s  the year 2242
 ```
 
 The issue was withdrawn and closed as not-a-defect within the hour. **A conclusion inherited
