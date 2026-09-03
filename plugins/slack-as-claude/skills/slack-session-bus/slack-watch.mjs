@@ -1227,7 +1227,11 @@ async function poll() {
         console.error(`[watch] RATE LIMITED by Slack. Waiting ${secs}s before the next poll` +
           (rateLimitHadHeader
             ? ' - honouring the Retry-After Slack sent (never shorter than --interval).'
-            : ' - Slack sent no Retry-After header; falling back to --interval.'));
+            // ⚠ NOT "falling back to --interval" - the driver here is the 60s default
+            // (rateLimitWaitMs's `|| 60`), which is LONGER than --interval's own 30s
+            // default. Math.max(intervalMs, rateLimitWaitMs) only falls back to
+            // --interval when --interval is the larger of the two.
+            : ' - Slack sent no Retry-After header; using a 60s default (never shorter than --interval).'));
       }
       return true;
     }
