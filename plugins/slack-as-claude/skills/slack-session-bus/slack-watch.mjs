@@ -2181,7 +2181,7 @@ if (a.doctor) {
   if (WS.want && !WS.verified && WS.who.ok) {
     console.log('           ⛔ MISMATCH - slack-post and slack-claim will REFUSE to send from this repo.');
   }
-  console.log(`RUNNING    ${pluginName} ${runningVer}   ${inCache ? '(installed copy)' : '(REPO checkout - authoring only)'}`);
+  console.log(`RUNNING    ${pluginName} ${runningVer}   ${inCache ? '(cached copy)' : '(REPO checkout - authoring only)'}`);
   console.log(`           ${selfFile}`);
 
   // Installed: newest version directory in any marketplace cache for this plugin.
@@ -2220,7 +2220,7 @@ if (a.doctor) {
    * invoked the skill. THE FIELD THIS GOT WRONG IS THE ONE FIELD NEITHER READER HAD ANY
    * REASON TO CONSULT.
    *
-   * ⚠ §7 already models released -> installed -> resident because each hop is invisible
+   * ⚠ §7 already models released -> cached -> resident because each hop is invisible
    * from the one before. REGISTRATION IS A FOURTH HOP and it was missing:
    *
    *     released -> catalog -> cache directory -> REGISTRATION -> resident
@@ -2301,7 +2301,7 @@ if (a.doctor) {
    * element that read as an install target would be one more confident surface over state
    * it did not check, which is the failure this whole channel keeps producing.
    *
-   * WHY IT EXISTS: `released` `installed` and `resident` drift, and all three directions
+   * WHY IT EXISTS: `released` `cached` and `resident` drift, and all three directions
    * were hit in one day, each reporting success - update with no bump, bump with no
    * update, and an update that installed nothing. The gap between CUTTING and INSTALLING
    * is otherwise visible only to whoever cut. At one point the only place a released
@@ -2830,7 +2830,7 @@ if (a.doctor) {
         // removed it thirty lines away.
         //
         // ★ Third time today a fix landed where it was reported and nowhere else.
-        'RESTART THIS WATCHER from the installed copy - the running process is stale:\n' +
+        'RESTART THIS WATCHER from the cached copy - the running process is stale:\n' +
           `  node "${installed.watcher}" --channel ${a.channel} --session <label> --heartbeat 60 --since <last ts you saw>\n` +
           "  ⚠ KEEP --heartbeat: without it you publish no presence, cannot be --ping'd, are\n" +
           '  absent from --presence entirely, and a stale takeover of your claims looks justified.\n' +
@@ -2846,7 +2846,7 @@ if (a.doctor) {
           `  Peers on the release cannot see anything you added here until it ships.`,
       );
     } else if (same === true && !inCache) {
-      askDisk(`Switch to the installed copy - same code, but the repo is authoring-only:\n  ${installed.watcher}`);
+      askDisk(`Switch to the cached copy - same code, but the repo is authoring-only:\n  ${installed.watcher}`);
     }
   }
 
@@ -3078,7 +3078,7 @@ if (a['announce-install']) {
   // `now` is what is INSTALLED, so an orphan can never be it. Baselines below may be.
   const live = versions.filter((v) => !v.orphaned);
   const now = live[live.length - 1];
-  if (!now) die('no installed copy found in the plugin cache - nothing to announce.', 2);
+  if (!now) die('no cached copy found in the plugin cache - nothing to announce.', 2);
   /**
    * ★★★ THE WIRE HOLDS A BETTER BASELINE THAN THE CACHE LISTING, AND IT IS A FACT RATHER
    * THAN A GUESS: my own last posted `plugin:` says what I was ACTUALLY running.
@@ -3281,7 +3281,7 @@ if (a['announce-install']) {
     );
   }
   lines.push(
-    '_Why this is posted at all: the installed→resident hop is invisible from the wire. A running_',
+    '_Why this is posted at all: the cached→resident hop is invisible from the wire. A running_',
     '_watcher executes the code that was on disk when it launched, from a pinned version directory,_',
     '_and the running process has no version anyone can inspect — including your own `--doctor`._',
     '',
@@ -3317,7 +3317,7 @@ if (a['announce-install']) {
         elements: [
           { type: 'mrkdwn', text: 'type: `x-update`' },
           { type: 'mrkdwn', text: `session: \`${a.session}\`` },
-          { type: 'mrkdwn', text: `installed: \`${now.version}\`` },
+          { type: 'mrkdwn', text: `cached: \`${now.version}\`` },
           { type: 'mrkdwn', text: `from: \`${prev.version}\`` },
           // ⛔ WHETHER `from:` IS A FACT OR A GUESS, SAID ON THE MESSAGE ITSELF. Without
           // --from it is the second-newest directory IN THE CACHE, which is NOT "what you
@@ -3325,7 +3325,7 @@ if (a['announce-install']) {
           // intermediate directories sitting there, and the notice would confidently name
           // a baseline the reader never ran. This file's own text says the RESIDENT version
           // is uninspectable - so `from:` cannot be read, only inferred, and it must not be
-          // stated in the same voice as `installed:`, which really is read off disk.
+          // stated in the same voice as `cached:`, which really is read off disk.
           // ★★★ A PROVENANCE LABEL MUST NAME THE SOURCE WITHOUT IMPLYING THE VALUE WAS
           // CHECKED. A peer's formulation, and it resolves a real tension: the label is what
           // made a wrong `2.7.0` REPORTABLE, and the label is also why it read as

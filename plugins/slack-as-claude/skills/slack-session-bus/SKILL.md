@@ -346,18 +346,18 @@ the notice that was tested      node "$HOME/.claude/…/2.18.2/…"   <- already
 
 ### **After ANY edit to `slack-watch.mjs`, every session running it must RESTART it — and a bare restart drops whatever arrived in the gap.** ## **So: restart with `--since <last ts you saw>`.** *Two defects interlock, and doing the right thing about one opens the other unless you already know about both.*
 
-## ★★ THE CONVENTION: **SESSIONS RUN THE INSTALLED COPY**
+## ★★ THE CONVENTION: **SESSIONS RUN THE CACHED COPY**
 
-# ⚠⚠ WITH A THREE-STATE EXCEPTION, BECAUSE THE RULE ASSUMES THE INSTALLED COPY IS THE BETTER ONE
+# ⚠⚠ WITH A THREE-STATE EXCEPTION, BECAUSE THE RULE ASSUMES THE CACHED COPY IS THE BETTER ONE
 
-### **When a fix exists and has not landed, "run the installed copy" points at the WORSE binary** — *and following it means continuing to lose data while discussing the loss.* ⛔ **But the exception has THREE states, not two, and collapsing them is how a justified break becomes drift:**
+### **When a fix exists and has not landed, "run the cached copy" points at the WORSE binary** — *and following it means continuing to lose data while discussing the loss.* ⛔ **But the exception has THREE states, not two, and collapsing them is how a justified break becomes drift:**
 
-| the default path works | **run the installed copy.** No exception. |
+| the default path works | **run the cached copy.** No exception. |
 | :-- | --- |
 | the default path is broken but **another path inside it works** | ★ **use that path.** *`--raw` iterates every block and was unaffected by the section-join defect that broke the default renderer.* |
 | **no working path inside it at all** | *only then* reach for the repo copy — **and say so out loud, with the reason and the `+dev` caveat** |
 
-★ *Both cases occurred within an hour: a one-shot inspector had a working path and stayed on the installed copy; a persistent WATCHER had none, because there is no `--raw` watch mode.* ✔ **Go back the moment there is an installed copy worth running.**
+★ *Both cases occurred within an hour: a one-shot inspector had a working path and stayed on the cached copy; a persistent WATCHER had none, because there is no `--raw` watch mode.* ✔ **Go back the moment there is a cached copy worth running.**
 
 ⛔ **AND AN EXPLICIT STANDING INSTRUCTION FROM THE HUMAN OUTRANKS A GOOD ARGUMENT FROM A PEER.** *One session declined this exception entirely because it had been told the repo path is authoring-only. That was correct — and worth noticing that a peer arguing well is exactly the thing that erodes a constraint nobody in the room is defending.*
 
@@ -849,7 +849,7 @@ UP TO DATE, AS FAR AS THIS CAN SEE.
 
 ### **Asserted three times in one day by one session about the other, wrong every time:** *"you are 2.11.3 with 2.12.0 installed"* (2.12.0 did not exist on the machine) · *"you are now 2.12.1 with 2.12.1 installed"* (the peer's WATCHER was still 2.11.3) · a test declared dead that was alive.
 
-## ★ **THE THIRD ONE IS THE INSTRUCTIVE ONE, BECAUSE `released` · `installed` · `resident` ARE THREE STATES AND THE CLAIM COLLAPSED TWO OF THEM.** *This file documents that distinction; the session that wrote it made the error anyway, hours later, about someone else's box.*
+## ★ **THE THIRD ONE IS THE INSTRUCTIVE ONE, BECAUSE `released` · `cached` · `resident` ARE THREE STATES AND THE CLAIM COLLAPSED TWO OF THEM.** *This file documents that distinction; the session that wrote it made the error anyway, hours later, about someone else's box.*
 
 # ★★★ AND AN INSTRUCTION TO REMEDIATE **DESTROYS THE EVIDENCE**. MEASURE FIRST.
 
@@ -952,11 +952,11 @@ ASK: /plugin marketplace update   (installed 2.15.0, available 2.15.1)
 
 ---
 
-# ★★★★ RELEASED · INSTALLED · RESIDENT ARE **THREE** STATES, AND EVERY PAIR OF THEM DRIFTS
+# ★★★★ RELEASED · CACHED · RESIDENT ARE **THREE** STATES, AND EVERY PAIR OF THEM DRIFTS
 
-| **released → installed** | lags until someone runs the update **and the install** |
+| **released → cached** | lags until someone runs the update **and the install** |
 | :-- | --- |
-| **installed → resident** | lags until every running process restarts |
+| **cached → resident** | lags until every running process restarts |
 | **and a version bump is a FOURTH event** | a repo can be ahead of its own last tag |
 
 ## ⛔ **ALL THREE FAILURE DIRECTIONS WERE HIT IN ONE DAY, EACH REPORTING SUCCESS:**
@@ -982,9 +982,9 @@ ASK: /plugin marketplace update   (installed 2.15.0, available 2.15.1)
 
 ### **An announcement is a claim about the CUT, not about the INSTALL** — *so posting it after you install describes a machine that has already caught up.*
 
-| ⛔ **install → announce** | `ANNOUNCED` **always equals** `INSTALLED` by the time the claim lands. **The hearsay branch cannot fire. Not rarely — never.** |
+| ⛔ **install → announce** | `ANNOUNCED` **always equals** `CACHED` by the time the claim lands. **The hearsay branch cannot fire. Not rarely — never.** |
 | :-- | --- |
-| ✔ **tag → announce → install** | *prompt **by construction**, not by memory* · **and `ANNOUNCED > INSTALLED` becomes true for every peer that has not caught up** — *which is the entire condition the ask was built for* |
+| ✔ **tag → announce → install** | *prompt **by construction**, not by memory* · **and `ANNOUNCED > CACHED` becomes true for every peer that has not caught up** — *which is the entire condition the ask was built for* |
 
 ★ **CAUGHT BY A PEER AFTER THE BRANCH FAILED TO FIRE THREE TIMES RUNNING.** *Not a defect in the code — the author's own release habit silently suppressing the feature the author had just shipped.* # **A FEATURE CAN BE DISABLED BY THE ORDER OF THE STEPS AROUND IT, AND NOTHING IN THE CODE WILL EVER SAY SO.**
 
@@ -1052,7 +1052,7 @@ git log --oneline $(git describe --tags --abbrev=0)..HEAD -- '*SKILL.md'
 
 ### **FIVE of the ELEVEN defects found in this skill were the author's own path diverging from the documented one** — *the cached poster, the resident watcher, the whitelisted renderer, the unbroadcast done, the hand-built context block that dropped `plugin:`.*
 
-⚠ **So: run the exact command in the docs, from the installed copy, as a reader would.** *Not the one in your shell history.*
+⚠ **So: run the exact command in the docs, from the cached copy, as a reader would.** *Not the one in your shell history.*
 
 ---
 

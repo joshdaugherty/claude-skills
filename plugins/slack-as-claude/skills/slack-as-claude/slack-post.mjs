@@ -1233,7 +1233,7 @@ if (!a['as-app']) {
   // they cut this", never "this is installable here". --doctor reports it and never acts
   // on it, in the same vocabulary it uses for PEERS.
   //
-  // Why it exists: `released` `installed` and `resident` drift, and all three directions
+  // Why it exists: `released` `cached` and `resident` drift, and all three directions
   // were hit in one day, each reporting success. The gap between CUTTING and INSTALLING
   // is currently visible only to whoever cut - and at one point the only place a released
   // version existed on this machine was inside a Slack message body, which is the one
@@ -1247,7 +1247,7 @@ if (!a['as-app']) {
    * as `ANNOUNCED 2.14.0 (56s ago)` - INDISTINGUISHABLE from having announced promptly.
    * The window left no trace at all.
    *
-   * That made `announced < installed` a LIVE-ONLY signal: true only inside the gap, and
+   * That made `announced < cached` a LIVE-ONLY signal: true only inside the gap, and
    * destroyed by the very act that closes it. The third such signal found in one day,
    * after the version-gap doctor state and the hearsay branch - and a finding visible
    * only to someone who happened to look in the right minute is barely a finding.
