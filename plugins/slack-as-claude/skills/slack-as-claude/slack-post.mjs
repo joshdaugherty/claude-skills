@@ -195,9 +195,10 @@ function botToken() {
         '        The environment wins, and it is a SNAPSHOT taken when this process\n' +
         '        launched - so after a rotation it is the OLD value, and restarting does\n' +
         '        NOT help while the parent shell still carries it.\n' +
-        '        If you have just rotated: relaunch with the variable unset. NOT with\n' +
-        '        `env -u` - that is coreutils, and does not exist in PowerShell or cmd,\n' +
-        '        which are the only shells this warning can fire in:\n' +
+        '        If you have just rotated: relaunch with the variable unset, in whichever\n' +
+        '        shell you are in - MEASURED: this also fires in Git Bash, where `env -u`\n' +
+        '        works and neither remedy below does:\n' +
+        `          Git Bash  :  env -u ${VAR} node <script> …\n` +
         `          PowerShell:  Remove-Item Env:\\${VAR} ; node <script> …\n` +
         `          cmd.exe   :  set ${VAR}= && node <script> …\n` +
         '        Simplest: open a fresh shell, which re-reads the registry.',
@@ -1331,14 +1332,23 @@ if (a['dry-run']) {
 
 let res;
 try {
-  res = await fetch(API, {
+  const r = await fetch(API, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json; charset=utf-8',
     },
     body: JSON.stringify(payload),
-  }).then((r) => r.json());
+  });
+  // Kept so a 429 can report what Slack asked for - the sibling scripts do this and this
+  // one, the highest-volume write path on the bus, did not. (#119)
+  if (r.status === 429) {
+    const headerSecs = Number(r.headers.get('retry-after'));
+    res = { ...(await r.json()) };
+    res.retryAfter = Number.isFinite(headerSecs) && headerSecs > 0 ? headerSecs : null;
+  } else {
+    res = await r.json();
+  }
 } catch (err) {
   die(`Request to Slack failed: ${err.message}`);
 }
@@ -1351,8 +1361,19 @@ if (!res.ok) {
     token_revoked: 'The bot token was revoked. Re-copy it from OAuth & Permissions.',
     missing_scope: 'The app lacks a required scope. --username/--icon-emoji need chat:write.customize.',
   };
-  console.error(`Slack rejected the post: ${res.error}`);
-  if (hints[res.error]) console.error(hints[res.error]);
+  if (res.error === 'ratelimited') {
+    console.error('Slack RATE LIMITED this post.');
+    console.error(
+      res.retryAfter
+        ? `  Slack asks for ${res.retryAfter}s before the next request.`
+        : '  Slack sent no Retry-After header.',
+    );
+    console.error('  ⛔ NOT RETRIED HERE, DELIBERATELY. A 429 is a property of the CHANNEL, so it');
+    console.error('  hits every contender at once and a retry deepens it for all of them.');
+  } else {
+    console.error(`Slack rejected the post: ${res.error}`);
+    if (hints[res.error]) console.error(hints[res.error]);
+  }
   process.exit(1);
 }
 
