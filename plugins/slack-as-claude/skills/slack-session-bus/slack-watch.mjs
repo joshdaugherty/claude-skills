@@ -3384,7 +3384,8 @@ if (a['announce-install']) {
   // above says "Files below are MY delta ... yours may differ" - a caveat that is
   // entirely about the sender's machine, in a message that never named it. `session`
   // is not a substitute: a reader needs the label-to-machine mapping already, and
-  // none is registered anywhere. Same fallback chain slack-post.mjs uses. (#151)
+  // none is registered anywhere. Same env/registry/hostname fallback slack-post.mjs
+  // uses, minus its leading --machine CLI override - this script has no such flag. (#151)
   const machine = process.env.CLAUDE_SLACK_MACHINE ?? envFromRegistry('CLAUDE_SLACK_MACHINE') ?? hostname();
 
   const res = await slackPost('chat.postMessage', {
