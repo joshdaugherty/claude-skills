@@ -2590,15 +2590,32 @@ if (a.doctor) {
           '  here has observed a load. Stated so rather than assumed either way.',
       );
     }
+    /**
+     * ⚠ "REACHABLE" IS A CAPABILITY OF THE PAIR, NOT A FACT ABOUT ANY ONE OF THEM HAVING
+     * MOVED YET. Measured on this machine: a case-duplicate pair CAN have both spellings
+     * written, each by a separate update on a separate run - so the retracted-below "may
+     * be unreachable" framing does not follow from one row's `lastUpdated` reading
+     * `unknown`. That only means this row has not been written BY AN UPDATE so far, which
+     * is not evidence either way about whether it could be. (#162)
+     */
     for (const g of caseDuplicateRegistrations(reg)) {
       const sorted = [...g].sort((x, y) => cmpVer(y.version, x.version));
       askDisk(
         'TWO REGISTRATIONS FOR ONE DIRECTORY, differing only in path case:\n' +
           g.map((r) => `    ${String(r.version).padEnd(8)} ${r.projectPath}`).join('\n') +
           '\n  Windows matches paths case-insensitively, so these are the SAME folder.\n' +
-          '  ⛔ AN UPDATE MOVES ONE OF THEM AND NOTHING TELLS YOU WHICH. No plugin subcommand\n' +
-          '  takes a path argument, and whatever maps your cwd to a registration key does NOT\n' +
-          '  fold drive-letter case.\n' +
+          '  ⚠ THIS DOES NOT MEAN ONE ROW IS STRANDED. An earlier version of this ask\n' +
+          '  implied it might be ("if only one ever moves, the other may be unreachable").\n' +
+          '  A case-duplicate pair CAN have both spellings written, each by a separate\n' +
+          '  update on a separate run - whether THIS pair has been is below, not here.\n' +
+          '  ⚠ A NO-OP UPDATE WRITES NOTHING: "already at the latest version" moves no row\n' +
+          '  and no `lastUpdated`, so a no-op run is EVIDENCE-FREE about the write path and\n' +
+          '  must not be read as if it measured one.\n' +
+          '  ✔ A version-CHANGING update DOES name the path it wrote, in its own success\n' +
+          '  line - no longer silent about that, though worth confirming against this file\n' +
+          '  rather than trusting it blindly.\n' +
+          '  No plugin subcommand takes a path argument, and whatever maps your cwd to a\n' +
+          '  registration key does NOT fold drive-letter case.\n' +
           '  ⚠ AN EARLIER VERSION OF THIS ASK ALSO SAID a worktree "resolves to its PRIMARY\n' +
           '  checkout (measured, two machines, two drives)". THAT IS RETRACTED. The evidence\n' +
           "  was this tool's OWN `<- THIS PROJECT` marker, which had a prefix bug and labelled\n" +
@@ -2607,14 +2624,20 @@ if (a.doctor) {
           '  seemed to confirm it were all NO-OPS ("already at the latest version"), which may\n' +
           '  exit before any registration write. UNESTABLISHED - the decisive test is a\n' +
           '  version-CHANGING update from a worktree cwd, and it wants a single-tenant machine.\n' +
-          '  WHAT THIS RUN OBSERVED, rather than a conclusion stored when this was written:\n' +
+          '  WHAT THIS RUN OBSERVED FOR THIS PAIR, rather than a conclusion stored when\n' +
+          '  this was written:\n' +
           g
             .map((r) => `    ${String(r.version).padEnd(9)}last moved ${r.lastUpdated ?? 'unknown'}   ${r.projectPath}`)
             .join('\n') +
-          '\n  ⚠ Read those two timestamps. If both have moved, BOTH rows are reachable and\n' +
-          '  what selects between them is unknown. If only one ever moves, the other may be\n' +
-          '  unreachable. THIS TOOL PREVIOUSLY ASSERTED THE SECOND AND WAS WRONG WITHIN THE\n' +
-          '  HOUR, which is why it now prints the observation and lets you draw it.\n' +
+          '\n  ⚠ `unknown` above means this row has never been WRITTEN BY AN UPDATE, not that\n' +
+          '  it is unreachable - only a version-changing update writes, and a row nobody has\n' +
+          '  updated from will read `unknown` forever regardless of whether it could be.\n' +
+          '  ⚠ WHAT SELECTS BETWEEN THEM IS STILL UNKNOWN. The likely candidate is the case\n' +
+          '  of the invoking cwd, but that is a correlate observed on single runs, not a\n' +
+          '  demonstration; a cwd-canonicalisation mechanism was asserted from this same\n' +
+          '  kind of correlate earlier in this project and had to be retracted (see above).\n' +
+          "  These timestamps are kept so a pattern across future updates can eventually be\n" +
+          "  read off this machine's own history.\n" +
           '  ⚠ Re-run --consistency after an update rather than assuming which row landed.\n' +
           '  ⚠ And do NOT hand-edit installed_plugins.json - which registration a running\n' +
           '  session actually RESOLVES is unverified, and editing destroys the evidence.\n' +
