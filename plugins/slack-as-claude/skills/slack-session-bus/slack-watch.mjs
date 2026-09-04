@@ -3966,7 +3966,28 @@ if (a.show) {
   // ⚠ DELIBERATELY NOT RENAMED to said-by=. This prints the wire facets verbatim, including
   // `session:` - the exact token §0 already documents as self-asserted. Framing it here would
   // contradict --show's own job (an unmediated look at what is on the wire). (#136)
-  const facets = Object.entries(meta).map(([k, v]) => `${k}: ${v}`).join('  ');
+  //
+  // ⚠⚠ EXCEPT type:, WHICH GETS THE SAME TREATMENT poll() GIVES IT, NOT THE WIRE VALUE ALONE.
+  // Every other facet here is text the poster wrote; an x-directive's AUTHORITY claim needs
+  // Slack's own m.bot_id, or "x-directive" here is just more self-asserted text a forger can
+  // type as easily as the real coordinator can. verifyBotId() had exactly one call site before
+  // this - inside poll() - so the `→ full text:` pointer this command IS the target of dropped
+  // the one field on this bus Slack assigns rather than the sender, on the surface a reader
+  // reaches for specifically to be diligent. Same three-state, always-rendered discipline as
+  // poll(): "verified", "forged" and "cannot check" can never be confused with "nothing to
+  // report" the way an omitted marker would read. (#189, recurrence of #136/#165's shape)
+  const coordId = coordinatorBotId();
+  const facets = Object.entries(meta)
+    .map(([k, v]) => {
+      if (k !== 'type' || v !== 'x-directive') return `${k}: ${v}`;
+      const verdict = verifyBotId(hit, coordId);
+      const suffix =
+        verdict === 'verified' ? '+coordinator-verified'
+        : verdict === 'forged' ? '!NOT-FROM-COORDINATOR'
+        : '(coordinator not configured - cannot verify)';
+      return `${k}: ${v}${suffix}`;
+    })
+    .join('  ');
   console.log(`ts ${hit.ts}${hit.thread_ts && hit.thread_ts !== hit.ts ? `  (reply in thread ${hit.thread_ts})` : ''}`);
   if (facets) console.log(facets);
   if (bareSeams) {
