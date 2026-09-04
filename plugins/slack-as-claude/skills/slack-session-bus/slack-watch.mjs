@@ -337,7 +337,7 @@ async function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 85; // raise when adding cases - a constant, reviewed on change (+8 for rearmBlocks, #196) - verified against the real --self-test count, not computed by eye
+  const CASE_FLOOR = 94; // raise when adding cases - a constant, reviewed on change (+9 for pongVerdict, #201) - verified against the real --self-test count, not computed by eye
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -541,6 +541,27 @@ async function selfTest() {
   for (const [name, got, want] of msCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  memberStatus: ${name}`);
   const msBad = msCases.filter(([, got, want]) => got !== want).length;
 
+  /**
+   * pongVerdict() (#201). type:/session: matching is not proof a pong answers THIS ping -
+   * only a re: echoing the ping's own ts is causal. Three-way, like verifyBotId()/
+   * memberStatus(): correlated (proof), uncorrelated (exactly as trustworthy as before this
+   * fix, never confused with proof), or null (not a candidate at all).
+   */
+  const pvSent = '1788097923.905509';
+  const pvCases = [
+    ['matching re: -> correlated', pongVerdict({ type: 'x-pong', session: 'target', re: pvSent }, 'target', pvSent, 'me'), 'correlated'],
+    ['re: differing only in trailing-zero padding still matches (tsCmp, not ===)', pongVerdict({ type: 'x-pong', session: 'target', re: '1788097923.9055' }, 'target', '1788097923.905500', 'me'), 'correlated'],
+    ['no re: at all -> uncorrelated, not null', pongVerdict({ type: 'x-pong', session: 'target' }, 'target', pvSent, 'me'), 'uncorrelated'],
+    ['re: present but wrong -> uncorrelated', pongVerdict({ type: 'x-pong', session: 'target', re: '1700000000.000000' }, 'target', pvSent, 'me'), 'uncorrelated'],
+    ['wrong type -> null, not uncorrelated', pongVerdict({ type: 'status', session: 'target', re: pvSent }, 'target', pvSent, 'me'), null],
+    ['wrong session -> null', pongVerdict({ type: 'x-pong', session: 'someone-else', re: pvSent }, 'target', pvSent, 'me'), null],
+    ['to: naming a different pinger excludes it, even with a matching re:', pongVerdict({ type: 'x-pong', session: 'target', re: pvSent, to: 'not-me' }, 'target', pvSent, 'me'), null],
+    ['to: naming THIS pinger does not block a correlated match', pongVerdict({ type: 'x-pong', session: 'target', re: pvSent, to: 'me' }, 'target', pvSent, 'me'), 'correlated'],
+    ['no to: at all does not block a correlated match (predates the convention)', pongVerdict({ type: 'x-pong', session: 'target', re: pvSent }, 'target', pvSent, 'me'), 'correlated'],
+  ];
+  for (const [name, got, want] of pvCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  pongVerdict: ${name}`);
+  const pvBad = pvCases.filter(([, got, want]) => got !== want).length;
+
   // ⚠ EVERY counter must appear in BOTH the summary and the exit code. regBad was computed
   // and left out of both for one edit - seven cases that printed pass/FAIL and could not
   // fail the suite. A test that cannot fail is the defect this file documents two functions
@@ -557,12 +578,12 @@ async function selfTest() {
   const tooFew = ran < CASE_FLOOR;
   if (tooFew) console.log(`\n⛔ ONLY ${ran} CASES RAN, floor is ${CASE_FLOOR} - a block stopped running.`);
   console.log(
-    missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || tooFew
+    missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || tooFew
       ? `\n${tooFew ? `ONLY ${ran} CASES RAN, FLOOR IS ${CASE_FLOOR} - A BLOCK STOPPED RUNNING. ` : ''}${missing.length} FLAG(S) MISSING FROM USAGE${missing.length ? `: ${missing.join(', ')}` : ''}` +
-        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}${xuBad ? `, ${xuBad} X-UPDATE CASE(S) WRONG` : ''}${sjBad ? `, ${sjBad} SAFEJSON CASE(S) WRONG` : ''}${vbBad ? `, ${vbBad} VERIFYBOTID CASE(S) WRONG` : ''}${msBad ? `, ${msBad} MEMBERSTATUS CASE(S) WRONG` : ''}${pbBad ? `, ${pbBad} PRESENCEBLOCKS CASE(S) WRONG` : ''}${rbBad ? `, ${rbBad} REARMBLOCKS CASE(S) WRONG` : ''}`
+        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}${xuBad ? `, ${xuBad} X-UPDATE CASE(S) WRONG` : ''}${sjBad ? `, ${sjBad} SAFEJSON CASE(S) WRONG` : ''}${vbBad ? `, ${vbBad} VERIFYBOTID CASE(S) WRONG` : ''}${msBad ? `, ${msBad} MEMBERSTATUS CASE(S) WRONG` : ''}${pbBad ? `, ${pbBad} PRESENCEBLOCKS CASE(S) WRONG` : ''}${rbBad ? `, ${rbBad} REARMBLOCKS CASE(S) WRONG` : ''}${pvBad ? `, ${pvBad} PONGVERDICT CASE(S) WRONG` : ''}`
       : `\n${ran} cases, all pass`,
   );
-  process.exit(missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || tooFew ? 1 : 0);
+  process.exit(missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || tooFew ? 1 : 0);
 }
 
 if (a['self-test']) await selfTest();
@@ -1985,7 +2006,62 @@ if (a.presence) {
  *      and reads as dead. Ping ONE session BY NAME, and require that a named session
  *      answers UNCONDITIONALLY - a conditional answer makes silence meaningless again.
  */
+/**
+ * ⛔⛔ type: x-pong AND session: <target> MATCHING IS NOT PROOF THIS PONG ANSWERS THIS PING.
+ *
+ * Both are satisfied just as well by a reply to something ELSE addressed to the same
+ * target - a session answering an earlier request, typed x-pong because it was answering a
+ * liveness question, that happens to land in the wait window. Observed live: a genuine
+ * reply landed 2.0s after an unrelated ping and read as "PONG after 2.0s. It is awake and
+ * responsive", while the actual answer to that ping arrived 44.4s later, unread because the
+ * loop had already exited. (#201)
+ *
+ * `re:` (slack-post.mjs's --re, added for this) echoes the PING'S OWN server-assigned ts -
+ * only a message actually composed in response to THIS ping can carry it, so a match is
+ * causal, not merely temporal. tsCmp(), not ===, for the same padding-tolerance reason every
+ * other ts comparison in this file uses it (#146) - a hand-typed --re could differ only in
+ * trailing zeros from the canonical value and must still match.
+ *
+ * Returns 'correlated' (re: matches - proof), 'uncorrelated' (type/session match, re:
+ * absent or points elsewhere - exactly as trustworthy as this bus's pong read was before
+ * this fix, never to be confused with proof), or null (not a candidate at all).
+ *
+ * ⚠ ROLLOUT: a responder running a version from before --re existed can never produce
+ * 'correlated', ever - only 'uncorrelated'. That is why 'uncorrelated' still counts as a
+ * pong (exit 0) rather than being treated as silence: requiring correlation strictly would
+ * make every un-upgraded lane read as unreachable to an upgraded pinger, converting today's
+ * false positive into tomorrow's false negative rather than fixing it. Degrade explicitly,
+ * regress nothing.
+ *
+ * to: narrows further, additively: when a candidate DECLARES a to: that is not this pinger,
+ * it is excluded outright (null) - a pong someone addressed to a third party is not
+ * evidence for this ping regardless of type/session/re:. A candidate with no to: at all is
+ * not excluded by this rule; it falls through to the type/session/re: checks above,
+ * matching a sender that predates the addressing convention rather than one that used it
+ * to name someone else.
+ */
+function pongVerdict(mm, target, sentTs, selfLabel) {
+  if (mm.type !== 'x-pong' || mm.session !== target) return null;
+  if (mm.to && selfLabel && mm.to !== selfLabel) return null;
+  return mm.re != null && tsCmp(mm.re, sentTs) === 0 ? 'correlated' : 'uncorrelated';
+}
+
 if (a.ping) {
+  // ⚠ WITHOUT THIS, pongVerdict()'s to: EXCLUSION SILENTLY DISABLES ITSELF. Its guard is
+  // `mm.to && selfLabel && mm.to !== selfLabel` - with no resolvable identity, selfLabel
+  // is null/falsy and the whole clause short-circuits to false, so a pong someone declared
+  // for a DIFFERENT pinger (even one that correlates via re:, since re: only proves it
+  // answers THIS ping, not that it was addressed to THIS pinger) is accepted anyway.
+  // Live-reproduced by review: with selfLabel unset, a correlated pong explicitly --to a
+  // third party still printed "It is awake and responsive." Mirrors --retire's identical
+  // precondition a few hundred lines below - a session pinging (or retiring) without a
+  // resolvable identity cannot be correctly addressed back. (found by review, #201)
+  if (!selfLabel) {
+    console.error('--ping needs a label: pass --session, or set CLAUDE_SESSION_NAME. Without');
+    console.error('one, a reply cannot be correctly addressed back to you, and this pinger\'s');
+    console.error("own to:-exclusion in a responder's --re check has nothing to compare against.");
+    process.exit(1);
+  }
   const target = a.ping;
   const waitSec = Math.max(5, Number(a.wait) || 45);
   const sent = await slackPost('chat.postMessage', {
@@ -1997,7 +2073,9 @@ if (a.ping) {
         elements: [
           { type: 'mrkdwn', text: 'type: `x-ping`' },
           { type: 'mrkdwn', text: `to: \`${target}\`` },
-          { type: 'mrkdwn', text: `session: \`${selfLabel ?? 'unknown'}\`` },
+          // No ?? 'unknown' fallback: the guard above already refuses when selfLabel is
+          // unresolvable, so by this point it is always a real label.
+          { type: 'mrkdwn', text: `session: \`${selfLabel}\`` },
           // ⚠ EVERY hand-built context block must carry this. A path that omits it makes
           // its messages read as `plugin=?`, which the degradation rule interprets as
           // "older than the version that started announcing" - a confident and WRONG
@@ -2009,7 +2087,8 @@ if (a.ping) {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `*${target}, are you there?* Reply with \`--type x-pong\` if you are. ` +
+          text: `*${target}, are you there?* Reply with \`--type x-pong --re <this message's ts>\` ` +
+            'if you are - the ts is on the wire line this arrived on, not in this text. ' +
             'No answer within the window is not proof of death - you may simply be mid-turn.',
         },
       },
@@ -2032,11 +2111,21 @@ if (a.ping) {
     for (const m of look.messages) {
       if (tsCmp(m.ts, sent.ts) <= 0) continue;
       const mm = parseMessage(m).meta;
-      if (mm.type === 'x-pong' && mm.session === target) {
+      const verdict = pongVerdict(mm, target, sent.ts, selfLabel);
+      if (verdict === 'correlated') {
         const rtt = (Number(m.ts) - Number(sent.ts)).toFixed(1);
-        console.log(`PONG from "${target}" after ${rtt}s. It is awake and responsive.`);
+        console.log(`PONG from "${target}" after ${rtt}s (CORRELATED - echoes this ping's ts). It is awake and responsive.`);
         console.log('That is stronger than presence: presence proves a watcher runs, a pong');
         console.log('proves the SESSION woke and acted.');
+        process.exit(0);
+      }
+      if (verdict === 'uncorrelated') {
+        const gap = (Number(m.ts) - Number(sent.ts)).toFixed(1);
+        console.log(`PONG-TYPED MESSAGE from "${target}" ${gap}s after the ping (UNCORRELATED).`);
+        console.log("It does not echo this ping's own ts, so it may be a reply to something else");
+        console.log('that landed by coincidence - the sender may predate --re, or this may be a');
+        console.log('collision. Cannot rule out either. Weaker evidence than a correlated pong -');
+        console.log('if this matters, re-ping and require a correlated reply next time.');
         process.exit(0);
       }
     }

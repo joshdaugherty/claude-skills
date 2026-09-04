@@ -541,6 +541,7 @@ const OPTIONS = {
     to: { type: 'string' },
     type: { type: 'string' },
     closes: { type: 'string' },
+    re: { type: 'string' },
     released: { type: 'string' },
     'cut-at': { type: 'string' },
     project: { type: 'string' },
@@ -736,7 +737,7 @@ const USAGE =
   'usage: node slack-post.mjs --channel <id> --text "..." [--thread-ts <ts>]\n' +
       '       [--text-file <path>] [--to X] [--type X] [--project X] [--session X]\n' +
       '       [--worktree X] [--raw-markdown]\n' +
-      '       [--user X] [--machine X] [--closes <ts>] [--broadcast] [--no-broadcast]\n' +
+      '       [--user X] [--machine X] [--closes <ts>] [--re <ts>] [--broadcast] [--no-broadcast]\n' +
       '       [--user-email] [--username X] [--icon-emoji :x:] [--unsafe-claim]\n' +
       '       [--no-context] [--as-app] [--as-coordinator] [--whoami] [--dry-run] [--self-test]\n' +
       '\n' +
@@ -776,6 +777,13 @@ const USAGE =
       '                  overridden but not what was fulfilled. Passing the thread parent\n' +
       '                  is REJECTED (exit 2): it records "this done closes this task",\n' +
       '                  which was never in doubt, while rendering like a real value.\n' +
+      '  --re <ts>       which message THIS ONE ANSWERS, as a context element - e.g. an\n' +
+      '                  x-pong echoing the x-ping it replies to. type: and session: alone\n' +
+      "                  are not proof: they match a reply to something ELSE addressed to\n" +
+      '                  the same target just as well. QUOTE IT, same reason as --thread-ts:\n' +
+      '                  an unquoted ts can round to a float and simply fail to match, which\n' +
+      '                  is silent here rather than loud (a reader degrades to UNCORRELATED,\n' +
+      '                  it does not error).\n' +
       '  --broadcast     also place a threaded reply in the CHANNEL timeline, where a\n' +
       '                  poller can see it. AUTOMATIC for done/fail/claim in a thread.\n' +
       '  --no-broadcast  suppress that. A threaded reply no watcher can see is how a\n' +
@@ -887,7 +895,7 @@ function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 49; // raise when adding cases - a constant, reviewed on change (+2 for as-coordinator/whoami, #165)
+  const CASE_FLOOR = 50; // raise when adding cases - a constant, reviewed on change (+1 for --re, #201)
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -1267,6 +1275,19 @@ if (a['as-coordinator'] && !repoWorkspace()?.coordinator_bot_id) {
 
 const payload = { channel: a.channel, text: TEXT };
 
+// Same validation as --thread-ts, same reason - but where an unquoted --thread-ts fails
+// LOUDLY (Slack posts to the wrong place and still returns ok:true), an unquoted --re fails
+// QUIETLY: the mangled value simply never string-equals a real ts, so a reader degrades to
+// UNCORRELATED rather than erroring. Validate anyway so the mistake is visible here rather
+// than only inferred later from a pong that reads weaker than it should. (#201)
+if (a.re && !/^\d{10,}\.\d{6}$/.test(a.re)) {
+  die(
+    `--re "${a.re}" is not a valid Slack timestamp (expected 1234567890.123456).\n` +
+      'Quote it at the call site: an unquoted ts can be rounded to a float, and a reader\n' +
+      'would then read this as UNCORRELATED rather than reporting an error.',
+  );
+}
+
 if (a['thread-ts']) {
   // A Slack ts is 10+ digits, a dot, then exactly 6. Validate it, because the way this
   // goes wrong is invisible: in a shell that coerces the token to a float,
@@ -1336,6 +1357,11 @@ if (!a['as-app']) {
   // ts, then done - but in a thread where a takeover happened it is NOT, and that is
   // precisely the thread where you need to know which claim actually did the work.
   if (a.closes) elements.push({ type: 'mrkdwn', text: `closes: \`${a.closes}\`` });
+  // Which message THIS one answers - an x-pong echoing the x-ping it replies to, so a
+  // reader can tell "a pong-shaped message landed after my ping" from "a pong-shaped
+  // message answered MY ping specifically". type:/session: alone cannot: they match a
+  // reply to something else addressed to the same target just as well. (#201)
+  if (a.re) elements.push({ type: 'mrkdwn', text: `re: \`${a.re}\`` });
   // ★ THE VERSION OF A RELEASE, AS A CONTEXT ELEMENT - a peer's design, and the whole
   // point is that it is a CLAIM ON A BUS, NOT A READING OF A DISK. It says "someone said
   // they cut this", never "this is installable here". --doctor reports it and never acts

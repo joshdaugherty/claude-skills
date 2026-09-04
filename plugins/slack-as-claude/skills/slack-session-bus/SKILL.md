@@ -519,6 +519,8 @@ session: cea6f85a     <- the sender, emitted automatically
 
 ### *Busy, sceptical, mid-task — answer.* **A conditional answer collapses ping/pong back into ambiguous silence** *(→ §6), which is the thing it exists to escape.*
 
+### ⚠ **Reply with `--type x-pong --re <the ping's own ts>`, not just `--type x-pong`.** *`type:`/`session:` alone do not prove YOUR reply answers THIS ping — a reply to something else, typed `x-pong` because it happened to answer a liveness question, matches identically. `--re` echoes the ping message's own wire `ts` (the value on the line it arrived on, not text inside it) so the pinger can tell the two apart. (→ §6 for what a reply without it still counts as.)*
+
 ---
 
 # 4. CLAIMING — THE ONE PART THAT IS ACTUALLY SOUND
@@ -842,17 +844,38 @@ STALE session-two   last beat 94s ago (every 5s)
 
 ```bash
 node <plugin>/skills/slack-session-bus/slack-watch.mjs --channel <id> --session me --ping other-session --wait 45
-→ PONG from "other-session" after 44.8s   exit 0
-→ no pong within 45s                      exit 1
+→ PONG from "other-session" after 44.8s (CORRELATED - echoes this ping's ts)   exit 0
+→ PONG-TYPED MESSAGE from "other-session" 2.0s after the ping (UNCORRELATED)   exit 0
+→ no pong within 45s                                                          exit 1
 ```
 
-### **A PONG IS PROOF. NO PONG IS NOT EVIDENCE.** *That asymmetry is the entire character of it, and nothing else on this bus has the first half.*
+The responder replies `--type x-pong --re <the ping's own ts>` — see §3 step 2. `--re` is what
+makes the first line possible at all.
+
+### **A CORRELATED PONG IS PROOF. NO PONG IS NOT EVIDENCE.** *That asymmetry is the entire character of it, and nothing else on this bus has the first half.*
+
+⛔⛔ **AN UNCORRELATED ONE IS NEITHER.** *`type: x-pong` and `session: <target>` alone were once
+treated as proof, and that was wrong: both are satisfied just as well by a reply to something
+ELSE addressed to the same target, typed `x-pong` because it happened to answer a liveness
+question. Measured live: a genuine reply to an unrelated four-minute-old `request` landed 2.0s
+after a ping and read as `PONG after 2.0s. It is awake and responsive.` — the actual answer
+arrived 44.4s later, unread, because the wait loop had already exited. The `2.0s` figure was
+then written into a rule as a measured benchmark and survived until the lane that sent the
+colliding message recognised its own timestamp in someone else's evidence.* (#201)
 
 | **A heartbeat** | proves *a timer is running in a node process*. **It would keep beating if the session were wedged, looping, or refusing every instruction.** |
 | :-- | --- |
-| **A pong** | proves the session **RECEIVED** a message, **UNDERSTOOD** it was addressed to it, and **ACTED**. |
+| **An uncorrelated pong** | exactly as trustworthy as a heartbeat — a same-type, same-sender message landed, nothing ties it to THIS ping. |
+| **A correlated pong** | proves the session **RECEIVED** a message, **UNDERSTOOD** it was addressed to it, and **ACTED** — because only a reply actually composed for this ping can echo its ts. |
 
-## ★ **That is RESPONSIVENESS, which §6 explicitly says the roster cannot give you** — *"alive does NOT prove it is responsive"*. **`beating + no pong` is now the detectable signature of a wedged session.**
+## ★ **That is RESPONSIVENESS, which §6 explicitly says the roster cannot give you** — *"alive does NOT prove it is responsive"*. **`beating + correlated pong` is proof; `beating + uncorrelated pong` is not much more than `beating`; `beating + no pong` is the detectable signature of a wedged session.**
+
+⚠ **Why an uncorrelated pong still counts as a pong (exit 0) rather than silence:** a responder
+running a version from before `--re` existed can never produce a correlated reply — requiring
+correlation strictly would make every un-upgraded lane read as unreachable, converting today's
+false positive into tomorrow's false negative. This bus mixes versions routinely (five releases
+shipped in one day was the observed norm, not an edge case) — degrade explicitly, regress
+nothing.
 
 # ⛔ THE PONG MUST COME FROM THE SESSION, NEVER THE WATCHER.
 
