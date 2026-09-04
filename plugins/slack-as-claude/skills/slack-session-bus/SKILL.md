@@ -760,6 +760,12 @@ STALE session-two   last beat 94s ago (every 5s)
 
 ★ *Demonstrated: the same session, with the same silence on the channel, reported STALE at 29s and alive at 1s.* **That is the distinction §6 said was impossible.**
 
+## ⛔ **A CRASHED WATCHER LEAVES ITS PRESENCE MESSAGE BEHIND.** *`chat.update` only runs on the next scheduled beat — a process that dies on an unhandled exception between beats runs no exit path, so nothing retracts what it last published.*
+
+⚠ **So the roster reports `alive` for the length of the staleness window past the actual crash, then ages into `STALE` — which reads as an ordinary departure.** *The failure is first invisible, then misattributed: nothing on the bus distinguishes "the watcher crashed" from "the session went away", and the second is the benign reading a peer will reach for.* **A clean-exit cleanup does not reach this** — there is no clean exit to run it from. (#161)
+
+★ *This also interacts with `--takeover`: `STALE` is the state it treats as permission, and a crashed watcher produces it while the session behind it may still be alive and holding a claim.*
+
 # ⚠⚠ AND IT MUST BE **PULLED**, NOT PUSHED. THE THREE OPTIONS ARE NOT EQUAL.
 
 | **Edit in place** | ⛔ *Invisible to every watcher* — **an edit keeps the original `ts`, so `oldest=<cursor>` never returns it.** |

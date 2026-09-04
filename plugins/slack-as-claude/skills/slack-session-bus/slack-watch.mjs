@@ -304,7 +304,7 @@ function looksLikeCollision(age, every) {
  * Four flags shipped invisible before this check existed, and the audit meant to catch
  * them gave a FALSE PASS by grepping the whole file instead of the usage text.
  */
-function selfTest() {
+async function selfTest() {
   // ⛔⛔ COUNT EVERY ASSERTION ACTUALLY EMITTED. Summing the case arrays was the obvious
   // implementation and it UNDERCOUNTED BY HALF, because several checks print pass/FAIL
   // outside any array - and a floor built on a number that does not see them is the very
@@ -426,6 +426,25 @@ function selfTest() {
   for (const [name, got, want] of xuCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  x-update: ${name}`);
   const xuBad = xuCases.filter(([, got, want]) => got !== want).length;
 
+  /**
+   * safeJson() (#161). Stubbed Response-likes, not the real network - what matters is
+   * whether a throwing .json() is turned into a branchable value, which needs no fetch to
+   * exercise. A negative control: a WORKING .json() must still pass its value through
+   * untouched, or the guard would mask real responses as failures too.
+   */
+  const okResponse = { status: 200, json: async () => ({ ok: true, ts: '123.456' }) };
+  const nonJsonResponse = { status: 502, json: async () => { throw new SyntaxError('Unexpected end of JSON input'); } };
+  const sjOk = await safeJson(okResponse);
+  const sjBadBody = await safeJson(nonJsonResponse);
+  const sjCases = [
+    ['a normal body passes through untouched', sjOk.ok === true && sjOk.ts === '123.456', true],
+    ['a throwing .json() does not propagate', sjBadBody.ok, false],
+    ['the synthetic result names the cause', sjBadBody.error, 'non_json_response'],
+    ['the synthetic result carries the status', sjBadBody.status, 502],
+  ];
+  for (const [name, got, want] of sjCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  safeJson: ${name}`);
+  const sjBad = sjCases.filter(([, got, want]) => got !== want).length;
+
   // ⚠ EVERY counter must appear in BOTH the summary and the exit code. regBad was computed
   // and left out of both for one edit - seven cases that printed pass/FAIL and could not
   // fail the suite. A test that cannot fail is the defect this file documents two functions
@@ -442,15 +461,15 @@ function selfTest() {
   const tooFew = ran < CASE_FLOOR;
   if (tooFew) console.log(`\n⛔ ONLY ${ran} CASES RAN, floor is ${CASE_FLOOR} - a block stopped running.`);
   console.log(
-    missing.length || bad || regBad || dupBad || pathBad || xuBad || tooFew
+    missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || tooFew
       ? `\n${tooFew ? `ONLY ${ran} CASES RAN, FLOOR IS ${CASE_FLOOR} - A BLOCK STOPPED RUNNING. ` : ''}${missing.length} FLAG(S) MISSING FROM USAGE${missing.length ? `: ${missing.join(', ')}` : ''}` +
-        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}${xuBad ? `, ${xuBad} X-UPDATE CASE(S) WRONG` : ''}`
+        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}${xuBad ? `, ${xuBad} X-UPDATE CASE(S) WRONG` : ''}${sjBad ? `, ${sjBad} SAFEJSON CASE(S) WRONG` : ''}`
       : `\n${ran} cases, all pass`,
   );
-  process.exit(missing.length || bad || regBad || dupBad || pathBad || xuBad || tooFew ? 1 : 0);
+  process.exit(missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || tooFew ? 1 : 0);
 }
 
-if (a['self-test']) selfTest();
+if (a['self-test']) await selfTest();
 
 /**
  * ⛔⛔ --consistency IS A PURELY LOCAL AUDIT AND USED TO DEMAND A CHANNEL AND A CREDENTIAL.
@@ -681,13 +700,32 @@ const PRESENCE_TYPE = 'x-presence';
 const RETIRED_TYPE = 'x-retired';
 
 
+/**
+ * ⛔⛔ A NON-JSON BODY IS NOT AN EXCEPTIONAL CASE - Slack returns HTML gateway pages on a
+ * 502/503, and an empty body on some connection resets. `r.json()` throws SyntaxError on
+ * either, and every call site here used to let that throw propagate, which killed a
+ * long-running watcher outright. (#161)
+ *
+ * ⚠ A 429 IS NOT WHAT THIS GUARDS AGAINST. A rate-limited response still carries a valid
+ * JSON body (`{ok: false, error: 'ratelimited'}`) - the failure this catches is orthogonal
+ * to status code, which is why checking `r.status` first (as the two --audit sites already
+ * did, for 429 specifically) does not make this redundant.
+ */
+async function safeJson(r) {
+  try {
+    return await r.json();
+  } catch {
+    return { ok: false, error: 'non_json_response', status: r.status };
+  }
+}
+
 async function slackPost(method, body) {
   const r = await fetch(`https://slack.com/api/${method}`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json; charset=utf-8' },
     body: JSON.stringify(body),
   });
-  const j = await r.json();
+  const j = await safeJson(r);
   // Kept so a 429 caller (beat(), --retire) can see what Slack asked for. (#119)
   if (r.status === 429) j.retryAfter = Number(r.headers.get('retry-after')) || null;
   return j;
@@ -731,7 +769,7 @@ async function recentMessages(limit = 200) {
     const waitMs = (Number.isFinite(headerSecs) && headerSecs > 0 ? headerSecs : 60) * 1000;
     rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + waitMs);
   }
-  const res = await r.json();
+  const res = await safeJson(r);
   return res.ok ? { ok: true, messages: res.messages ?? [] } : { ok: false, error: res.error, messages: [] };
 }
 
@@ -1216,6 +1254,9 @@ async function poll() {
       rateLimitWaitMs = (rateLimitHadHeader ? headerSecs : 60) * 1000;
       rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + rateLimitWaitMs);
     }
+    // ⚠ Not routed through safeJson() - a throw here already lands in this catch, which
+    // already treats it as transient and keeps the loop alive. Checked directly against a
+    // stubbed non-JSON body rather than assumed from reading the shape. (#161)
     res = await r.json();
   } catch (err) {
     // Transient: a failed request must not kill a long-running watch.
@@ -1601,7 +1642,7 @@ if (a.audit) {
     reportRateLimited('the thread read', Number(repRes.headers.get('retry-after')));
     process.exit(2);
   }
-  const rep = await repRes.json();
+  const rep = await safeJson(repRes);
   if (!rep.ok) {
     console.error(`Could not read the thread: ${rep.error}`);
     process.exit(2);
@@ -1639,7 +1680,7 @@ if (a.audit) {
       console.error(`  ${pages} page(s) already read; the verdict below would be incomplete without this one.`);
       process.exit(2);
     }
-    const page = await pageRes.json();
+    const page = await safeJson(pageRes);
     if (!page.ok) {
       console.error(`Could not read the channel timeline: ${page.error}`);
       process.exit(2);
