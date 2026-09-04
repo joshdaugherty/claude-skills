@@ -88,6 +88,14 @@ function ownPlugin() {
 }
 const OWN_PLUGIN = ownPlugin();
 
+// ⚠ MOVED UP FROM THE "presence / liveness" SECTION BELOW, DELIBERATELY (#179). selfTest()
+// is INVOKED (not just defined) before that section's own declarations are reached during
+// module evaluation, and its fixtures now call presenceBlocks(), which reads this constant -
+// a `const` this early or this late is a TDZ ReferenceError, not a value, so it has to live
+// wherever the earliest caller needs it. See the "presence / liveness" section for what this
+// is actually FOR; this line is only here for module-load ordering.
+const PRESENCE_TYPE = 'x-presence';
+
 /**
  * WHICH environment variable holds this repo's credential.
  *
@@ -323,7 +331,7 @@ async function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 72; // raise when adding cases - a constant, reviewed on change (+6: 5 memberStatus cases + 1 new --member flag-in-USAGE line, #173) - verified against the real --self-test count, not computed by eye
+  const CASE_FLOOR = 77; // raise when adding cases - a constant, reviewed on change (+5 for presenceBlocks, #179) - verified against the real --self-test count, not computed by eye
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -435,6 +443,25 @@ async function selfTest() {
   const xuBad = xuCases.filter(([, got, want]) => got !== want).length;
 
   /**
+   * presenceBlocks()'s failure-streak element (#179). A healthy beat (recentFailures=0) must
+   * render EXACTLY as it always has - no element, no "recently had" text - since the whole
+   * point is that the marker only appears when it has something to say.
+   */
+  const pbHealthy = presenceBlocks('fixture-session', 60, 0);
+  const pbHealthyCtx = pbHealthy.blocks[0]?.elements ?? [];
+  const pbRecovered = presenceBlocks('fixture-session', 60, 3);
+  const pbRecoveredCtx = pbRecovered.blocks[0]?.elements ?? [];
+  const pbCases = [
+    ['healthy beat has no recent-failures element', pbHealthyCtx.some((e) => e.text.startsWith('recent-failures')), false],
+    ['healthy beat body has no "recently had" text', pbHealthy.blocks[1]?.text?.text.includes('recently had'), false],
+    ['recovered beat carries the exact failure count', pbRecoveredCtx.some((e) => e.text === 'recent-failures: `3`'), true],
+    ['recovered beat body mentions the failure count', pbRecovered.blocks[1]?.text?.text.includes('recently had 3 heartbeat failure(s)'), true],
+    ['context block still comes before the section block', pbRecovered.blocks.map((b) => b.type).join(','), 'context,section'],
+  ];
+  for (const [name, got, want] of pbCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  presenceBlocks: ${name}`);
+  const pbBad = pbCases.filter(([, got, want]) => got !== want).length;
+
+  /**
    * safeJson() (#161). Stubbed Response-likes, not the real network - what matters is
    * whether a throwing .json() is turned into a branchable value, which needs no fetch to
    * exercise. A negative control: a WORKING .json() must still pass its value through
@@ -500,12 +527,12 @@ async function selfTest() {
   const tooFew = ran < CASE_FLOOR;
   if (tooFew) console.log(`\n⛔ ONLY ${ran} CASES RAN, floor is ${CASE_FLOOR} - a block stopped running.`);
   console.log(
-    missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || tooFew
+    missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || tooFew
       ? `\n${tooFew ? `ONLY ${ran} CASES RAN, FLOOR IS ${CASE_FLOOR} - A BLOCK STOPPED RUNNING. ` : ''}${missing.length} FLAG(S) MISSING FROM USAGE${missing.length ? `: ${missing.join(', ')}` : ''}` +
-        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}${xuBad ? `, ${xuBad} X-UPDATE CASE(S) WRONG` : ''}${sjBad ? `, ${sjBad} SAFEJSON CASE(S) WRONG` : ''}${vbBad ? `, ${vbBad} VERIFYBOTID CASE(S) WRONG` : ''}${msBad ? `, ${msBad} MEMBERSTATUS CASE(S) WRONG` : ''}`
+        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}${xuBad ? `, ${xuBad} X-UPDATE CASE(S) WRONG` : ''}${sjBad ? `, ${sjBad} SAFEJSON CASE(S) WRONG` : ''}${vbBad ? `, ${vbBad} VERIFYBOTID CASE(S) WRONG` : ''}${msBad ? `, ${msBad} MEMBERSTATUS CASE(S) WRONG` : ''}${pbBad ? `, ${pbBad} PRESENCEBLOCKS CASE(S) WRONG` : ''}`
       : `\n${ran} cases, all pass`,
   );
-  process.exit(missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || tooFew ? 1 : 0);
+  process.exit(missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || tooFew ? 1 : 0);
 }
 
 if (a['self-test']) await selfTest();
@@ -711,7 +738,6 @@ function parseMessage(msg) {
 // This is a liveness signal, not a lease, and it does not make §6 safe for anything
 // where double-execution is destructive.
 
-const PRESENCE_TYPE = 'x-presence';
 /**
  * ⛔ THIS WAS WRITTEN AND NEVER READ. `--retire` announced a departure that no reader
  * honoured - and the bug above hid it, because a non-beater vanished from the roster after
@@ -1138,7 +1164,27 @@ function presenceOf(msg) {
   return { ts: msg.ts, session: meta.session, beat, every: Number(meta.every) || 0 };
 }
 
-function presenceBlocks(label, every) {
+/**
+ * ⚠ `recentFailures` IS THE COUNT FROM BEFORE THIS ATTEMPT, NOT THIS ATTEMPT'S OUTCOME - the
+ * body is built before the post that might fail, so it can only ever report what already
+ * happened on earlier ticks. A heartbeat that fails on EVERY attempt, forever, cannot be
+ * made discoverable this way at all: nothing it builds ever reaches the channel to be read.
+ * That is a real, named limit (#179), not a gap in this - it is the same wall this bus
+ * always hits when the failure is total rather than intermittent. What this DOES reach: a
+ * lane that struggled - rate-limited, hit a message-is-gone recovery, anything transient -
+ * and then landed. That landing now says so, instead of looking identical to a lane that
+ * never had any trouble, which is what made #177's own investigation need four lanes and a
+ * captured stderr log to even characterise.
+ *
+ * ⚠⚠ MEASURED LIVE: A HARD RESET TO ZERO ON THE FIRST SUCCESS IS NOT ENOUGH. chat.update
+ * overwrites the WHOLE body, so a caller that zeroes this the instant a beat lands makes the
+ * marker visible for exactly that one beat - the very next successful tick, one --heartbeat
+ * interval later, erases it again. beat() decays this by one per success instead of zeroing
+ * it, so a streak of N failures stays partially visible for roughly N more successful beats -
+ * long enough that something polling on a normal cadence can actually see it, and it still
+ * clears on its own rather than becoming permanent noise from one old incident.
+ */
+function presenceBlocks(label, every, recentFailures = 0) {
   const beat = Math.floor(Date.now() / 1000);
   return {
     text: `presence: ${label}`,
@@ -1154,6 +1200,13 @@ function presenceBlocks(label, every) {
           // if it is alive it is beating. Without this, a session that is up to date and
           // simply quiet reads as "not announcing a version - necessarily older".
           ...(OWN_PLUGIN ? [{ type: 'mrkdwn', text: `plugin: \`${OWN_PLUGIN}\`` }] : []),
+          // ⚠ OMITTED ENTIRELY WHEN ZERO, NOT PRINTED AS `recent-failures: 0` - a healthy
+          // beat that never struggled must render identically to how it always has, so an
+          // element ONLY appearing when it has something to say is the signal, not a value
+          // that is always present and usually zero. `recentFailures` DECAYS (beat()'s own
+          // caller decrements it by one per success rather than zeroing it), so this is
+          // "roughly how much trouble recently", not an exact count of one incident. (#179)
+          ...(recentFailures > 0 ? [{ type: 'mrkdwn', text: `recent-failures: \`${recentFailures}\`` }] : []),
         ],
       },
       {
@@ -1167,7 +1220,7 @@ function presenceBlocks(label, every) {
           // The body MUST change on every beat, or Slack may treat the update as a no-op
         // and never set `edited` - which is the field the roster actually reads. This
         // line is for humans and to force the edit; it is NOT the authoritative beat.
-        text: `_Watcher alive. Heartbeat every ${every}s; last beat ${new Date(beat * 1000).toISOString().replace('T', ' ').replace(/\..*/, '')} UTC._`,
+        text: `_Watcher alive${recentFailures > 0 ? ` (recently had ${recentFailures} heartbeat failure(s))` : ''}. Heartbeat every ${every}s; last beat ${new Date(beat * 1000).toISOString().replace('T', ' ').replace(/\..*/, '')} UTC._`,
         },
       },
     ],
@@ -1175,6 +1228,10 @@ function presenceBlocks(label, every) {
 }
 
 let presenceTs = null;
+// How many beats in a row have failed to land, successful or not - reset on any success,
+// incremented on any failure regardless of cause. Read by presenceBlocks() so a lane that
+// struggled and then landed says so. (#179)
+let consecutiveBeatFailures = 0;
 
 /**
  * ⛔⛔ TWO SESSIONS SHARING A LABEL COLLAPSE INTO ONE, AND NOTHING USED TO SAY SO.
@@ -1253,12 +1310,23 @@ async function beat(label, every) {
       }
     }
   }
-  const body = presenceBlocks(label, every);
+  const body = presenceBlocks(label, every, consecutiveBeatFailures);
   const res = presenceTs
     ? await slackPost('chat.update', { channel: a.channel, ts: presenceTs, ...body })
     : await slackPost('chat.postMessage', { channel: a.channel, ...body });
-  if (res.ok) presenceTs = res.ts;
-  else {
+  if (res.ok) {
+    presenceTs = res.ts;
+    // ⚠⚠ DECAYS BY ONE PER SUCCESS - DOES NOT SNAP TO ZERO. Measured live: a hard reset
+    // here made the failure marker in presenceBlocks() visible for exactly the ONE beat
+    // that just recovered, because chat.update overwrites the FULL body - the very next
+    // successful tick (as little as one --heartbeat interval later) erases it again before
+    // almost anything polling on a normal cadence could have read it. Decaying by one means
+    // a streak of N failures stays partially visible for roughly N more successful beats
+    // after recovery - proportional to how bad it was, still eventually clears, but long
+    // enough to actually be seen. (#179)
+    consecutiveBeatFailures = Math.max(0, consecutiveBeatFailures - 1);
+  } else {
+    consecutiveBeatFailures++;
     console.error(`[watch] heartbeat failed: ${res.error}`);
     if (res.error === 'ratelimited') {
       const waitMs = (res.retryAfter || 60) * 1000;
