@@ -1526,6 +1526,18 @@ async function roster() {
   console.log('\nSTALE means the watcher stopped publishing - the session is gone, or its watcher died.');
   console.log('It does NOT prove the session is wedged, and alive does NOT prove it is responsive.');
   console.log('');
+  // ⚠ THIS READER MADE AN HONEST CALL. AN OLDER ONE CANNOT SAY THAT ABOUT ITSELF. A reader
+  // below 2.23.0 (#183) has no pagination and no `truncated` signal at all - it silently
+  // drops any presence message past its first 200-message read and reports STALE with the
+  // same confidence as this one, on a lane that is beating normally. That reader cannot be
+  // fixed after the fact; the mitigation is knowing to distrust a STALE call read from (or
+  // about) a peer on an unconfirmed version - see --doctor's PEERS line. (#187)
+  console.log('STALE is only as trustworthy as the reader producing it: this reading (and the');
+  console.log('truncation warning above, if shown) needs >= 2.23.0. A reader older than that has');
+  console.log('no pagination and no way to say so - it can report STALE, with equal confidence,');
+  console.log('for a lane that is beating normally. Check a version with --doctor before trusting');
+  console.log('a STALE call read from (or about) a peer whose version is not confirmed.');
+  console.log('');
   console.log('active = the session POSTED recently but publishes NO BEAT. A message is STRONGER');
   console.log('evidence of life than a beat: a beat proves only that a timer fired, a message');
   console.log('proves the session ACTED. But active is NOT alive - it is PRESENT and NOT');
