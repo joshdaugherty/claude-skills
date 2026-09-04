@@ -1073,6 +1073,15 @@ if (holder && holder.session !== label) {
 
 if (a['dry-run']) {
   console.log(`DRY RUN - would claim task ${a.task} as "${label}".`);
+  // ⚠ WITHOUT THIS, --dry-run IS BLIND TO THE WHOLE #203 FEATURE - not "shows no warning
+  // for a defaulted label" but "never reaches the code that would decide", since this exits
+  // before labelDefaulted is even consulted. --dry-run's whole job is "what would the real
+  // send do" - a real claim under this same label DOES warn and DOES mark the message, so
+  // the preview should say so too. (found by review, #203)
+  if (labelDefaulted) {
+    console.log(`  ⚠ session: "${label}" is the SESSION-ID FALLBACK (no --session given) - a`);
+    console.log('    real claim would warn about this and mark the message session-defaulted.');
+  }
   process.exit(0);
 }
 
