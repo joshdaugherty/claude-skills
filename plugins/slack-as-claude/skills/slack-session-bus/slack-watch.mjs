@@ -786,8 +786,10 @@ async function slackPost(method, body) {
  * messages newer than the ping it just sent - passing `{ full: false }` there.
  *
  * ⚠ THIS COST IS REAL AND UNAVOIDABLE FOR A CALLER THAT NEEDS THE WHOLE PICTURE (roster(),
- * --retire's cleanup) - correctly reading a busy channel now costs up to MAX_HISTORY_PAGES
- * round trips instead of one, and that cost only grows as the channel does. Accepted
+ * --retire's cleanup, and --announce-install's baseline-version lookup - which needs the
+ * HIGHEST-ts match across everything, so it cannot stop at the first one either) - correctly
+ * reading a busy channel now costs up to MAX_HISTORY_PAGES round trips instead of one, and
+ * that cost only grows as the channel does. Accepted
  * deliberately: the alternative is the exact silent-forever failure #177 was filed over.
  * `stopWhen`, below, is the mitigation for callers that DON'T need the whole picture - a
  * caller asking "does X exist" can stop the instant it does, rather than draining every
