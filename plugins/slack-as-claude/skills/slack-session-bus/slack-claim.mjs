@@ -818,20 +818,64 @@ function unreadContributions(threadMsgs, label) {
   return threadMsgs.filter((m) => m.type !== 'claim' && m.type !== 'done' && m.type !== 'fail' && m.session !== label);
 }
 
+// Matches slack-watch.mjs's own MAX_HISTORY_PAGES and --audit's independent cap - this
+// repo's established convention for a bounded (not exhaustive) full-channel scan. ~5000
+// messages; unbounded pagination against a channel with years of history would be its own
+// denial-of-service.
+const MAX_HISTORY_PAGES = 25;
+
 /**
- * Has this session ANNOUNCED that it left? Returns the newest x-retired ts, or null.
+ * ⛔⛔ THE SAME SHAPE #177 FIXED IN slack-watch.mjs's recentMessages(), NEVER PORTED HERE -
+ * the three scripts share no code, so the fix landed in the file it was reported against
+ * and not in this sibling. A chat.update'd x-retired or x-presence message never moves in
+ * the channel's chronological order once posted, so a single unpaginated 200-message read
+ * has nothing to do with "is this still current" - a message can sit at any depth in the
+ * timeline, purely as a function of how long ago it first posted and how much has been
+ * posted since. retirementOf()/livenessOf() both read only the newest page, so a genuinely
+ * relevant message past it reads as absent - not because it doesn't exist, but because
+ * history was never read far enough back to reach it. (#204)
+ *
+ * Returns {ok, messages, truncated} - truncated means MORE history exists past the page
+ * cap, not that anything failed. A FAILED read (ok:false) is a different fact from an EMPTY
+ * channel and must never collapse into it - both callers already draw exactly this
+ * distinction for their own failure case (a failed read renders `unknown`, never "absent"),
+ * and truncation needs the identical discipline applied to an INCOMPLETE read.
+ */
+async function channelHistory() {
+  const messages = [];
+  let cur = null;
+  let pages = 0;
+  do {
+    const params = { channel: a.channel, limit: '200' };
+    if (cur) params.cursor = cur;
+    const res = await api(HISTORY, params);
+    if (!res.ok) return { ok: false, error: res.error, messages: [], truncated: false };
+    messages.push(...(res.messages ?? []));
+    pages++;
+    cur = res.has_more ? res.response_metadata?.next_cursor || null : null;
+  } while (cur && pages < MAX_HISTORY_PAGES);
+  return { ok: true, messages, truncated: Boolean(cur) };
+}
+
+/**
+ * Has this session ANNOUNCED that it left? Returns the newest x-retired ts, `null` if none
+ * was found, or `{ unknown: true }` if the read failed OR was truncated before finding one -
+ * a caller must not read either of those as "confirmed not retired". (#204: added the
+ * truncated case, which a bounded-but-incomplete read can now produce and a single
+ * unpaginated read never could.)
  *
  * ★ This is the one POSITIVE signal of absence on the bus. Everything else - a stale
  * heartbeat, silence - is an inference, and inference costs a timeout. A session that
  * said it was leaving frees its claims IMMEDIATELY, because there is nothing to wait for.
  */
 async function retirementOf(session) {
-  const res = await api(HISTORY, { channel: a.channel, limit: '200' });
-  // A failed read is NOT "no retirement". Both land on null, and that conflation is
-  // fail-safe here - no retirement means no AUTOMATIC takeover - so the null stays.
-  if (!res.ok) return null;
+  const res = await channelHistory();
+  // A failed OR truncated read is NOT "no retirement" - both must read as UNKNOWN, never as
+  // a confirmed absence, mirroring the file's own "unread thread and unresolved thread look
+  // identical" discipline applied to this field instead. (#204)
+  if (!res.ok || res.truncated) return { unknown: true };
   let newest = null;
-  for (const m of res.messages ?? []) {
+  for (const m of res.messages) {
     const mm = meta(m);
     if (mm.type !== 'x-retired' || mm.session !== session) continue;
     if (!newest || tsCmp(m.ts, newest.ts) > 0) newest = { ts: m.ts, releases: mm.releases ?? '' };
@@ -842,14 +886,16 @@ async function retirementOf(session) {
 /** Liveness for one session, from its presence message. §6: an idle session is otherwise
  *  byte-identical to a dead one holding a claim. */
 async function livenessOf(session) {
-  const res = await api(HISTORY, { channel: a.channel, limit: '200' });
-  // ⚠ A FAILED READ IS NOT AN ABSENT HEARTBEAT. Returning null for both made the caller
-  // announce "that session publishes no heartbeat" - a claim about the PEER - when all
-  // that had happened was that this process could not ask. Fail-safe either way, since
-  // the caller stands down; but a wrong REASON in a thread is what §4 relies on later.
+  const res = await channelHistory();
+  // ⚠ A FAILED OR TRUNCATED READ IS NOT AN ABSENT HEARTBEAT. Returning null for either made
+  // the caller announce "that session publishes no heartbeat" - a claim about the PEER -
+  // when all that had happened was that this process could not read far enough. Fail-safe
+  // either way, since the caller stands down on `unknown` exactly as it already does on a
+  // failed read; but a wrong REASON in a thread is what §4 relies on later. (#204)
   if (!res.ok) return { unknown: true };
+  if (res.truncated) return { unknown: true };
   let best = null;
-  for (const m of res.messages ?? []) {
+  for (const m of res.messages) {
     const mm = meta(m);
     if (mm.type !== 'x-presence' || mm.session !== session) continue;
     // Server-assigned beat: edited.ts if it has ever been refreshed, else the original.
@@ -1018,9 +1064,15 @@ if (holder && holder.session !== label) {
   // Retirement first: it is positive evidence, so it does not need a timeout. Only fall
   // back to the staleness judgement if the holder never said it was going.
   const retired = await retirementOf(holder.session);
+  // ⚠ UNKNOWN MUST NOT SILENTLY READ AS "NOT RETIRED" (#204) - a failed or truncated read
+  // is a different fact from a genuine negative, and retiredAfterClaim below would already
+  // treat retired?.unknown the same as null (retired.ts is undefined, tsCmp(undefined, ...)
+  // never exceeds 0) WITHOUT this line - correct in outcome, silent about why. Said here so
+  // the fast path's absence is visible rather than indistinguishable from a clean negative.
+  if (retired?.unknown) console.log(`Could not fully check whether ${holder.session} has retired - falling through to the liveness check.`);
   // ⛔ CLAIM-PROTOCOL ARBITRATION - this decides whether a retirement supersedes a live
   // claim. It is the last comparison in these scripts that should be approximate.
-  const retiredAfterClaim = retired && tsCmp(retired.ts, holder.ts) > 0;
+  const retiredAfterClaim = retired && !retired.unknown && tsCmp(retired.ts, holder.ts) > 0;
 
   const live = retiredAfterClaim ? null : await livenessOf(holder.session);
   if (retiredAfterClaim) {
@@ -1031,7 +1083,12 @@ if (holder && holder.session !== label) {
     console.log('That is an announced departure, not a timeout: the claim is free immediately.');
   } else {
   const state = live?.unknown
-    ? 'liveness UNREADABLE - the API call failed, which is not a fact about that session'
+    // ⚠ "the API call failed" was true when this could only mean that - now channelHistory()
+    // can also return here truncated (read succeeded, but did not reach far enough to be
+    // sure), which is not a fact about the session either, but is a different fact about
+    // THIS check than a failed call. Said generically so neither is misreported as the
+    // other. (#204)
+    ? 'liveness UNREADABLE - the check could not be completed, which is not a fact about that session'
     : !live
       ? 'no presence published'
       : live.alive
