@@ -461,7 +461,7 @@ function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 25; // raise when adding cases - a constant, reviewed on change
+  const CASE_FLOOR = 30; // raise when adding cases - a constant, reviewed on change (+5 for unreadContributions, #202)
   let failed = 0;
   const check = (name, got, want) => {
     const ok = JSON.stringify(got) === JSON.stringify(want);
@@ -491,6 +491,20 @@ function selfTest() {
       [s('2.000000', 'b'), s('3.000000', 'c'), s('1.000000', 'a')],
     ].map((p) => rankClaims(p)[0].session))], ['a']);
   check('empty set ranks to nothing rather than throwing', rankClaims([]), []);
+
+  // unreadContributions() (#202). A --done/--fail discharge must surface thread replies
+  // that are neither a claim, a resolution, nor the holder's own - the material both
+  // pre-existing reads (threadClaims(), resolutions()) already fetch and discard.
+  const c = (ts, type, session) => ({ ts, type, session });
+  check("unreadContributions: keeps a genuine reply, drops the holder's own claim",
+    unreadContributions([c('1', 'claim', 'me'), c('2', 'reply', 'peer')], 'me').map((x) => x.session), ['peer']);
+  check('unreadContributions: drops a resolution too, not only a claim',
+    unreadContributions([c('1', 'claim', 'me'), c('2', 'done', 'me'), c('3', 'reply', 'peer')], 'me').map((x) => x.session), ['peer']);
+  check("unreadContributions: drops the HOLDER'S OWN non-claim messages too, not just claims",
+    unreadContributions([c('1', 'claim', 'me'), c('2', 'status', 'me')], 'me'), []);
+  check('unreadContributions: empty thread -> empty, not a crash', unreadContributions([], 'me'), []);
+  check('unreadContributions: keeps every distinct genuine contribution, not just the first',
+    unreadContributions([c('1', 'reply', 'a'), c('2', 'status', 'b')], 'me').map((x) => x.session), ['a', 'b']);
 
   // The other invariant: EVERY DECLARED FLAG APPEARS IN USAGE. Four flags shipped
   // invisible before this existed - see the long note in slack-post.mjs. Enforced in
@@ -786,6 +800,18 @@ async function resolutions() {
 }
 
 /**
+ * Which of a thread's own messages would a --done/--fail discharge otherwise never show
+ * the holder? Neither read on the way to a discharge (threadClaims(), resolutions()) keeps
+ * these - both filter them out on their own pass over the identical response, so a genuine
+ * contribution is fetched and discarded, twice. Excludes claims, resolutions, and the
+ * holder's own messages of any type - a holder does not need to be told to read itself.
+ * Pure so it can be checked against fixtures rather than a live thread. (#202)
+ */
+function unreadContributions(threadMsgs, label) {
+  return threadMsgs.filter((m) => m.type !== 'claim' && m.type !== 'done' && m.type !== 'fail' && m.session !== label);
+}
+
+/**
  * Has this session ANNOUNCED that it left? Returns the newest x-retired ts, or null.
  *
  * ★ This is the one POSITIVE signal of absence on the bus. Everything else - a stale
@@ -847,20 +873,44 @@ async function livenessOf(session) {
  * The tool knows which claim is yours; requiring you to copy it was the defect.
  */
 if (a.done || a.fail) {
-  
   const kind = a.done ? 'done' : 'fail';
-  const replies = await threadClaims();
-  const mine = replies.filter((c) => c.session === label).sort((x, y) => (x.ts < y.ts ? -1 : 1))[0];
+
+  // ⛔ ONE FETCH, NOT TWO. threadClaims() and resolutions() each independently re-fetch the
+  // same thread - correct where they run at genuinely different times relative to a write,
+  // but nothing happens between the two checks below, so this reads the thread once and
+  // derives every view (claims, resolutions, and unread contributions) from it. Fewer calls
+  // than before this fix, not more. (#202)
+  const threadRes = await api(REPLIES, { channel: a.channel, ts: a.task, limit: '200' });
+  if (!threadRes.ok) {
+    if (threadRes.error === 'ratelimited') reportRateLimited('the pre-discharge thread read', threadRes);
+    else console.error(`ERROR (not a verdict): could not read the task thread: ${threadRes.error}`);
+    process.exit(2);
+  }
+  const threadMsgs = (threadRes.messages ?? []).filter((m) => m.ts !== a.task).map((m) => ({ ts: m.ts, ...meta(m) }));
+
+  const mine = threadMsgs.filter((c) => c.type === 'claim' && c.session === label).sort((x, y) => (x.ts < y.ts ? -1 : 1))[0];
   if (!mine) {
     console.error(`ERROR (not a verdict): you have no claim in this thread as "${label}".`);
     console.error('A done must discharge a claim. Claim it first, or check --session.');
     process.exit(2);
   }
-  const already = await resolutions();
+  const already = threadMsgs.filter((m) => m.type === 'done' || m.type === 'fail');
   if (already.length) {
     console.error(`ERROR (not a verdict): this task is ALREADY resolved - ${already[0].session ?? '?'} posted ${already[0].type} at ${already[0].ts}.`);
     console.error('A second resolution would make the thread ambiguous about which one counts.');
     process.exit(2);
+  }
+  // ⛔⛔ THE GAP THIS ISSUE FIXES: a `type: reply` contribution was IN this same response,
+  // and was discarded - twice, since threadClaims()/resolutions() each filtered it out on
+  // their own read. A thread whose contributions were read and thrown away looks identical
+  // to one that has none - the same shape resolutions()'s own guard above already treats as
+  // the most dangerous thing in this file, one field over. UNKNOWN MUST NOT RENDER AS OPEN.
+  // Non-blocking (Option 1 from the issue): a discharge is not destructive, and a hard block
+  // would be defeated by reflex the second time someone hit it. (#202)
+  const unread = unreadContributions(threadMsgs, label);
+  if (unread.length) {
+    console.log(`⚠ ${unread.length} repl(ies) in this thread ${unread.length === 1 ? 'was' : 'were'} never shown to you. Read ${unread.length === 1 ? 'it' : 'them'} before relying on this:`);
+    for (const c of unread) console.log(`    node slack-watch.mjs --channel ${a.channel} --show ${c.ts}`);
   }
   const els = [
     { type: 'mrkdwn', text: `type: \`${kind}\`` },
@@ -884,6 +934,18 @@ if (a.done || a.fail) {
   }
   console.log(`Posted ${kind} at ${res.ts}, closing your claim ${mine.ts}.`);
   console.log('closes: was filled from the thread, not from you - which is the point.');
+  // ⚠ THE CHECK ABOVE IS THREAD-SCOPED, AND THAT IS NOT THE WHOLE CHANNEL. A contribution
+  // posted to the channel timeline, addressed to the holder but never placed in this
+  // thread with --thread-ts, is invisible to it - measured live: the incident #202 was
+  // filed from was recovered only because a Monitor event woke the holder, and a second,
+  // narrower miss during that same incident was a channel-level reply the thread read
+  // legitimately could not see. UNKNOWN MUST NOT RENDER AS OPEN applies to the SCOPE of a
+  // check, not only its result - so this says what it did not look at, rather than
+  // printing an unqualified clean discharge. (#202, channel-scope scan filed as its own
+  // follow-up rather than built here - see the issue for why)
+  console.log('⚠ This checked the THREAD only. Channel messages addressed to you since your');
+  console.log('  claim were NOT scanned - a peer who replied outside the thread would not have');
+  console.log('  been seen here.');
   process.exit(0);
 }
 
