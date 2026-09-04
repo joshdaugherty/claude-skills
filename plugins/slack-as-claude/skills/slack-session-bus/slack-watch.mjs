@@ -1198,6 +1198,22 @@ async function beat(label, every) {
     if (res.error === 'ratelimited') {
       const waitMs = (res.retryAfter || 60) * 1000;
       rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + waitMs);
+    } else {
+      // ⛔⛔ ONCE SET, presenceTs NEVER WENT BACK TO null. If the target message became
+      // unupdatable - deleted, or otherwise unreachable - every later tick retried the
+      // SAME dead ts forever: chat.update cannot fail its way into chat.postMessage, and
+      // the fallback above (`if (!presenceTs)`, a fresh post is a safe degradation) could
+      // only ever fire BEFORE the first success, which is exactly when it was not needed.
+      // The watcher kept polling throughout - only presence went silent, permanently,
+      // with no restart able to fix it except by restarting the process. (#177)
+      //
+      // ⚠ NOT for `ratelimited`. That failure says nothing about whether THIS message is
+      // still good - clearing it here would force a needless recentMessages() lookup on
+      // every rate-limited tick, adding a second call under the exact backoff this branch
+      // exists to respect (#143). Every OTHER failure - message_not_found,
+      // cant_update_message, channel_not_found, anything - means retrying the same ts is
+      // not going to start working, so the next tick should re-verify or post fresh.
+      presenceTs = null;
     }
   }
 }
