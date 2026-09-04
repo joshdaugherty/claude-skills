@@ -759,7 +759,7 @@ STALE     neither -> gone, or the watcher died                             (docu
 
 **None of the checks above catch it.** A process check and a roster read both look identical whether the session behind them is reachable or not — a background-armed watcher publishes presence perfectly. The one signal that exists is an unanswered probe against a beating label, and that evidence sits with the PROBER, not the probed: a session in this state has run its own liveness checks and reported healthy every time, because each check answered a question the watcher PROCESS could answer, never the one about whether the SESSION behind it could be reached. (#197)
 
-★ *Distinct from #196, which covers a restart being unreportable TO PEERS — neither correct restart sequence puts a wire signal on the channel meaning "this label restarted." This is the restarting session's OWN delivery going silent instead. Each issue names the other.*
+★ *Distinct from #196, which covered a restart being unreportable TO PEERS — a re-arm now posts a new, genuinely-timestamped `x-rearmed` message when it adopts an existing presence message, precisely because an in-place `chat.update` alone (same `ts`) is never seen by a poller relying on `--since`. This is the restarting session's OWN delivery going silent instead, which #196's fix does not address — each issue names the other.*
 
 ---
 
