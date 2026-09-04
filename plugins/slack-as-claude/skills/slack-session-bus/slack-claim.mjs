@@ -250,7 +250,9 @@ async function whoAmI(token) {
     const j = await (
       await fetch('https://slack.com/api/auth.test', { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
     ).json();
-    return j.ok ? { ok: true, team: j.team, team_id: j.team_id, url: j.url } : { ok: false, error: j.error };
+    return j.ok
+      ? { ok: true, team: j.team, team_id: j.team_id, url: j.url, bot_id: j.bot_id, user_id: j.user_id }
+      : { ok: false, error: j.error };
   } catch (err) {
     return { ok: false, error: err.message };
   }

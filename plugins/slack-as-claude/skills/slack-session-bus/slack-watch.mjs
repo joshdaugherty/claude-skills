@@ -315,7 +315,7 @@ async function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 59; // raise when adding cases - a constant, reviewed on change (+4 for safeJson, #161)
+  const CASE_FLOOR = 66; // raise when adding cases - a constant, reviewed on change (+7 for verifyBotId, #165)
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -445,6 +445,23 @@ async function selfTest() {
   for (const [name, got, want] of sjCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  safeJson: ${name}`);
   const sjBad = sjCases.filter(([, got, want]) => got !== want).length;
 
+  /**
+   * verifyBotId() (#165). unconfigured must never read as forged, and forged must never
+   * read as verified - the whole point of the three-way result is that a caller can tell
+   * "known bad" from "never checked" apart, which a boolean cannot express.
+   */
+  const vbCases = [
+    ['bot_id matches -> verified', verifyBotId({ bot_id: 'B123' }, 'B123'), 'verified'],
+    ['bot_id differs -> forged', verifyBotId({ bot_id: 'B999' }, 'B123'), 'forged'],
+    ['bot_id absent -> forged', verifyBotId({}, 'B123'), 'forged'],
+    ['no expected id -> unconfigured', verifyBotId({ bot_id: 'B123' }, null), 'unconfigured'],
+    ['neither present -> unconfigured, not forged', verifyBotId({}, null), 'unconfigured'],
+    ['a null message reads as forged, not a crash', verifyBotId(null, 'B123'), 'forged'],
+    ['an undefined message reads as forged, not a crash', verifyBotId(undefined, 'B123'), 'forged'],
+  ];
+  for (const [name, got, want] of vbCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  verifyBotId: ${name}`);
+  const vbBad = vbCases.filter(([, got, want]) => got !== want).length;
+
   // ⚠ EVERY counter must appear in BOTH the summary and the exit code. regBad was computed
   // and left out of both for one edit - seven cases that printed pass/FAIL and could not
   // fail the suite. A test that cannot fail is the defect this file documents two functions
@@ -461,12 +478,12 @@ async function selfTest() {
   const tooFew = ran < CASE_FLOOR;
   if (tooFew) console.log(`\n⛔ ONLY ${ran} CASES RAN, floor is ${CASE_FLOOR} - a block stopped running.`);
   console.log(
-    missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || tooFew
+    missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || tooFew
       ? `\n${tooFew ? `ONLY ${ran} CASES RAN, FLOOR IS ${CASE_FLOOR} - A BLOCK STOPPED RUNNING. ` : ''}${missing.length} FLAG(S) MISSING FROM USAGE${missing.length ? `: ${missing.join(', ')}` : ''}` +
-        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}${xuBad ? `, ${xuBad} X-UPDATE CASE(S) WRONG` : ''}${sjBad ? `, ${sjBad} SAFEJSON CASE(S) WRONG` : ''}`
+        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}${xuBad ? `, ${xuBad} X-UPDATE CASE(S) WRONG` : ''}${sjBad ? `, ${sjBad} SAFEJSON CASE(S) WRONG` : ''}${vbBad ? `, ${vbBad} VERIFYBOTID CASE(S) WRONG` : ''}`
       : `\n${ran} cases, all pass`,
   );
-  process.exit(missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || tooFew ? 1 : 0);
+  process.exit(missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || tooFew ? 1 : 0);
 }
 
 if (a['self-test']) await selfTest();
@@ -828,6 +845,11 @@ function gitRoot() {
  *
  * `team_id` is the strongest key: exact, and stable across workspace renames. `team` and
  * `url` are accepted for convenience and matched case-insensitively when present.
+ *
+ * ★ Two more OPTIONAL keys, for the coordinator role (#165): `coordinator_token_env` names
+ * a SECOND bot token's env var (only slack-post.mjs ever reads it - this file never posts).
+ * `coordinator_bot_id` is that token's `bot_id`, an IDENTIFIER not a credential, safe to
+ * commit exactly like `team_id`. See coordinatorBotId()/verifyBotId() below.
  */
 function repoWorkspace() {
   const root = gitRoot();
@@ -848,13 +870,58 @@ function repoWorkspace() {
   }
 }
 
+/**
+ * The declared coordinator bot_id, or null if none is configured. Read once by the caller
+ * before a poll loop starts (mirrors how the token itself is resolved once, not per
+ * message) - this involves a file read + JSON.parse, and re-reading it per message would be
+ * needless I/O on a busy channel. (#165)
+ */
+function coordinatorBotId() {
+  try {
+    return repoWorkspace()?.coordinator_bot_id || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Does a message's Slack-ASSIGNED bot_id match the declared coordinator? Three-way, not a
+ * boolean, because "no coordinator_bot_id is declared" and "this message's bot_id does not
+ * match" are different facts a caller must be able to tell apart - collapsing them would
+ * make an unconfigured machine indistinguishable from a caught forgery, the same mistake
+ * recentMessages() avoids between a failed read and an empty channel. (#165)
+ *
+ *   verified     - msg.bot_id matches: Slack assigned it, not the poster.
+ *   forged       - a directive-typed message whose bot_id does not match, or is absent.
+ *   unconfigured - no coordinator_bot_id declared; nothing here can be verified either way.
+ *
+ * ⚠⚠⚠ UNVERIFIED AGAINST A REAL conversations.history RESPONSE. `auth.test` and the
+ * `bot_message` SUBTYPE docs both confirm a top-level `bot_id` field exists - neither is
+ * the same endpoint/shape as an ORDINARY chat.postMessage bot post read back through
+ * conversations.history/conversations.replies, which is what this function actually reads
+ * in production. Shipped anyway on explicit instruction, stated as unverified rather than
+ * guessed, per this repo's own tier-3 rule. If a live check ever finds `bot_id` sits under
+ * `msg.bot_profile?.id` instead (or in addition), the fix is a one-line change to this
+ * function's `msg.bot_id` reads - not a redesign - but until that check happens, treat
+ * "forged" as UNTESTED against a real coordinator token, not merely untested by fixture.
+ */
+function verifyBotId(msg, expectedBotId) {
+  if (!expectedBotId) return 'unconfigured';
+  // `msg?.` - not reachable through poll() today (a message only gets here after
+  // parseMessage() already succeeded on it), but a null/undefined msg has no bot_id and
+  // must read the same as any other absent one: forged, not a crash. (found by review, #165)
+  return msg?.bot_id && msg.bot_id === expectedBotId ? 'verified' : 'forged';
+}
+
 /** Who does this token actually belong to? One call, and it is the only source of truth. */
 async function whoAmI(token) {
   try {
     const j = await (
       await fetch('https://slack.com/api/auth.test', { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
     ).json();
-    return j.ok ? { ok: true, team: j.team, team_id: j.team_id, url: j.url } : { ok: false, error: j.error };
+    return j.ok
+      ? { ok: true, team: j.team, team_id: j.team_id, url: j.url, bot_id: j.bot_id, user_id: j.user_id }
+      : { ok: false, error: j.error };
   } catch (err) {
     return { ok: false, error: err.message };
   }
@@ -1357,6 +1424,10 @@ async function poll() {
     return true;
   }
 
+  // Resolved once per poll, not once per message - a file read + JSON.parse on every one of
+  // (typically) several messages in a batch would be needless I/O on a busy channel. (#165)
+  const coordId = coordinatorBotId();
+
   for (const m of fresh) {
     if (m.ts) cursor = m.ts;
 
@@ -1389,6 +1460,22 @@ async function poll() {
       // An unrecognised type is surfaced, not swallowed: silently unmatched is exactly
       // how a peer's typo turns into two sessions doing the same work.
       type = known ? ` type=${meta.type}` : ` type=${meta.type}!UNKNOWN`;
+      /**
+       * ⛔⛔ THIS IS THE ONE PLACE meta.type IS NOT ENOUGH TO TRUST. Every other field
+       * on this line comes from text the poster wrote; a directive's AUTHORITY claim
+       * needs Slack's own m.bot_id instead, or "x-directive" in the context block is
+       * just more self-asserted text a forger can type as easily as the real coordinator
+       * can. verifyBotId() returns one of three states, always rendered - never blank,
+       * so "verified", "forged" and "cannot check" can never be confused with "nothing
+       * to report" the way an omitted marker would read. (#165)
+       */
+      if (meta.type === 'x-directive') {
+        const verdict = verifyBotId(m, coordId);
+        type +=
+          verdict === 'verified' ? '+coordinator-verified'
+          : verdict === 'forged' ? '!NOT-FROM-COORDINATOR'
+          : '(coordinator not configured - cannot verify)';
+      }
     }
     const thread = m.thread_ts && m.thread_ts !== m.ts ? ` thread=${m.thread_ts}` : '';
     // An edit keeps the ORIGINAL ts, so oldest=<cursor> never returns the message

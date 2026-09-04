@@ -274,6 +274,14 @@ auth.test  ·  chat.postMessage  ·  chat.update  ·  chat.delete  ·  conversat
 
 ### **`team_id` comes from `auth.test` on that workspace's token.** ✔ *Repo A keeps working untouched — it declares nothing, or declares A, and neither repo can post to the other's workspace: a mismatch REFUSES with exit 2.*
 
+## ★ **WANT A COORDINATOR INSTEAD OF A SECOND WORKSPACE? SAME MECHANIC, ONE FIELD DIFFERENT.** *A second app from the same manifest, installed into the SAME workspace/channel as the first rather than a different one. Stash its token under its own variable, run `slack-post.mjs --whoami --as-coordinator` once to learn its `bot_id`, and declare both in the SAME `slack-workspace.json`:*
+
+```json
+{ "team_id": "T0…", "coordinator_token_env": "SLACK_COORDINATOR_BOT_TOKEN", "coordinator_bot_id": "B0…" }
+```
+
+*The verification protocol — what a reader can and cannot conclude from a message posted this way — is in `slack-session-bus/SKILL.md` §0.*
+
 # ★★★★ AND WHEN YOU DO ADD A SECOND READ WORKSPACE: **TAKE `slack` OFF `--scope user` FIRST**
 
 ### **`--scope user` means ONE registration visible in EVERY repo.** *Add a second at project scope and repo B sees both — so a session in repo B can read workspace A as you.* # **That contradicts the one-repo-one-workspace rule the POSTING side enforces with a refusal**, *and nothing on the read side refuses anything.*
@@ -585,8 +593,12 @@ node slack-post.mjs --channel C01234ABCDE --text "..." \
 | :-- | --- |
 | `--no-context` | Drop the context line; post a bare message under the app. |
 | `--as-app` | Drop the whole identity apparatus. |
+| `--as-coordinator` | **Post using the COORDINATOR token instead of the ordinary one** *(a second, distinct Slack app/bot — see slack-session-bus/SKILL.md §0 for what a reader can conclude from a message posted this way).* |
+| `--whoami` | **Resolve the token (respecting `--as-coordinator`) and print `team`/`bot_id`/`user_id` from `auth.test`, then exit.** *Identifiers only, never the token — run this once per role to learn a `bot_id` worth declaring.* |
 | `--username` · `--icon-emoji` | **Override the DISPLAY NAME and AVATAR.** ⚠ *The only options that need `chat:write.customize`.* |
 | `--thread-ts` | Reply in a thread. ⚠ **Quote the value** *(→ §THREADING).* |
+
+⚠ **`--as-coordinator --as-app` TOGETHER STILL VERIFIES, BUT THE RESULT IS UNREADABLE AS A DIRECTIVE.** *`--as-app` drops the whole context-block apparatus — including `type:` — so a message posted with both carries a real, checkable `bot_id` but no `type: x-directive` for a reader to even look at. Not a bug in either flag; just don't combine them for a directive.*
 
 # ★★ WHY IT ALL LIVES IN THE CONTEXT BLOCK
 
