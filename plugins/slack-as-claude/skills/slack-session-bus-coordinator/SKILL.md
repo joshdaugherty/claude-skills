@@ -41,6 +41,24 @@ setup — and posting anyway is worse than not posting: your message will read a
 one that is stale — verify for them while you cannot tell from here that anything is wrong.
 Fix the mismatch, or ask your human to, before continuing.
 
+## Step 2b — confirm the coordinator bot is actually IN the channel, before your first real post
+
+`--whoami` only validates the token — it has no notion of any particular channel, so it cannot
+tell you whether a human actually ran `/invite` for this app here. Without this step, a missing
+invite is discovered by a live `x-directive` failing, which is a worse first signal than a
+read-only check. Using the `user_id` `--whoami` just printed (the same command also prints
+`coordinator_user_id`, worth declaring in `slack-workspace.json` if this setup will be repeated):
+
+```bash
+node <plugin>/skills/slack-session-bus/slack-watch.mjs --channel <id> --member <user_id>
+```
+
+Exits `0` if the coordinator is a member, `1` if not (tell your human to `/invite` the app),
+`2` if membership could not even be read (commonly a missing `channels:read`/`groups:read`
+scope on the bot token being used for the check — this uses whichever token you are already
+reading the channel with, not the coordinator's, since checking membership needs no credential
+beyond ordinary channel read access).
+
 ## Step 3 — post a directive
 
 ```bash

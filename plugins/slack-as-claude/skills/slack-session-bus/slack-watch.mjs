@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
 const HISTORY = 'https://slack.com/api/conversations.history';
+const MEMBERS = 'https://slack.com/api/conversations.members';
 
 // Kept in step with slack-post.mjs. A type outside this set is either a deliberate
 // custom one (x- prefixed) or a TYPO - and a typo'd claim is counted by nobody while
@@ -178,6 +179,7 @@ const OPTIONS = {
     show: { type: 'string' },
     from: { type: 'string' },
     audit: { type: 'string' },
+    member: { type: 'string' },
     releases: { type: 'string' },
     ping: { type: 'string' },
     wait: { type: 'string', default: '45' },
@@ -211,6 +213,7 @@ const USAGE =
       '\n' +
       '       [--heartbeat <sec>] [--retire] [--releases <ts,ts>] [--all]\n' +
       '       [--announce-install] [--from <version>] [--show <ts>] [--consistency]\n' +
+      '       [--member <user-id>]\n' +
       '\n' +
       '  --consistency  the OPERATOR question - is this MACHINE consistent - as opposed to\n' +
       '              --doctor, which answers the SESSION question "am I behind" and stays\n' +
@@ -253,6 +256,11 @@ const USAGE =
       '               channel timeline - messages no watcher can see. --raw CANNOT find\n' +
       '               these: it reads history, and the failure IS absence from history.\n' +
       '               Exits 1 if any are found.\n' +
+      '  --member <user-id>  is this Slack USER ID (not a bot_id) a member of --channel?\n' +
+      '               Read-only, and needs no special credential beyond channel read\n' +
+      '               access - checking a coordinator app before its first real post does\n' +
+      '               not need the coordinator token, only its user_id (from --whoami).\n' +
+      '               Exits 0 if a member, 1 if not, 2 if membership could not be read.\n' +
       '  --doctor     Am I behind? Compares RUNNING / CACHED / REGISTERED / AVAILABLE /\n' +
       '               PEERS. The decisive check is the VERSION DIRECTORY; bytes are the\n' +
       '               fallback when the versions match. Prints what to ask a human for.\n' +
@@ -315,7 +323,7 @@ async function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 66; // raise when adding cases - a constant, reviewed on change (+7 for verifyBotId, #165)
+  const CASE_FLOOR = 72; // raise when adding cases - a constant, reviewed on change (+6: 5 memberStatus cases + 1 new --member flag-in-USAGE line, #173) - verified against the real --self-test count, not computed by eye
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -462,6 +470,20 @@ async function selfTest() {
   for (const [name, got, want] of vbCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  verifyBotId: ${name}`);
   const vbBad = vbCases.filter(([, got, want]) => got !== want).length;
 
+  /**
+   * memberStatus() (#173). Same three-way discipline as verifyBotId(): a failed read (null)
+   * must never read the same as a confirmed absence.
+   */
+  const msCases = [
+    ['present in the list -> member', memberStatus(['U1', 'U2'], 'U1'), 'member'],
+    ['absent from the list -> not-a-member', memberStatus(['U1', 'U2'], 'U3'), 'not-a-member'],
+    ['empty list -> not-a-member, not unknown', memberStatus([], 'U1'), 'not-a-member'],
+    ['a failed read (null) -> unknown, never not-a-member', memberStatus(null, 'U1'), 'unknown'],
+    ['undefined reads as unknown too, not a crash', memberStatus(undefined, 'U1'), 'unknown'],
+  ];
+  for (const [name, got, want] of msCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  memberStatus: ${name}`);
+  const msBad = msCases.filter(([, got, want]) => got !== want).length;
+
   // ⚠ EVERY counter must appear in BOTH the summary and the exit code. regBad was computed
   // and left out of both for one edit - seven cases that printed pass/FAIL and could not
   // fail the suite. A test that cannot fail is the defect this file documents two functions
@@ -478,12 +500,12 @@ async function selfTest() {
   const tooFew = ran < CASE_FLOOR;
   if (tooFew) console.log(`\n⛔ ONLY ${ran} CASES RAN, floor is ${CASE_FLOOR} - a block stopped running.`);
   console.log(
-    missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || tooFew
+    missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || tooFew
       ? `\n${tooFew ? `ONLY ${ran} CASES RAN, FLOOR IS ${CASE_FLOOR} - A BLOCK STOPPED RUNNING. ` : ''}${missing.length} FLAG(S) MISSING FROM USAGE${missing.length ? `: ${missing.join(', ')}` : ''}` +
-        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}${xuBad ? `, ${xuBad} X-UPDATE CASE(S) WRONG` : ''}${sjBad ? `, ${sjBad} SAFEJSON CASE(S) WRONG` : ''}${vbBad ? `, ${vbBad} VERIFYBOTID CASE(S) WRONG` : ''}`
+        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}${xuBad ? `, ${xuBad} X-UPDATE CASE(S) WRONG` : ''}${sjBad ? `, ${sjBad} SAFEJSON CASE(S) WRONG` : ''}${vbBad ? `, ${vbBad} VERIFYBOTID CASE(S) WRONG` : ''}${msBad ? `, ${msBad} MEMBERSTATUS CASE(S) WRONG` : ''}`
       : `\n${ran} cases, all pass`,
   );
-  process.exit(missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || tooFew ? 1 : 0);
+  process.exit(missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || tooFew ? 1 : 0);
 }
 
 if (a['self-test']) await selfTest();
@@ -846,10 +868,13 @@ function gitRoot() {
  * `team_id` is the strongest key: exact, and stable across workspace renames. `team` and
  * `url` are accepted for convenience and matched case-insensitively when present.
  *
- * ★ Two more OPTIONAL keys, for the coordinator role (#165): `coordinator_token_env` names
- * a SECOND bot token's env var (only slack-post.mjs ever reads it - this file never posts).
- * `coordinator_bot_id` is that token's `bot_id`, an IDENTIFIER not a credential, safe to
- * commit exactly like `team_id`. See coordinatorBotId()/verifyBotId() below.
+ * ★ Three more OPTIONAL keys, for the coordinator role (#165, #173): `coordinator_token_env`
+ * names a SECOND bot token's env var (only slack-post.mjs ever reads it - this file never
+ * posts). `coordinator_bot_id` and `coordinator_user_id` are that token's `bot_id`/`user_id`,
+ * IDENTIFIERS not credentials, safe to commit exactly like `team_id`. This file reads
+ * `coordinator_bot_id` (coordinatorBotId()/verifyBotId(), for message verification) - a
+ * `--member` check reads `coordinator_user_id` from wherever the caller supplies it, since
+ * conversations.members returns user ids, not bot ids.
  */
 function repoWorkspace() {
   const root = gitRoot();
@@ -913,6 +938,23 @@ function verifyBotId(msg, expectedBotId) {
   // parseMessage() already succeeded on it), but a null/undefined msg has no bot_id and
   // must read the same as any other absent one: forged, not a crash. (found by review, #165)
   return msg?.bot_id && msg.bot_id === expectedBotId ? 'verified' : 'forged';
+}
+
+/**
+ * Is `userId` a member of a channel, given the full member-id list `--member` collected (or
+ * `null` if the read failed)? Three-way, not a boolean, for the same reason verifyBotId() is:
+ * "confirmed not a member" and "could not read membership at all" are different facts a
+ * caller must be able to tell apart - collapsing them would make a failed read look like a
+ * confirmed absence, the mistake recentMessages() already avoids between a failed read and
+ * an empty channel. (#173)
+ */
+function memberStatus(memberIds, userId) {
+  // `== null` catches undefined too - the one real call site only ever passes null or a
+  // real array, but verifyBotId()'s sibling three-way function is crash-safe against both,
+  // and this one should not be narrower than the pattern it says it mirrors. (found by
+  // review, #173)
+  if (memberIds == null) return 'unknown';
+  return memberIds.includes(userId) ? 'member' : 'not-a-member';
 }
 
 /** Who does this token actually belong to? One call, and it is the only source of truth. */
@@ -1801,6 +1843,66 @@ if (a.audit) {
   console.log(`(Compared over the thread's own span, ${a.audit} to ${newest}, across ${pages} page(s).`);
   console.log(' Bounded by the thread, not by channel volume, so this verdict does not change.)');
   process.exit(invisible.length ? 1 : 0);
+}
+
+/**
+ * ⚠ READ-ONLY, AND NEEDS NO COORDINATOR CREDENTIAL. conversations.members returns Slack USER
+ * ids, so checking whether the coordinator is a member needs its user_id (from --whoami),
+ * not its bot_id - and the check itself runs on the ORDINARY token, the same way any other
+ * read here does. This exists so a coordinator setup can confirm a missing --invite before
+ * its first real post, rather than discovering it from a live x-directive failing. (#173)
+ */
+if (a.member) {
+  // ⚠ NO REDUNDANT --channel CHECK HERE, DELIBERATELY. The top-level gate (`!a.channel &&
+  // !LOCAL_ONLY`) already requires --channel for every flag but --consistency, and fires
+  // FIRST - a check here was DEAD CODE, silently replaced by the generic guard's own exit 1
+  // and full USAGE dump instead of this block's intended exit 2 and specific message. Found
+  // by review, not by reading: the guard had never actually been reached. (#173)
+  const memberIds = [];
+  let cur = null;
+  let pages = 0;
+  let readOk = true;
+  do {
+    const u = new URL(MEMBERS);
+    u.searchParams.set('channel', a.channel);
+    u.searchParams.set('limit', '200');
+    if (cur) u.searchParams.set('cursor', cur);
+    const pageRes = await fetch(u, { headers: { Authorization: `Bearer ${token}` } });
+    if (pageRes.status === 429) {
+      reportRateLimited('the membership read', Number(pageRes.headers.get('retry-after')));
+      readOk = false;
+      break;
+    }
+    const page = await safeJson(pageRes);
+    if (!page.ok) {
+      if (page.error === 'missing_scope') {
+        console.error(
+          '--member: the bot token cannot read channel membership.\n' +
+            `  needed:   ${page.needed}\n` +
+            `  provided: ${page.provided}\n` +
+            '  Add channels:read (or groups:read for a private channel) and reinstall.',
+        );
+      } else {
+        console.error(`Could not read channel membership: ${page.error}`);
+      }
+      readOk = false;
+      break;
+    }
+    for (const id of page.members ?? []) memberIds.push(id);
+    cur = page.response_metadata?.next_cursor || null;
+    pages++;
+  } while (cur && pages < 25);
+
+  const status = memberStatus(readOk ? memberIds : null, a.member);
+  if (status === 'unknown') {
+    console.log(`Could not determine whether ${a.member} is a member of ${a.channel}.`);
+    process.exit(2);
+  }
+  console.log(
+    `${a.member} is ${status === 'member' ? 'a MEMBER' : 'NOT a member'} of ${a.channel}` +
+      (pages > 1 ? ` (checked across ${pages} page(s))` : '') + '.',
+  );
+  process.exit(status === 'member' ? 0 : 1);
 }
 
 if (a.retire) {
