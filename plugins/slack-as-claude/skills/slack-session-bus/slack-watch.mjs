@@ -95,6 +95,12 @@ const OWN_PLUGIN = ownPlugin();
 // wherever the earliest caller needs it. See the "presence / liveness" section for what this
 // is actually FOR; this line is only here for module-load ordering.
 const PRESENCE_TYPE = 'x-presence';
+// Same TDZ reason as PRESENCE_TYPE above, moved here pre-emptively: rearmBlocks()'s own
+// self-test fixtures read this constant, and RETIRED_TYPE (declared where it is used, well
+// after selfTest()'s invocation) was flagged by review as the identical latent risk this
+// repo had already been bitten by once - not yet triggered only because nothing inside
+// selfTest() referenced it. Fixing this one before it needs fixing rather than after. (#196)
+const REARMED_TYPE = 'x-rearmed';
 
 /**
  * WHICH environment variable holds this repo's credential.
@@ -331,7 +337,7 @@ async function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 77; // raise when adding cases - a constant, reviewed on change (+5 for presenceBlocks, #179) - verified against the real --self-test count, not computed by eye
+  const CASE_FLOOR = 85; // raise when adding cases - a constant, reviewed on change (+8 for rearmBlocks, #196) - verified against the real --self-test count, not computed by eye
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -462,6 +468,30 @@ async function selfTest() {
   const pbBad = pbCases.filter(([, got, want]) => got !== want).length;
 
   /**
+   * rearmBlocks() (#196). A re-arm that adopts an existing presence message must announce
+   * on the wire, in one of two textually distinct ways depending on whether the adopted
+   * message's beat age looks like a clean restart or a possible label collision - and a
+   * missing beat field must degrade to "no prior beat on record", never a crash or a
+   * fabricated age.
+   */
+  const rbClean = rearmBlocks('fixture-session', 3600, 60, false);
+  const rbCleanCtx = rbClean.blocks[0]?.elements ?? [];
+  const rbAmbiguous = rearmBlocks('fixture-session', 8, 60, true);
+  const rbNoBeat = rearmBlocks('fixture-session', null, 60, false);
+  const rbCases = [
+    ['type element carries the new x-rearmed type', rbCleanCtx.some((e) => e.text === 'type: `x-rearmed`'), true],
+    ['session element carries the label', rbCleanCtx.some((e) => e.text === 'session: `fixture-session`'), true],
+    ['clean restart body says continuity, not a warning', rbClean.blocks[1]?.text?.text.includes('This is continuity'), true],
+    ['clean restart body does NOT say another session may be live', rbClean.blocks[1]?.text?.text.includes('may still be live'), false],
+    ['ambiguous case body warns another session may be live', rbAmbiguous.blocks[1]?.text?.text.includes('may still be live'), true],
+    ['ambiguous case body does NOT claim continuity', rbAmbiguous.blocks[1]?.text?.text.includes('This is continuity'), false],
+    ['a null age degrades to "no prior beat on record", not a crash', rbNoBeat.blocks[1]?.text?.text.includes('no prior beat on record'), true],
+    ['context block still comes before the section block', rbClean.blocks.map((b) => b.type).join(','), 'context,section'],
+  ];
+  for (const [name, got, want] of rbCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  rearmBlocks: ${name}`);
+  const rbBad = rbCases.filter(([, got, want]) => got !== want).length;
+
+  /**
    * safeJson() (#161). Stubbed Response-likes, not the real network - what matters is
    * whether a throwing .json() is turned into a branchable value, which needs no fetch to
    * exercise. A negative control: a WORKING .json() must still pass its value through
@@ -527,12 +557,12 @@ async function selfTest() {
   const tooFew = ran < CASE_FLOOR;
   if (tooFew) console.log(`\n⛔ ONLY ${ran} CASES RAN, floor is ${CASE_FLOOR} - a block stopped running.`);
   console.log(
-    missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || tooFew
+    missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || tooFew
       ? `\n${tooFew ? `ONLY ${ran} CASES RAN, FLOOR IS ${CASE_FLOOR} - A BLOCK STOPPED RUNNING. ` : ''}${missing.length} FLAG(S) MISSING FROM USAGE${missing.length ? `: ${missing.join(', ')}` : ''}` +
-        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}${xuBad ? `, ${xuBad} X-UPDATE CASE(S) WRONG` : ''}${sjBad ? `, ${sjBad} SAFEJSON CASE(S) WRONG` : ''}${vbBad ? `, ${vbBad} VERIFYBOTID CASE(S) WRONG` : ''}${msBad ? `, ${msBad} MEMBERSTATUS CASE(S) WRONG` : ''}${pbBad ? `, ${pbBad} PRESENCEBLOCKS CASE(S) WRONG` : ''}`
+        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}${xuBad ? `, ${xuBad} X-UPDATE CASE(S) WRONG` : ''}${sjBad ? `, ${sjBad} SAFEJSON CASE(S) WRONG` : ''}${vbBad ? `, ${vbBad} VERIFYBOTID CASE(S) WRONG` : ''}${msBad ? `, ${msBad} MEMBERSTATUS CASE(S) WRONG` : ''}${pbBad ? `, ${pbBad} PRESENCEBLOCKS CASE(S) WRONG` : ''}${rbBad ? `, ${rbBad} REARMBLOCKS CASE(S) WRONG` : ''}`
       : `\n${ran} cases, all pass`,
   );
-  process.exit(missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || tooFew ? 1 : 0);
+  process.exit(missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || tooFew ? 1 : 0);
 }
 
 if (a['self-test']) await selfTest();
@@ -1285,6 +1315,60 @@ function warnIfColliding(p, label) {
 }
 
 /**
+ * ⛔⛔ ADOPTING A PRESENCE MESSAGE VIA chat.update PUTS NOTHING ON THE WIRE. An edit keeps
+ * its ORIGINAL ts - the same limit §1 already documents for corrections - so a poller
+ * relying on `--since <cursor>` never sees it, and the roster shows one unbroken `alive`
+ * row spanning a process that stopped and a different one that started. Two measured
+ * sequences both produce this: a clean restart (adopt quietly) and a genuine label
+ * collision (also adopt quietly) are BYTE-IDENTICAL on the wire, even though
+ * warnIfColliding() above already has enough information, LOCALLY, to tell them apart.
+ * (#196)
+ *
+ * The fix is a genuinely NEW message (a fresh ts, always seen by a poller), posted at the
+ * one moment both variants share: adoption. `ambiguous` mirrors looksLikeCollision()'s own
+ * threshold on the SAME age warnIfColliding() computed - this reports the OBSERVATION (how
+ * long since the last beat), never the conclusion ("this is my own restart"), because the
+ * tool genuinely cannot tell that from here, only the operator can. A pure function so its
+ * text can be checked without a network call - see rbCases in selfTest().
+ */
+function rearmBlocks(label, age, every, ambiguous) {
+  const ageText = age == null ? 'no prior beat on record' : `${age}s since its last beat`;
+  const elements = [
+    { type: 'mrkdwn', text: `type: \`${REARMED_TYPE}\`` },
+    { type: 'mrkdwn', text: `session: \`${label}\`` },
+    ...(OWN_PLUGIN ? [{ type: 'mrkdwn', text: `plugin: \`${OWN_PLUGIN}\`` }] : []),
+  ];
+  return {
+    text: `rearmed: ${label}`,
+    blocks: [
+      { type: 'context', elements },
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: ambiguous
+            ? `A watcher for \`${label}\` just adopted an existing presence message (${ageText}) - RECENTLY ENOUGH that another session may still be live under this name. If this is not your own restart, you may be sharing a label; check before treating the older process as gone.`
+            : `A watcher for \`${label}\` just adopted an existing presence message (${ageText}). This is continuity: the roster row for this label spans a process that stopped and one that started, same as always - now visible on the wire instead of silent.`,
+        },
+      },
+    ],
+  };
+}
+
+/** Posts rearmBlocks()'s announcement. Failure is logged, never fatal - the presence beat
+ * itself (beat()'s caller) must land regardless of whether this side notice does. */
+async function announceRearm(label, p) {
+  const age = p.beat ? Math.max(0, Math.floor(Date.now() / 1000 - p.beat)) : null;
+  const ambiguous = age != null && looksLikeCollision(age, p.every);
+  const res = await slackPost('chat.postMessage', {
+    channel: a.channel,
+    reply_broadcast: true,
+    ...rearmBlocks(label, age, p.every, ambiguous),
+  });
+  if (!res.ok) console.error(`[watch] could not announce re-arm continuity: ${res.error}`);
+}
+
+/**
  * Slack chat.update errors CONFIRMED, by direct measurement, to mean the target message no
  * longer exists to be updated - not merely errors that COULD plausibly mean that. Extend only
  * after measuring a new one; see the comment at this constant's one use, in beat() below. (#177)
@@ -1317,6 +1401,7 @@ async function beat(label, every) {
       if (p && p.session === label) {
         presenceTs = p.ts;
         warnIfColliding(p, label);
+        await announceRearm(label, p);
         break;
       }
     }
