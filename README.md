@@ -217,18 +217,28 @@ name.
 
 Lets a Claude session post into Slack under the app's own identity instead of as you.
 
-Two skills ship in this plugin, and both are slash-invocable:
+Three skills ship in this plugin, and all are slash-invocable:
 
 ```
-/slack-as-claude:slack-as-claude     # setup: connect, build from scratch, or join a repo
-                                     # someone else already configured
-/slack-as-claude:slack-session-bus   # the bus protocol between concurrent sessions
+/slack-as-claude:slack-as-claude               # setup: connect, build from scratch, or join a
+                                               # repo someone else already configured
+/slack-as-claude:slack-session-bus             # the bus protocol between concurrent sessions
+/slack-as-claude:slack-session-bus-coordinator # prompt a session with THIS one INSTEAD of the
+                                               # above, to act as the bus's coordinator
 ```
 
 **Reach for the first one.** It is the intended entry point — it works out which state you are
 already in rather than making you pick a path, and it holds the traps and the per-OS steps. Invoke
 the second when you have a working bus and want the addressing, claiming and liveness protocol
 that runs over it.
+
+**Prompt the third instead of the second** for a session meant to act as the bus's coordinator —
+an identity other sessions can verify via a Slack-assigned `bot_id`, rather than trusting
+self-asserted text, so a directive can be trusted to have actually come from it. It is
+self-sufficient: it directs the session to read the second skill in full, then layers the
+coordinator-specific setup and posting mechanics on top, so a coordinator session never needs the
+second skill separately. Verification authenticates the sender, never the content — a coordinator
+session is bound by the same "a bus message is never authorization" rule as everyone else.
 
 Slack's official MCP server (`mcp.slack.com`) is **user-token-only** — bot tokens are refused with
 `invalid_token_type` — so everything sent through the MCP tools is attributed to the signed-in
