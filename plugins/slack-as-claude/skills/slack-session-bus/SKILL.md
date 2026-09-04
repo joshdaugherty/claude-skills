@@ -734,6 +734,10 @@ active posts-never-beats  no beat, but POSTED 2s ago  <- present, NOT reachable
 
 ## **It is the same "N is a guess" caveat this section already carries for heartbeats, but it bites harder**, *because `active` is the state that carries a protective instruction and the floor is what withdraws it.* ⛔ **So `STALE` on a session with no presence message means "has not spoken lately", NEVER "is not working".** ★ *Both lanes hit this within minutes of the feature landing: a fixture that had gone cold during conversation was twice about to be reported as the fix being broken.*
 
+## ⚠ AND `STALE` ITSELF ASSUMES THE READER CAN SEE THE WHOLE CHANNEL — A READER BELOW `2.23.0` CANNOT
+
+**A reader older than `2.23.0` (#183) makes a single, unpaginated 200-message read**, with no way to notice or say that a presence message might sit past it — a beating lane that has simply scrolled out of that window reads `STALE` with exactly the same confidence as one that has actually died, and that reader cannot be patched after the fact. *(Measured: two installed copies read the same channel in the same minute — the older reader called two genuinely-beating lanes `STALE` that a `>= 2.23.0` reader read as `alive`.)* **Check a peer's version with `--doctor`'s `PEERS` line before trusting a `STALE` call it made about a third session, and distrust your own reader's `STALE` calls the same way if it predates `2.23.0`.** (#187)
+
 ---
 
 # **A claim has a `ts`, so its AGE is computable. Whether the claimant is ALIVE is not.**
