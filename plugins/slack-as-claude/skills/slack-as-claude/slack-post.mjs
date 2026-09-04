@@ -410,8 +410,12 @@ function claudeUser(includeEmail) {
  * exactly like `team_id` is. `coordinator_bot_id` is what `verifyBotId()` checks a message
  * against; `coordinator_user_id` is what a channel-membership check (`--member`,
  * slack-watch.mjs) looks for, since conversations.members returns user ids, not bot ids. None
- * of the three keys are validated by this function - an absent or wrong `coordinator_bot_id`
- * fails in the safe direction (a real directive reads as unverified, never the reverse).
+ * of the three keys are validated by this function itself - the send path validates
+ * `coordinator_bot_id` at the two `--as-coordinator` call sites below (absent, then wrong).
+ * ⚠ THE TWO FAILURES ARE NOT SYMMETRIC. Absent fails safe: a real directive reads as
+ * `unconfigured`, never a false positive. Wrong fails UNSAFE: `verifyBotId()` resolves it
+ * to `forged`, the same rendering as an actual impersonation attempt, on a message the
+ * real coordinator sent - which is why the send path warns on both, not just absence. (#184)
  */
 function repoWorkspace() {
   const root = gitRoot();
@@ -1389,6 +1393,33 @@ if (!a['as-app']) {
 // ⚠ CHECKED EVEN ON --dry-run. "Where is this going" must be answerable WITHOUT
 // sending, and the destination is exactly what a preview was silently omitting.
 const WS = await checkWorkspace(token, { enforce: !a['dry-run'] });
+
+/**
+ * ⚠ THE MISMATCH HALF OF THE ABSENCE CHECK ABOVE (line ~1255), NOT A NEW CHECK.
+ * repoWorkspace()'s own docblock has always said "absent OR wrong coordinator_bot_id" -
+ * only the absent half was ever guarded. A wrong value fails in the UNSAFE direction:
+ * verifyBotId() (slack-watch.mjs) resolves it to `forged`, the same rendering as an
+ * actual impersonation attempt, on a message the real coordinator sent. (#184)
+ *
+ * No second auth.test call: checkWorkspace() above just made one for THIS token, which
+ * IS the coordinator token here (--as-coordinator swapped it before line 1391), so
+ * WS.who.bot_id is already the answer. Guarded on WS.who.ok - an unanswered auth.test
+ * is not a mismatch, the same distinction checkWorkspace()'s own docblock draws.
+ */
+if (
+  a['as-coordinator'] &&
+  repoWorkspace()?.coordinator_bot_id &&
+  WS.who.ok &&
+  WS.who.bot_id !== repoWorkspace().coordinator_bot_id
+) {
+  console.error(
+    "[post] ⚠ --as-coordinator, but this token's bot_id does not match this repo's\n" +
+      `       declared coordinator_bot_id (declared ${repoWorkspace().coordinator_bot_id}, actual\n` +
+      `       ${WS.who.bot_id}). A verifying reader sees this as !NOT-FROM-COORDINATOR - the\n` +
+      '       same rendering as a forged directive. Run --whoami --as-coordinator and update\n' +
+      '       coordinator_bot_id if the coordinator app was reinstalled or its token rotated.',
+  );
+}
 
 if (a['dry-run']) {
   console.log('DRY RUN - nothing sent.');

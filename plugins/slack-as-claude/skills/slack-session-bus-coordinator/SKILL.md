@@ -41,6 +41,11 @@ setup — and posting anyway is worse than not posting: your message will read a
 one that is stale — verify for them while you cannot tell from here that anything is wrong.
 Fix the mismatch, or ask your human to, before continuing.
 
+`slack-post.mjs` (`>= 2.23.1`) also makes this same comparison on every `--as-coordinator`
+send and prints a `⚠` if it fails — a backstop, not a substitute for this step: it warns
+rather than refusing, and only after the message is already sent, so a mismatch caught here
+costs nothing while one caught only by the backstop has already posted as `!NOT-FROM-COORDINATOR`.
+
 ## Step 2b — confirm the coordinator bot is actually IN the channel, before your first real post
 
 `--whoami` only validates the token — it has no notion of any particular channel, so it cannot
