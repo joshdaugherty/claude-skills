@@ -2047,6 +2047,21 @@ function pongVerdict(mm, target, sentTs, selfLabel) {
 }
 
 if (a.ping) {
+  // ⚠ WITHOUT THIS, pongVerdict()'s to: EXCLUSION SILENTLY DISABLES ITSELF. Its guard is
+  // `mm.to && selfLabel && mm.to !== selfLabel` - with no resolvable identity, selfLabel
+  // is null/falsy and the whole clause short-circuits to false, so a pong someone declared
+  // for a DIFFERENT pinger (even one that correlates via re:, since re: only proves it
+  // answers THIS ping, not that it was addressed to THIS pinger) is accepted anyway.
+  // Live-reproduced by review: with selfLabel unset, a correlated pong explicitly --to a
+  // third party still printed "It is awake and responsive." Mirrors --retire's identical
+  // precondition a few hundred lines below - a session pinging (or retiring) without a
+  // resolvable identity cannot be correctly addressed back. (found by review, #201)
+  if (!selfLabel) {
+    console.error('--ping needs a label: pass --session, or set CLAUDE_SESSION_NAME. Without');
+    console.error('one, a reply cannot be correctly addressed back to you, and this pinger\'s');
+    console.error("own to:-exclusion in a responder's --re check has nothing to compare against.");
+    process.exit(1);
+  }
   const target = a.ping;
   const waitSec = Math.max(5, Number(a.wait) || 45);
   const sent = await slackPost('chat.postMessage', {
@@ -2058,7 +2073,9 @@ if (a.ping) {
         elements: [
           { type: 'mrkdwn', text: 'type: `x-ping`' },
           { type: 'mrkdwn', text: `to: \`${target}\`` },
-          { type: 'mrkdwn', text: `session: \`${selfLabel ?? 'unknown'}\`` },
+          // No ?? 'unknown' fallback: the guard above already refuses when selfLabel is
+          // unresolvable, so by this point it is always a real label.
+          { type: 'mrkdwn', text: `session: \`${selfLabel}\`` },
           // ⚠ EVERY hand-built context block must carry this. A path that omits it makes
           // its messages read as `plugin=?`, which the degradation rule interprets as
           // "older than the version that started announcing" - a confident and WRONG
