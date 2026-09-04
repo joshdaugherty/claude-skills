@@ -662,6 +662,12 @@ const selfLabel =
   a.session ||
   process.env.CLAUDE_SESSION_NAME ||
   (process.env.CLAUDE_CODE_SESSION_ID ? process.env.CLAUDE_CODE_SESSION_ID.slice(0, 8) : null);
+// True only when --session was NOT passed AND the resolved label came from the truncated
+// session id, never from CLAUDE_SESSION_NAME - a human (or a session) naming itself via the
+// env var is a choice, not a default, whichever mechanism it used. --doctor already treats
+// this exact fallback as "cannot tell you anything about your real lane"; every OTHER caller
+// of selfLabel presented it as chosen instead. (#203)
+const selfLabelDefaulted = !a.session && !process.env.CLAUDE_SESSION_NAME && Boolean(selfLabel);
 const ignored = new Set(a['ignore-session']);
 if (selfLabel && !a['include-self']) ignored.add(selfLabel);
 
@@ -4278,6 +4284,19 @@ if (heartbeatSec > 0) {
       `[watch] heartbeat of ${heartbeatSec}s is for TESTING. Match it to the staleness window you\n` +
         '        actually care about - one beat a minute against a ten-minute N, not one every\n' +
         '        five seconds. Beating faster does not make liveness more true, it just costs.',
+    );
+  }
+  // ⚠ THIS ONE DOES NOT EXPIRE. A mislabelled ordinary post ages to STALE and is eventually
+  // ignored; a mislabelled HEARTBEAT keeps beating alive indefinitely under an id nobody
+  // chose and nobody can address - an undeclared lane a peer may --ping, count in a
+  // disjointness check, or read as a live claimant with no way to reach it. (#203)
+  if (selfLabelDefaulted) {
+    console.error(
+      `[watch] ⚠ Publishing under "${selfLabel}" - the SESSION-ID FALLBACK, not a label you\n` +
+        '        chose (no --session, no CLAUDE_SESSION_NAME). Unlike a one-off post, this\n' +
+        '        heartbeat does not age out on its own: it will keep beating under this id for\n' +
+        '        as long as this process runs, readable by no peer who was not already told to\n' +
+        '        look for it. Restart with --session <label> if this lane should be addressable.',
     );
   }
   await beat(selfLabel, heartbeatSec);

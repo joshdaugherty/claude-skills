@@ -325,9 +325,13 @@ function sessionLabel() {
    * comments, not only the body.
    */
   const named = process.env.CLAUDE_SESSION_NAME;
-  if (named) return named;
+  if (named) return { label: named, defaulted: false };
   const id = process.env.CLAUDE_CODE_SESSION_ID;
-  return id ? id.slice(0, 8) : null;
+  // ⚠ defaulted: true is what lets the caller mark this the way --doctor already marks the
+  // identical fallback ("that is the session-id fallback rather than a label you use") - the
+  // comment above this function already names the exact failure mode of NOT distinguishing
+  // this from a chosen label; this is that distinction reaching the value itself. (#203)
+  return { label: id ? id.slice(0, 8) : null, defaulted: Boolean(id) };
 }
 
 function osLabel() {
@@ -1328,7 +1332,12 @@ let contextLine = '';
 if (!a['as-app']) {
   const project = a.project ?? projectLabel();
   const worktree = a.worktree ?? worktreeLabel();
-  const session = a.session ?? sessionLabel();
+  const sessionFallback = sessionLabel();
+  const session = a.session ?? sessionFallback.label;
+  // Only true when --session was NOT passed AND the fallback used the truncated session id
+  // rather than CLAUDE_SESSION_NAME - a human (or a session) choosing to name itself is not
+  // a default, regardless of which mechanism they used to say so.
+  const sessionDefaulted = !a.session && sessionFallback.defaulted;
   const machine = a.machine ?? process.env.CLAUDE_SLACK_MACHINE ?? envFromRegistry('CLAUDE_SLACK_MACHINE') ?? hostname();
   const wantEmail =
     a['user-email'] ||
@@ -1400,6 +1409,15 @@ if (!a['as-app']) {
   // peers filtering on it see one project; the slot rides alongside rather than inside it.
   if (worktree) elements.push({ type: 'mrkdwn', text: `worktree: \`${worktree}\`` });
   if (session) elements.push({ type: 'mrkdwn', text: `session: \`${session}\`` });
+  // ⛔⛔ A SEPARATE ELEMENT, NEVER APPENDED TO session:'s OWN VALUE. meta()'s parser captures
+  // EVERYTHING after "key: " as that key's value - appending text there once corrupted the
+  // identifier itself (measured live: a claim posted this way, on `slack-claim.mjs`, could not
+  // recognise its own session as the one it had just posted, because "b4adab04" and
+  // "b4adab04 (DEFAULTED - no --session given)" do not string-compare equal anywhere this
+  // codebase matches on session). DEFAULTED, NOT LABELLED - marked the same way --doctor
+  // already marks the identical fallback, so the ONE reader who could fix a mislabelled lane
+  // (the sender) sees it too, without touching the field every match in this codebase reads. (#203)
+  if (sessionDefaulted) elements.push({ type: 'mrkdwn', text: 'session-defaulted: `true` (no --session given - see session:)' });
   if (user) elements.push({ type: 'mrkdwn', text: `user: ${user}` });
   if (machine) elements.push({ type: 'mrkdwn', text: `machine: ${machine}` });
   elements.push({ type: 'mrkdwn', text: `os: ${osLabel()}` });
