@@ -884,9 +884,20 @@ if (a.done || a.fail) {
   if (!threadRes.ok) {
     if (threadRes.error === 'ratelimited') reportRateLimited('the pre-discharge thread read', threadRes);
     else console.error(`ERROR (not a verdict): could not read the task thread: ${threadRes.error}`);
+    // Restored from resolutions()'s own pre-refactor failure branch (found by review, #202)
+    // - this read now also stands in for that check, and the reasoning is unchanged: a
+    // FAILED read is not a resolved-or-open answer, it is no answer at all.
+    console.error('Exit 2 = the question was not answered. Proceeding would risk claiming this task');
+    console.error('resolved (or already resolved) when the thread simply could not be read - an');
+    console.error('unread thread and an unresolved one look identical from here. UNKNOWN MUST NOT');
+    console.error('RENDER AS OPEN.');
     process.exit(2);
   }
-  const threadMsgs = (threadRes.messages ?? []).filter((m) => m.ts !== a.task).map((m) => ({ ts: m.ts, ...meta(m) }));
+  // text: m.text AFTER the meta() spread, deliberately - meta() only ever parses the
+  // CONTEXT BLOCK, and this guarantees the raw Slack body wins regardless, so a reader
+  // of unreadContributions()'s output always gets the real text rather than whatever a
+  // context element named "text:" would produce, if one somehow existed. (#202)
+  const threadMsgs = (threadRes.messages ?? []).filter((m) => m.ts !== a.task).map((m) => ({ ts: m.ts, ...meta(m), text: m.text }));
 
   const mine = threadMsgs.filter((c) => c.type === 'claim' && c.session === label).sort((x, y) => (x.ts < y.ts ? -1 : 1))[0];
   if (!mine) {
@@ -909,8 +920,25 @@ if (a.done || a.fail) {
   // would be defeated by reflex the second time someone hit it. (#202)
   const unread = unreadContributions(threadMsgs, label);
   if (unread.length) {
-    console.log(`⚠ ${unread.length} repl(ies) in this thread ${unread.length === 1 ? 'was' : 'were'} never shown to you. Read ${unread.length === 1 ? 'it' : 'them'} before relying on this:`);
-    for (const c of unread) console.log(`    node slack-watch.mjs --channel ${a.channel} --show ${c.ts}`);
+    // ⛔⛔ NOT a --show <ts> COMMAND (found by review, #202). A thread reply is only
+    // auto-broadcast into the channel timeline for type: claim/done/fail - an ordinary
+    // reply is thread-only unless the sender ALSO passed --broadcast, and --show reads
+    // conversations.history, the CHANNEL timeline, never the thread directly. Measured
+    // live: the command this block used to print returned "no message... found" for the
+    // exact ts it named, on the exact message this fetch had just read seconds earlier.
+    // The text is printed directly instead - it is already in hand, from the same read
+    // that found the message exists, and needs no second command that might not work.
+    console.log(`⚠ ${unread.length} repl(ies) in this thread ${unread.length === 1 ? 'was' : 'were'} never shown to you:`);
+    console.log('');
+    for (const c of unread) {
+      console.log(`  --- ${c.ts}  ${c.session ?? '?'} ---`);
+      console.log(`  ${(c.text || '(no text)').replace(/\n/g, '\n  ')}`);
+      console.log('');
+    }
+    console.log('Read before relying on this. This is not always in --show: a plain reply is');
+    console.log('thread-only unless the sender also passed --broadcast, so the channel-timeline');
+    console.log('read --show depends on can miss it entirely - the text above is read directly');
+    console.log('from the same fetch that found this message exists.');
   }
   const els = [
     { type: 'mrkdwn', text: `type: \`${kind}\`` },
