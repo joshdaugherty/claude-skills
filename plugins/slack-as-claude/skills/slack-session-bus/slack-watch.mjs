@@ -2280,12 +2280,15 @@ if (a.consistency) {
     // by hand once; if this drifts from --doctor's wording again, it is the same defect
     // class shipping a third time in one file. (#169)
     console.log('  ⚠ THIS DOES NOT MEAN ONE ROW IS STRANDED. A case-duplicate pair CAN have');
-    console.log('  both spellings written, each by a separate update on a separate run.');
+    console.log('  both spellings written, each by a separate update on a separate run -');
+    console.log('  whether THIS pair has been is below, not here.');
     console.log('  ⚠ A NO-OP UPDATE WRITES NOTHING: "already at the latest version" moves no');
     console.log('  row and no lastUpdated, so a no-op run is EVIDENCE-FREE about the write path');
     console.log('  and must not be read as if it measured one.');
     console.log('  ✔ A version-CHANGING update DOES name the path it wrote, in its own success');
     console.log('  line - confirm against this file rather than trusting it blindly.');
+    console.log('  No plugin subcommand takes a path argument, and whatever maps your cwd to a');
+    console.log('  registration key does NOT fold drive-letter case.');
     console.log('     WHAT THIS RUN OBSERVED FOR THIS PAIR, not a conclusion stored when this');
     console.log('     was written:');
     for (const r of g) console.log(`       last moved ${r.lastUpdated ?? 'unknown'}   ${r.projectPath}`);
