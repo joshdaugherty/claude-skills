@@ -606,6 +606,13 @@ try {
 }
 
 const label = a.session || process.env.CLAUDE_SESSION_NAME || (process.env.CLAUDE_CODE_SESSION_ID ?? '').slice(0, 8);
+// True only when --session was NOT passed AND the id fallback supplied the label - never for
+// CLAUDE_SESSION_NAME, which is a choice however it was made. This is the SHARPEST case of
+// #203's three: a claim posted under a fallback label names a holder that cannot be addressed
+// or --ping'd, and SKILL.md's own takeover rule makes an unanswered ping from a beating lane
+// the signature that licenses taking it over - so a task can be genuinely held, correctly in
+// every other respect, and read as abandoned.
+const labelDefaulted = !a.session && !process.env.CLAUDE_SESSION_NAME && Boolean(label);
 
 const USAGE =
   'usage: node slack-claim.mjs --channel <id> --task <ts> [--session <label>]\n' +
@@ -1066,7 +1073,25 @@ if (holder && holder.session !== label) {
 
 if (a['dry-run']) {
   console.log(`DRY RUN - would claim task ${a.task} as "${label}".`);
+  // ⚠ WITHOUT THIS, --dry-run IS BLIND TO THE WHOLE #203 FEATURE - not "shows no warning
+  // for a defaulted label" but "never reaches the code that would decide", since this exits
+  // before labelDefaulted is even consulted. --dry-run's whole job is "what would the real
+  // send do" - a real claim under this same label DOES warn and DOES mark the message, so
+  // the preview should say so too. (found by review, #203)
+  if (labelDefaulted) {
+    console.log(`  ⚠ session: "${label}" is the SESSION-ID FALLBACK (no --session given) - a`);
+    console.log('    real claim would warn about this and mark the message session-defaulted.');
+  }
   process.exit(0);
+}
+
+if (labelDefaulted) {
+  console.error(
+    `⚠ Claiming as "${label}" - the SESSION-ID FALLBACK, not a label you chose (no --session,\n` +
+      '  no CLAUDE_SESSION_NAME). A claim under this label cannot be addressed or --ping\'d - a\n' +
+      '  beating lane with no answer to a directed ping is what licenses a stale takeover, so a\n' +
+      '  genuinely held task can read as abandoned. Re-run with --session <label> if this matters.',
+  );
 }
 
 const note = a.note ? `\n\n${a.note}` : '';
@@ -1074,6 +1099,13 @@ const elements = [
   { type: 'mrkdwn', text: 'type: `claim`' },
   { type: 'mrkdwn', text: `session: \`${label}\`` },
 ];
+// ⛔⛔ A SEPARATE ELEMENT, NEVER APPENDED TO session:'s OWN VALUE - measured live, the hard
+// way: appending it here once made a claim unable to recognise its own session as the one it
+// had just posted, because meta()'s parser captures everything after "session: " as the
+// value, and "b4adab04" does not string-compare equal to "b4adab04 (DEFAULTED - ...)"
+// anywhere rankClaims()/threadClaims() match on session. A distinct field name so the
+// identifier every match in this file reads stays untouched. (#203)
+if (labelDefaulted) elements.push({ type: 'mrkdwn', text: 'session-defaulted: `true` (no --session given - see session:)' });
 
 // ⚠ A TAKEOVER MUST BE ANNOUNCED, because it is the point where readers can legitimately
 // DISAGREE. Sorting by ts is deterministic; staleness is a clock-dependent predicate
