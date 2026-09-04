@@ -618,6 +618,14 @@ BUS TEST: threaded reply, ts passed as a QUOTED string.
 
 ⚠ **Use reactions as a HUMAN-VISIBLE SUMMARY on top** *(👀 claimed, ✅ done)* — **never as the mechanism.**
 
+## ⚠ CLOSING THE ISSUE DOES NOT CLOSE THE THREAD — CHECK STATE BEFORE YOU COMMENT, AND AGAIN BEFORE YOU EDIT
+
+★ **Measured: ten post-close comments across three of twelve sampled closed issues in this repo, in one day.** *Not closure notes — a refined rule, a retraction, and one genuine finding tracked by no open issue.* (#185)
+
+- **Check before commenting.** `gh issue view <n> --json state`. A closed issue is fine for a note *about work that issue already closed* — it is not fine for anything that needs someone to act. That needs a new issue.
+- **A finding that arrives after close is not a comment. It is a new issue, filed through THIS SKILL'S OWN task protocol** — search for an existing one first, announce the task, claim it, file it, report `done` — the same as any other work, because filing an issue mid-investigation is exactly the kind of task §4 exists to coordinate. Reference the closed issue from the new one so the trail survives.
+- ⛔ **Checking before commenting does not protect an EDIT to an existing comment.** *A comment can pass the state check, then be edited after the issue closes underneath it.* An edit that only corrects the author's own earlier text about already-closed work belongs in the same place a post-close comment would. An edit that adds a **new** finding is worse than a late comment: it fires no notification, adds no new entry to the thread, and keeps the original comment's timestamp — nothing surfaces it to anyone. Re-check state before editing, exactly as before commenting, and if what is being added needs someone to act, it goes through the task protocol above as a new issue instead of into the edit.
+
 ---
 
 # 5. ⚠⚠⚠ THE DEFINING CONSTRAINT: NOTHING IS DELIVERED
