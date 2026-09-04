@@ -2046,11 +2046,17 @@ if (a.audit) {
 
   const invisible = replies.filter((m) => !timeline.has(m.ts));
 
+  // ⚠ THE SAME GAP #189 CLOSED FOR --show, HERE FOR A THREAD REPLY. type= below is otherwise
+  // self-asserted text a forger can type as easily as the real coordinator can; an x-directive
+  // reply gets the same verifyBotId() check and the same three-state, always-rendered suffix
+  // poll()/--show already use, via the shared coordinatorVerdictSuffix() helper. (#192)
+  const coordId = coordinatorBotId();
   console.log(`Thread ${a.audit}: ${replies.length} repl(ies).`);
   for (const m of replies) {
     const { meta } = parseMessage(m);
     const seen = timeline.has(m.ts);
-    console.log(`  ${seen ? 'visible  ' : 'INVISIBLE'} ${m.ts}  type=${meta.type ?? '?'} said-by=${meta.session ?? '?'}`);
+    const type = meta.type === 'x-directive' ? `${meta.type}${coordinatorVerdictSuffix(verifyBotId(m, coordId))}` : (meta.type ?? '?');
+    console.log(`  ${seen ? 'visible  ' : 'INVISIBLE'} ${m.ts}  type=${type} said-by=${meta.session ?? '?'}`);
   }
   if (invisible.length) {
     console.log('');
