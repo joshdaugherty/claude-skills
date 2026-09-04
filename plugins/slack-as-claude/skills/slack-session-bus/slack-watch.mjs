@@ -3449,10 +3449,22 @@ if (a.doctor) {
   // `if (!shown.length)` arm below, so ONE unrelated ask - the presence ask fires on every
   // run not made from a currently-heartbeating lane, and the duplicate-registration ask can
   // be permanent on a machine - suppressed the clone-vs-running alarm entirely. (#122)
+  // ⚠ THE EXPLANATION BELOW USED TO BE UNCONDITIONAL, AND WAS FALSE WHENEVER comparedToCache
+  // WAS TRUE - the ordinary "a few releases behind" state, where a cache entry exists AND its
+  // own ask fires a few lines below. "No ask fired" and "no cache entry exists" were both
+  // contradicted by the same run's own output. comparedToCache is computed three lines above
+  // this block and was never consulted here - the same shape #144 fixed for the unchecked
+  // list: EMIT THE OBSERVATION, NOT THE CONCLUSION. (#195)
   if (cloneNewer) {
     console.log(`⛔ THE MARKETPLACE CLONE HAS ${available.version} AND YOU ARE RUNNING ${runningVer}.`);
-    console.log('  No ask fired for it: every version ask is guarded on a CACHE entry that does');
-    console.log('  not exist here, so the clone was compared to the cache and never to you.');
+    if (comparedToCache) {
+      console.log('  A separate RUNNING vs CACHED comparison runs below - this alarm is a DIFFERENT');
+      console.log('  one, clone vs running, with no cache-gated ask of its own: it fires whenever');
+      console.log('  the clone is newer than what you are running, cache or no cache.');
+    } else {
+      console.log('  No ask fired for it: every version ask is guarded on a CACHE entry that does');
+      console.log('  not exist here, so the clone was compared to the cache and never to you.');
+    }
     console.log('');
   }
 
