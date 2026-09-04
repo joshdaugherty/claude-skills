@@ -2274,12 +2274,27 @@ if (a.consistency) {
     console.log('');
     console.log('  ⛔ SAME DIRECTORY, TWO SPELLINGS - an update moves ONE, unpredictably:');
     for (const r of g) console.log(`       ${String(r.version).padEnd(9)}${r.projectPath}`);
-    console.log('     WHAT THIS RUN OBSERVED - not a conclusion stored when this was written:');
+    // ⚠ PORTED FROM --doctor's copy of this same finding (#162, #164) - this printer is a
+    // SEPARATE piece of text, not the same string reused, and it kept the pre-#164 wording
+    // for three releases after the retraction shipped through the sibling command. Ported
+    // by hand once; if this drifts from --doctor's wording again, it is the same defect
+    // class shipping a third time in one file. (#169)
+    console.log('  ⚠ THIS DOES NOT MEAN ONE ROW IS STRANDED. A case-duplicate pair CAN have');
+    console.log('  both spellings written, each by a separate update on a separate run.');
+    console.log('  ⚠ A NO-OP UPDATE WRITES NOTHING: "already at the latest version" moves no');
+    console.log('  row and no lastUpdated, so a no-op run is EVIDENCE-FREE about the write path');
+    console.log('  and must not be read as if it measured one.');
+    console.log('  ✔ A version-CHANGING update DOES name the path it wrote, in its own success');
+    console.log('  line - confirm against this file rather than trusting it blindly.');
+    console.log('     WHAT THIS RUN OBSERVED FOR THIS PAIR, not a conclusion stored when this');
+    console.log('     was written:');
     for (const r of g) console.log(`       last moved ${r.lastUpdated ?? 'unknown'}   ${r.projectPath}`);
-    console.log('     ⚠ Both timestamps recent = both rows are reachable and what selects');
-    console.log('     between them is unknown. Only one ever moving = the other may not be.');
-    console.log('     This tool asserted the second and was wrong within the hour, so it now');
-    console.log('     prints the observation and lets you draw the conclusion.');
+    console.log('     ⚠ `unknown` above means this row has never been WRITTEN BY AN UPDATE, not');
+    console.log('     that it is unreachable - a row nobody has updated from reads `unknown`');
+    console.log('     forever regardless of whether it could be written.');
+    console.log('     ⚠ WHAT SELECTS BETWEEN THEM IS STILL UNKNOWN. The likely candidate is the');
+    console.log('     case of the invoking cwd, but that is a correlate observed on single runs,');
+    console.log('     not a demonstration.');
     console.log('     Do not hand-edit the state file: it is the evidence.');
   }
 
