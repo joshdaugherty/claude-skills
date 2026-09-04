@@ -315,7 +315,7 @@ async function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 55; // raise when adding cases - a constant, reviewed on change
+  const CASE_FLOOR = 59; // raise when adding cases - a constant, reviewed on change (+4 for safeJson, #161)
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -1254,10 +1254,12 @@ async function poll() {
       rateLimitWaitMs = (rateLimitHadHeader ? headerSecs : 60) * 1000;
       rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + rateLimitWaitMs);
     }
-    // ⚠ Not routed through safeJson() - a throw here already lands in this catch, which
-    // already treats it as transient and keeps the loop alive. Checked directly against a
-    // stubbed non-JSON body rather than assumed from reading the shape. (#161)
-    res = await r.json();
+    // ⚠ Routed through safeJson() so a non-JSON body reads as `non_json_response` here
+    // too - the same grep-able marker as the other four sites, rather than this one path
+    // alone reporting the raw parse error text. Before this, a throw here already landed
+    // in this catch and kept the loop alive regardless - checked directly against a
+    // stubbed non-JSON body, not assumed from reading the shape. (#161)
+    res = await safeJson(r);
   } catch (err) {
     // Transient: a failed request must not kill a long-running watch.
     console.error(`[watch] request failed: ${err.message}`);
