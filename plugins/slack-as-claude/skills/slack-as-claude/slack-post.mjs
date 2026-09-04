@@ -403,12 +403,15 @@ function claudeUser(includeEmail) {
  * `team_id` is the strongest key: exact, and stable across workspace renames. `team` and
  * `url` are accepted for convenience and matched case-insensitively when present.
  *
- * ★ Two more OPTIONAL keys, for the coordinator role (#165): `coordinator_token_env` names
- * the env var holding a SECOND, distinct bot token, the same way `token_env` names the
- * first. `coordinator_bot_id` is that token's `bot_id` (from `--whoami --as-coordinator`) -
- * an IDENTIFIER, not a credential, safe to commit here exactly like `team_id` is. Neither
- * key is validated by this function - an absent or wrong `coordinator_bot_id` fails in the
- * safe direction (a real directive reads as unverified, never the reverse).
+ * ★ Three more OPTIONAL keys, for the coordinator role (#165, #173): `coordinator_token_env`
+ * names the env var holding a SECOND, distinct bot token, the same way `token_env` names the
+ * first. `coordinator_bot_id` and `coordinator_user_id` are that token's `bot_id`/`user_id`
+ * (both from `--whoami --as-coordinator`) - IDENTIFIERS, not credentials, safe to commit here
+ * exactly like `team_id` is. `coordinator_bot_id` is what `verifyBotId()` checks a message
+ * against; `coordinator_user_id` is what a channel-membership check (`--member`,
+ * slack-watch.mjs) looks for, since conversations.members returns user ids, not bot ids. None
+ * of the three keys are validated by this function - an absent or wrong `coordinator_bot_id`
+ * fails in the safe direction (a real directive reads as unverified, never the reverse).
  */
 function repoWorkspace() {
   const root = gitRoot();
