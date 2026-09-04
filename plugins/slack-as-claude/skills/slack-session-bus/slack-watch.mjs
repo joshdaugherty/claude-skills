@@ -926,14 +926,21 @@ function coordinatorBotId() {
  * (1) This workspace's #bus channel, ordinary bot token, `conversations.history`:
  *     bot_id=B0BTPRJNFQ9  bot_profile={"id":"B0BTPRJNFQ9","app_id":"A0BTMMKRPRQ",...}
  *
- * (2) A second, independent workspace - 196 bot-posted messages sampled across BOTH
- * `conversations.history` and `conversations.replies`, with a genuine control (two DIFFERENT
+ * (2) A second, independent workspace - primarily 196 bot-posted `conversations.history`
+ * messages (a further 3 sampled from one `conversations.replies` thread behaved identically,
+ * too small a sample on its own to weigh equally), with a genuine control (two DIFFERENT
  * apps' tokens, confirming the check can return `forged` and not just a constant `verified`):
  *
- *     msg.bot_id       present on 196 of 196 bot-posted messages, both endpoints
- *     msg.bot_profile  ABSENT on all 82 that carry subtype=thread_broadcast
+ *     msg.bot_id       present on all 196 `conversations.history` bot-posted messages sampled
+ *     msg.bot_profile  ABSENT on the ~81-82 of those carrying subtype=thread_broadcast
  *     two apps' tokens -> two DISTINCT bot_id values (proves discrimination, not a constant)
  *     one human post   -> neither field present -> correctly resolves 'forged'
+ *
+ * ⚠ THE 81-VS-82 COUNT ITSELF IS UNRECONCILED, ON PURPOSE. Two write-ups of what looks like
+ * one dataset (claude-skills #165's own comment thread: 82; UAMS-Web/wordpress-importer #868:
+ * 81) disagree by one message, and neither is corrected here to match the other - stating a
+ * false-precision blend would be worse than naming the one-message gap plainly. Immaterial to
+ * the conclusion either way: every version of the count is "effectively all of them."
  *
  * thread_broadcast is exactly what the claim protocol posts (§5's done/fail --broadcast), so
  * reading `msg.bot_profile?.id` INSTEAD OF `msg.bot_id` - the change this comment used to
