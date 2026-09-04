@@ -3458,9 +3458,9 @@ if (a.doctor) {
   if (cloneNewer) {
     console.log(`⛔ THE MARKETPLACE CLONE HAS ${available.version} AND YOU ARE RUNNING ${runningVer}.`);
     if (comparedToCache) {
-      console.log('  A separate RUNNING vs CACHED comparison runs below - this alarm is a DIFFERENT');
-      console.log('  one, clone vs running, with no cache-gated ask of its own: it fires whenever');
-      console.log('  the clone is newer than what you are running, cache or no cache.');
+      console.log('  A cache entry DOES exist here - this alarm is a DIFFERENT comparison, clone vs');
+      console.log('  running rather than running vs cache, with no cache-gated ask of its own: it');
+      console.log('  fires whenever the clone is newer, independently of whatever the cache holds.');
     } else {
       console.log('  No ask fired for it: every version ask is guarded on a CACHE entry that does');
       console.log('  not exist here, so the clone was compared to the cache and never to you.');
