@@ -1355,8 +1355,23 @@ function rearmBlocks(label, age, every, ambiguous) {
   };
 }
 
-/** Posts rearmBlocks()'s announcement. Failure is logged, never fatal - the presence beat
- * itself (beat()'s caller) must land regardless of whether this side notice does. */
+/**
+ * Posts rearmBlocks()'s announcement. A graceful ok:false is logged, not fatal - the
+ * presence beat itself (beat()'s caller) still lands. Not covered: a hard fetch() failure
+ * (DNS, connection refused) here or in the primary beat below would still throw uncaught -
+ * this inherits that exposure from slackPost() itself, which no caller in this file wraps
+ * in try/catch, rather than introducing it. (found by review, #196)
+ *
+ * ⚠ NOT DEDUPED ACROSS RESTARTS, and this repo's own rateLimitedUntil backoff does not cover
+ * THIS call specifically - it is only set from the PRIMARY beat post's own 429 handling, a
+ * few lines below this function's call site, not from here. So this posts a NEW channel
+ * message on every adoption, unlike the silent chat.update it replaces: a label stuck in a
+ * crash-restart loop now posts real traffic to the shared channel on every cycle, where it
+ * previously posted none. Accepted, not engineered around: the scenario already requires a
+ * degraded, restarting-every-few-seconds process, and Slack's own server-side rate limiting
+ * still caps how much of it actually lands, independent of whether this file's own backoff
+ * bookkeeping covers the call. Disclosed here rather than left implicit. (found by review, #196)
+ */
 async function announceRearm(label, p) {
   const age = p.beat ? Math.max(0, Math.floor(Date.now() / 1000 - p.beat)) : null;
   const ambiguous = age != null && looksLikeCollision(age, p.every);
