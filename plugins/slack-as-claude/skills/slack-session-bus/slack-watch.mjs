@@ -2553,9 +2553,17 @@ if (a.doctor) {
         'TWO REGISTRATIONS FOR ONE DIRECTORY, differing only in path case:\n' +
           g.map((r) => `    ${String(r.version).padEnd(8)} ${r.projectPath}`).join('\n') +
           '\n  Windows matches paths case-insensitively, so these are the SAME folder.\n' +
-          '  ⛔ AN UPDATE MOVES ONE OF THEM AND NOTHING TELLS YOU WHICH. No plugin subcommand\n' +
-          '  takes a path argument, and whatever maps your cwd to a registration key does NOT\n' +
-          '  fold drive-letter case.\n' +
+          '  ✔ BOTH ROWS ARE REACHABLE - measured across two separate updates on this\n' +
+          '  machine, each landing on a DIFFERENT row (one run moved the lowercase spelling,\n' +
+          '  a later run moved the uppercase one). Neither is stranded. (#162)\n' +
+          '  ⚠ A NO-OP UPDATE WRITES NOTHING: "already at the latest version" moves no row\n' +
+          '  and no `lastUpdated`, so a no-op run is EVIDENCE-FREE about the write path and\n' +
+          '  must not be read as if it measured one.\n' +
+          '  ✔ A version-CHANGING update DOES name the path it wrote, in its own success\n' +
+          '  line - no longer silent about that, though worth confirming against this file\n' +
+          '  rather than trusting it blindly.\n' +
+          '  No plugin subcommand takes a path argument, and whatever maps your cwd to a\n' +
+          '  registration key does NOT fold drive-letter case.\n' +
           '  ⚠ AN EARLIER VERSION OF THIS ASK ALSO SAID a worktree "resolves to its PRIMARY\n' +
           '  checkout (measured, two machines, two drives)". THAT IS RETRACTED. The evidence\n' +
           "  was this tool's OWN `<- THIS PROJECT` marker, which had a prefix bug and labelled\n" +
@@ -2568,10 +2576,12 @@ if (a.doctor) {
           g
             .map((r) => `    ${String(r.version).padEnd(9)}last moved ${r.lastUpdated ?? 'unknown'}   ${r.projectPath}`)
             .join('\n') +
-          '\n  ⚠ Read those two timestamps. If both have moved, BOTH rows are reachable and\n' +
-          '  what selects between them is unknown. If only one ever moves, the other may be\n' +
-          '  unreachable. THIS TOOL PREVIOUSLY ASSERTED THE SECOND AND WAS WRONG WITHIN THE\n' +
-          '  HOUR, which is why it now prints the observation and lets you draw it.\n' +
+          '\n  ⚠ WHAT SELECTS BETWEEN THEM IS STILL UNKNOWN - reachability is settled above,\n' +
+          '  this is not. The likely candidate is the case of the invoking cwd, but that is\n' +
+          '  a correlate observed on single runs, not a demonstration; a cwd-canonicalisation\n' +
+          '  mechanism was asserted from this same kind of correlate earlier in this project\n' +
+          '  and had to be retracted (see above). These timestamps are kept so a pattern\n' +
+          "  across future updates can eventually be read off this machine's own history.\n" +
           '  ⚠ Re-run --consistency after an update rather than assuming which row landed.\n' +
           '  ⚠ And do NOT hand-edit installed_plugins.json - which registration a running\n' +
           '  session actually RESOLVES is unverified, and editing destroys the evidence.\n' +
