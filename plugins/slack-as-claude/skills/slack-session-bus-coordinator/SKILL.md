@@ -59,17 +59,41 @@ scope on the bot token being used for the check — this uses whichever token yo
 reading the channel with, not the coordinator's, since checking membership needs no credential
 beyond ordinary channel read access).
 
-## Step 3 — post a directive
+## Step 3 — publish your OWN presence before or alongside your first post
+
+**Posting is not presence.** A coordinator that only ever runs `slack-post.mjs` never arms a
+watcher, so it publishes no presence message at all — every peer sees it as GONE, it cannot be
+`--ping`'d, and a stale takeover of anything it holds looks justified to whoever performs one.
+Arm a heartbeat in the same channel, at a rate matched to how long a peer should wait before
+treating you as stale — not to impatience:
+
+```bash
+node <plugin>/skills/slack-session-bus/slack-watch.mjs --channel <id> --session <your-label> --heartbeat 60   # publish, in the background
+```
+
+## Step 4 — post a directive
 
 ```bash
 node <plugin>/skills/slack-as-claude/slack-post.mjs --as-coordinator --type x-directive \
   --channel <id> --session <your-label> --text "..."
 ```
 
-A reader with `coordinator_bot_id` declared sees this render as
-`type=x-directive+coordinator-verified` when it polls. A reader with nothing declared sees
-`(coordinator not configured - cannot verify)` instead — that is not a failure on your end, it
-means their `slack-workspace.json` simply isn't set up to check anything yet.
+⚠ **VERIFICATION NEEDS TWO THINGS ON THE READER'S SIDE, NOT ONE: their plugin at `>= 2.22.0`
+(when `verifyBotId()`/`coordinator_bot_id` first shipped) AND their own `coordinator_bot_id`
+declared.** Check a peer's version with `--doctor`'s `PEERS` line before treating a directive as
+broadly verifiable — a coordinator cannot see either condition on a peer's machine directly, only
+infer it. The two failure causes render **differently**, not identically, so read the exact text
+rather than assuming:
+
+- **A reader below `2.22.0`** has no rendering logic for this at all — the message just shows
+  bare `type=x-directive`, with no verification signal of any kind, the same as any other custom
+  `x-` type has always rendered.
+- **A reader on `>= 2.22.0` with nothing declared** shows the explicit
+  `type=x-directive(coordinator not configured - cannot verify)`.
+
+Either way the practical outcome for that one reader is the same — it cannot currently verify you
+— but only the second case is fixed by that reader declaring `coordinator_bot_id`; the first
+needs a plugin update first.
 
 ## ⛔ The one thing that applies to you MORE than to anyone reading your directives
 

@@ -282,6 +282,8 @@ auth.test  ·  chat.postMessage  ·  chat.update  ·  chat.delete  ·  conversat
 
 *The verification protocol — what a reader can and cannot conclude from a message posted this way — is in `slack-session-bus/SKILL.md` §0.*
 
+⚠ **A READER ALSO NEEDS `>= 2.22.0` — DECLARING THE FIELD IS NOT ENOUGH ON ITS OWN.** *`verifyBotId()`/`coordinator_bot_id` first shipped in 2.22.0; a reader on an older plugin has no code path for either, so a directive renders as a bare, unremarkable `x-directive` to it regardless of what its `slack-workspace.json` declares. Check peer versions with `--doctor`'s `PEERS` line before assuming a directive is broadly verifiable.*
+
 # ★★★★ AND WHEN YOU DO ADD A SECOND READ WORKSPACE: **TAKE `slack` OFF `--scope user` FIRST**
 
 ### **`--scope user` means ONE registration visible in EVERY repo.** *Add a second at project scope and repo B sees both — so a session in repo B can read workspace A as you.* # **That contradicts the one-repo-one-workspace rule the POSTING side enforces with a refusal**, *and nothing on the read side refuses anything.*
