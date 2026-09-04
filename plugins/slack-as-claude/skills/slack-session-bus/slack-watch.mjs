@@ -323,7 +323,7 @@ async function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 70; // raise when adding cases - a constant, reviewed on change (+4 for memberStatus, #173)
+  const CASE_FLOOR = 72; // raise when adding cases - a constant, reviewed on change (+6: 5 memberStatus cases + 1 new --member flag-in-USAGE line, #173) - verified against the real --self-test count, not computed by eye
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -479,6 +479,7 @@ async function selfTest() {
     ['absent from the list -> not-a-member', memberStatus(['U1', 'U2'], 'U3'), 'not-a-member'],
     ['empty list -> not-a-member, not unknown', memberStatus([], 'U1'), 'not-a-member'],
     ['a failed read (null) -> unknown, never not-a-member', memberStatus(null, 'U1'), 'unknown'],
+    ['undefined reads as unknown too, not a crash', memberStatus(undefined, 'U1'), 'unknown'],
   ];
   for (const [name, got, want] of msCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  memberStatus: ${name}`);
   const msBad = msCases.filter(([, got, want]) => got !== want).length;
@@ -948,7 +949,11 @@ function verifyBotId(msg, expectedBotId) {
  * an empty channel. (#173)
  */
 function memberStatus(memberIds, userId) {
-  if (memberIds === null) return 'unknown';
+  // `== null` catches undefined too - the one real call site only ever passes null or a
+  // real array, but verifyBotId()'s sibling three-way function is crash-safe against both,
+  // and this one should not be narrower than the pattern it says it mirrors. (found by
+  // review, #173)
+  if (memberIds == null) return 'unknown';
   return memberIds.includes(userId) ? 'member' : 'not-a-member';
 }
 
@@ -1848,7 +1853,11 @@ if (a.audit) {
  * its first real post, rather than discovering it from a live x-directive failing. (#173)
  */
 if (a.member) {
-  if (!a.channel) die('--member needs --channel.', 2);
+  // ⚠ NO REDUNDANT --channel CHECK HERE, DELIBERATELY. The top-level gate (`!a.channel &&
+  // !LOCAL_ONLY`) already requires --channel for every flag but --consistency, and fires
+  // FIRST - a check here was DEAD CODE, silently replaced by the generic guard's own exit 1
+  // and full USAGE dump instead of this block's intended exit 2 and specific message. Found
+  // by review, not by reading: the guard had never actually been reached. (#173)
   const memberIds = [];
   let cur = null;
   let pages = 0;
