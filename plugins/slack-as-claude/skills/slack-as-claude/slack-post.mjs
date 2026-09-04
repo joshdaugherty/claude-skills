@@ -1241,6 +1241,26 @@ if (a.type === 'x-directive' && !a['as-coordinator']) {
   );
 }
 
+/**
+ * ⚠ THE SIBLING GAP TO THE CHECK ABOVE, NOT THE SAME ONE. That check catches --type
+ * x-directive without --as-coordinator; this catches --as-coordinator whose OWN repo binding
+ * has not declared what a reader would check the message against. `.claude/slack-workspace.json`
+ * is COMMITTED, so every reader who has pulled this repo's copy is in exactly the same
+ * boat as the poster - an absent coordinator_bot_id here does not just affect THIS post, it
+ * means nothing posted as coordinator from this repo can currently verify for anyone. A
+ * WARNING, not a die(), for the same reason repoWorkspace()'s own doc comment gives: an
+ * absent coordinator_bot_id already fails in the safe direction (unverified, never a false
+ * positive), so refusing to post would only block an already-safe mistake. (#175)
+ */
+if (a['as-coordinator'] && !repoWorkspace()?.coordinator_bot_id) {
+  console.error(
+    "[post] ⚠ --as-coordinator, but this repo's slack-workspace.json declares no\n" +
+      '       coordinator_bot_id: no reader of this binding can verify anything posted as\n' +
+      '       coordinator, including this message. Run --whoami --as-coordinator and paste\n' +
+      '       the printed bot_id into coordinator_bot_id to fix it.',
+  );
+}
+
 const payload = { channel: a.channel, text: TEXT };
 
 if (a['thread-ts']) {
