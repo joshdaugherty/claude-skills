@@ -778,13 +778,26 @@ async function slackPost(method, body) {
  * as a function of how long ago it first posted and how much has been posted since. (#177)
  *
  * Paging to exhaustion (bounded by MAX_HISTORY_PAGES, matching --audit's own cap - unbounded
- * pagination against a channel with years of history would be its own denial-of-service) is
- * the default for exactly this reason. The one exception is `--ping`'s wait loop, which only
- * ever needs messages newer than the ping it just sent - passing `{ full: false }` there.
+ * pagination against a channel with years of history would be its own denial-of-service, and
+ * --member's own independent page-walk already shares this same 25-page bound, though not the
+ * same named constant - left as three separate literals rather than a shared refactor, since
+ * unifying them touches code this fix did not otherwise need to change) is the default for
+ * exactly this reason. The one exception is `--ping`'s wait loop, which only ever needs
+ * messages newer than the ping it just sent - passing `{ full: false }` there.
+ *
+ * ⚠ THIS COST IS REAL AND UNAVOIDABLE FOR A CALLER THAT NEEDS THE WHOLE PICTURE (roster(),
+ * --retire's cleanup) - correctly reading a busy channel now costs up to MAX_HISTORY_PAGES
+ * round trips instead of one, and that cost only grows as the channel does. Accepted
+ * deliberately: the alternative is the exact silent-forever failure #177 was filed over.
+ * `stopWhen`, below, is the mitigation for callers that DON'T need the whole picture - a
+ * caller asking "does X exist" can stop the instant it does, rather than draining every
+ * page to confirm what page one already answered. beat()'s own cold-start lookup, the
+ * highest-frequency site this function has (once per process start, and again after any
+ * message-is-gone recovery), uses exactly this.
  */
 const MAX_HISTORY_PAGES = 25;
 
-async function recentMessages(limit = 200, { full = true } = {}) {
+async function recentMessages(limit = 200, { full = true, stopWhen = null } = {}) {
   const url = new URL(HISTORY);
   url.searchParams.set('channel', a.channel);
   url.searchParams.set('limit', String(limit));
@@ -836,8 +849,12 @@ async function recentMessages(limit = 200, { full = true } = {}) {
     // nothing" contract this function has always made. (#177)
     if (!res.ok) return { ok: false, error: res.error, messages: [], truncated: false };
     messages.push(...(res.messages ?? []));
-    cur = full && res.has_more ? (res.response_metadata?.next_cursor || null) : null;
     pages++;
+    // ⚠ AN EARLY STOP ON A FOUND ANSWER IS NOT A TRUNCATION. `truncated` means "there was
+    // more, and it was not read" - a caller whose question this page already answers has
+    // nothing usable left unread, so this returns truncated:false, not true. (#177)
+    if (stopWhen && stopWhen(messages)) return { ok: true, messages, truncated: false };
+    cur = full && res.has_more ? (res.response_metadata?.next_cursor || null) : null;
   } while (cur && pages < MAX_HISTORY_PAGES);
   // `cur` still set here means the loop stopped on the page cap, not because Slack ran out -
   // there IS more, and it was not read. Distinct from `!full`, which never even asks.
@@ -1216,7 +1233,14 @@ async function beat(label, every) {
     // Fail-safe, and it now SAYS which case it is in: on a failed lookup we post a fresh
     // presence message rather than updating in place. That is a safe degradation (a
     // duplicate beats a missing heartbeat) but it litters, so it must not be silent.
-    const look = await recentMessages();
+    //
+    // ⚠ stopWhen, NOT the default drain-every-page behavior. This is the highest-frequency
+    // caller recentMessages() has - once per process start, and again after any
+    // message-is-gone recovery - and it only ever asks one question: is MY OWN presence
+    // message anywhere in history. The instant a page contains it, later pages have
+    // nothing left to contribute; draining all MAX_HISTORY_PAGES of them regardless would
+    // make every watcher's startup pay the full cost of a busy channel for no benefit. (#177)
+    const look = await recentMessages(200, { stopWhen: (msgs) => msgs.some((m) => presenceOf(m)?.session === label) });
     if (!look.ok) console.error(`[watch] could not look up an existing presence message (${look.error}); posting a NEW one, which may leave an orphan.`);
     for (const m of look.messages) {
       const p = presenceOf(m);
@@ -1246,19 +1270,28 @@ async function beat(label, every) {
       // The watcher kept polling throughout - only presence went silent, permanently,
       // with no restart able to fix it except by restarting the process. (#177)
       //
-      // ⚠⚠ AN ALLOWLIST, NOT "EVERY OTHER FAILURE" - narrowed by review. recentMessages()
-      // is a bounded, unpaginated read (its own open defect, #177), so the lookup this
-      // triggers can MISS a message that still exists but has scrolled past the window -
-      // and a miss here means a DUPLICATE gets posted, littering exactly the way #177
-      // documents happening. Clearing must be conservative until that window bug is fixed:
-      // only for an error that has been MEASURED to mean the message is actually gone, not
-      // for anything merely consistent with that story. `message_not_found` is confirmed
-      // live (this ts, deleted from a separate process, chat.update returned exactly this).
-      // Everything else - `non_json_response` (a synthetic label safeJson() invents for an
-      // unparseable body, saying nothing about the message), transient network errors, an
-      // unmeasured guess like `cant_update_message` - falls through and RETRIES THE SAME
-      // ts next tick instead, which is always safe: at worst presence stays briefly behind,
-      // never duplicated.
+      // ⚠⚠ AN ALLOWLIST, NOT "EVERY OTHER FAILURE" - narrowed by review, and STAYS narrow
+      // even now that recentMessages() pages to exhaustion (#177). Paging fixed the
+      // ORIGINAL cause (a message aged past a 200-message window reading as gone) but did
+      // not remove the general shape: recentMessages() still returns ok:false, messages:[]
+      // on ANY page failure anywhere in its walk - and a longer walk (up to
+      // MAX_HISTORY_PAGES calls now, versus 1 before) is MORE surface for a transient
+      // failure to land on, not less. A miss from that still means a DUPLICATE gets
+      // posted - the fallback above (`if (!presenceTs)`) cannot tell "confirmed gone" from
+      // "could not finish looking," and littering on the latter is the same mistake this
+      // allowlist exists to prevent. So: only clear for an error MEASURED to mean the
+      // message is actually gone, never for anything merely consistent with that story.
+      // `message_not_found` is confirmed live (this ts, deleted from a separate process,
+      // chat.update returned exactly this). Everything else - `non_json_response` (a
+      // synthetic label safeJson() invents for an unparseable body, saying nothing about
+      // the message), a transient network error, an unmeasured guess like
+      // `cant_update_message` - falls through and RETRIES THE SAME ts next tick instead,
+      // which is always safe: at worst presence stays briefly behind, never duplicated.
+      // (The pre-existing, already-disclosed fallback still applies if a cold-start lookup
+      // itself fails outright: "posting a NEW one, which may leave an orphan" - unchanged
+      // by this file, and slightly more likely to fire now that the lookup it guards is a
+      // longer walk. A known, accepted tradeoff, not a new gap - the alternative is the
+      // same silent-forever failure #177 was filed over.)
       presenceTs = null;
     }
   }
@@ -3488,10 +3521,18 @@ if (a['announce-install']) {
    * see from their own side.
    */
   {
-    const seen = await recentMessages(200);
+    const seen = await recentMessages(200, { stopWhen: (msgs) => msgs.some((m) => presenceOf(m)?.session === a.session) });
     if (seen.ok) {
       const mine = seen.messages.map(presenceOf).find((p) => p && p.session === a.session);
-      if (!mine) {
+      // ⚠ A TRUNCATED NEGATIVE IS NOT A CONFIRMED ABSENCE - the search stopped at the page
+      // cap without finding a match, which means "not found in what was read", not "does
+      // not exist". Softened rather than asserted, same reasoning as roster()'s. (#177)
+      if (!mine && seen.truncated) {
+        console.error(
+          `[watch] ⚠ could not confirm whether "${a.session}" publishes presence - channel\n` +
+            `        history exceeds the ${MAX_HISTORY_PAGES}-page search bound. Check --presence directly.`,
+        );
+      } else if (!mine) {
         console.error(
           `[watch] ⚠ "${a.session}" publishes no presence message, so this announcement will\n` +
             '        arrive from a label peers read as ACTIVE - present, but NOT REACHABLE.\n' +
@@ -3822,16 +3863,19 @@ if (a.show) {
   if (!/^\d{10,}\.\d{6}$/.test(a.show)) {
     die(`--show ${a.show}: not a Slack ts. Quote it exactly as printed - 1788293713.927319.`, 2);
   }
-  const read = await recentMessages(200);
+  // ⚠ STOPS THE INSTANT THE TS IS FOUND, EARLY-EXITING PAGINATION - "is there a message
+  // with THIS exact ts" needs no further pages once answered. (#177)
+  const read = await recentMessages(200, { stopWhen: (msgs) => msgs.some((m) => m.ts === a.show) });
   if (!read.ok) die(`could not read the channel: ${read.error}`, 1);
   // STRING comparison, never Number(). A ts has 16 significant digits and coercing it
   // rounds - the same defect that makes --thread-ts silently post to the channel instead.
   const hit = read.messages.find((m) => m.ts === a.show);
   if (!hit) {
     die(
-      `no message with ts ${a.show} in the recent window.\n` +
-        '  It may have aged out of the fetch, or the ts may be from another channel.\n' +
-        '  ⚠ This is "not in the window", NOT "does not exist" - do not read it as deleted.',
+      `no message with ts ${a.show} found.\n` +
+        `  Searched up to ${MAX_HISTORY_PAGES} pages of history; the ts may be from another\n` +
+        '  channel, or the channel may hold more than that search covers.\n' +
+        '  ⚠ This is "not found", NOT "does not exist" - do not read it as deleted.',
       1,
     );
   }
