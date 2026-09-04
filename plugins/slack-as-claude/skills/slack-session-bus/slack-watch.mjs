@@ -1165,6 +1165,13 @@ function warnIfColliding(p, label) {
   );
 }
 
+/**
+ * Slack chat.update errors CONFIRMED, by direct measurement, to mean the target message no
+ * longer exists to be updated - not merely errors that COULD plausibly mean that. Extend only
+ * after measuring a new one; see the comment at this constant's one use, in beat() below. (#177)
+ */
+const MESSAGE_GONE_ERRORS = ['message_not_found'];
+
 async function beat(label, every) {
   // ⛔ SHARES THE POLL BUCKET'S BACKOFF. This runs on its own setInterval, independent of
   // the poll loop's wait - without this check it keeps issuing chat.update/chat.postMessage
@@ -1198,6 +1205,29 @@ async function beat(label, every) {
     if (res.error === 'ratelimited') {
       const waitMs = (res.retryAfter || 60) * 1000;
       rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + waitMs);
+    } else if (MESSAGE_GONE_ERRORS.includes(res.error)) {
+      // ⛔⛔ ONCE SET, presenceTs NEVER WENT BACK TO null. If the target message became
+      // unupdatable - deleted, or otherwise unreachable - every later tick retried the
+      // SAME dead ts forever: chat.update cannot fail its way into chat.postMessage, and
+      // the fallback above (`if (!presenceTs)`, a fresh post is a safe degradation) could
+      // only ever fire BEFORE the first success, which is exactly when it was not needed.
+      // The watcher kept polling throughout - only presence went silent, permanently,
+      // with no restart able to fix it except by restarting the process. (#177)
+      //
+      // ⚠⚠ AN ALLOWLIST, NOT "EVERY OTHER FAILURE" - narrowed by review. recentMessages()
+      // is a bounded, unpaginated read (its own open defect, #177), so the lookup this
+      // triggers can MISS a message that still exists but has scrolled past the window -
+      // and a miss here means a DUPLICATE gets posted, littering exactly the way #177
+      // documents happening. Clearing must be conservative until that window bug is fixed:
+      // only for an error that has been MEASURED to mean the message is actually gone, not
+      // for anything merely consistent with that story. `message_not_found` is confirmed
+      // live (this ts, deleted from a separate process, chat.update returned exactly this).
+      // Everything else - `non_json_response` (a synthetic label safeJson() invents for an
+      // unparseable body, saying nothing about the message), transient network errors, an
+      // unmeasured guess like `cant_update_message` - falls through and RETRIES THE SAME
+      // ts next tick instead, which is always safe: at worst presence stays briefly behind,
+      // never duplicated.
+      presenceTs = null;
     }
   }
 }
