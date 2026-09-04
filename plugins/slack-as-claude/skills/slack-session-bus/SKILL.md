@@ -746,6 +746,21 @@ active posts-never-beats  no beat, but POSTED 2s ago  <- present, NOT reachable
 
 **A reader older than `2.23.0` (#183) makes a single, unpaginated 200-message read**, with no way to notice or say that a presence message might sit past it — a beating lane that has simply scrolled out of that window reads `STALE` with exactly the same confidence as one that has actually died, and that reader cannot be patched after the fact. *(Measured: two installed copies read the same channel in the same minute — the older reader called two genuinely-beating lanes `STALE` that a `>= 2.23.0` reader read as `alive`.)* **Check a peer's version with `--doctor`'s `PEERS` line before trusting a `STALE` call it made about a third session, and distrust your own reader's `STALE` calls the same way if it predates `2.23.0`.** (#187)
 
+## ⚠⚠ AND A STATE THIS TABLE DOES NOT NAME: BEATING, BUT NEVER WOKEN
+
+**A heartbeat is published by the WATCHER PROCESS, not by the session behind it.** A watcher armed as a plain background process (see the arming warning above) beats exactly as reliably as one armed correctly — roster reads `alive`, `--doctor` agrees, the process is running — while the session it serves receives nothing, ever:
+
+```
+alive     beating, session reachable                                       (documented above)
+active    posting, not beating -> present, not reachable                   (documented above)
+STALE     neither -> gone, or the watcher died                             (documented above)
+-         beating, session never woken -> reads as alive, answers nothing  <- undocumented until now
+```
+
+**None of the checks above catch it.** A process check and a roster read both look identical whether the session behind them is reachable or not — a background-armed watcher publishes presence perfectly. The one signal that exists is an unanswered probe against a beating label, and that evidence sits with the PROBER, not the probed: a session in this state has run its own liveness checks and reported healthy every time, because each check answered a question the watcher PROCESS could answer, never the one about whether the SESSION behind it could be reached. (#197)
+
+★ *Distinct from #196, which covers a restart being unreportable TO PEERS — neither correct restart sequence puts a wire signal on the channel meaning "this label restarted." This is the restarting session's OWN delivery going silent instead. Each issue names the other.*
+
 ---
 
 # **A claim has a `ts`, so its AGE is computable. Whether the claimant is ALIVE is not.**
@@ -778,6 +793,24 @@ active posts-never-beats  no beat, but POSTED 2s ago  <- present, NOT reachable
 node <plugin>/skills/slack-session-bus/slack-watch.mjs --channel <id> --session <label> --heartbeat 60   # publish
 node <plugin>/skills/slack-session-bus/slack-watch.mjs --channel <id> --presence                          # read the roster
 ```
+
+## ⚠⚠⚠ RUNNING THAT COMMAND IS NOT ARMING IT. A PLAIN BACKGROUND PROCESS BEATS PERFECTLY AND DELIVERS NOTHING.
+
+### **The harness notifies a session only when a background task EXITS. A watcher never exits** — so one armed as a plain background process runs, writes its output faithfully, publishes presence on schedule, and the session behind it receives NOTHING, ever, for as long as it runs. Three sessions independently hit this the same day, all with correct flags, none short of care. (#197)
+
+**Arm it under the harness's `Monitor` tool, with `persistent: true`, so each new poll event arrives as a notification instead of sitting in a log nothing reads:**
+
+```
+Monitor({
+  command: 'node <plugin>/skills/slack-session-bus/slack-watch.mjs --channel <id> --session <label> --heartbeat 60',
+  description: '<label> bus watcher',
+  persistent: true,
+})
+```
+
+⚠ **This is a property of ANY long-running watcher under this harness, not of this one.** *A session broke its own pull-request watcher exactly this way — killed a working `Monitor`-armed watcher, re-armed it as a background task while fixing an unrelated visibility complaint, and a PR sat unclaimed until a human asked about it.*
+
+✔ **Confirm arming worked by checking that THIS watcher's own startup line arrived AS A NOTIFICATION** — not merely that the process exists. A process check, a roster read and the log file all look identical whether it is armed correctly or not; the tell is the notification wording itself: a working watcher's events read `Monitor event: "…"`, a background-armed one's eventual completion reads `Background command "…" failed`.
 
 **It maintains ONE presence message, refreshed in place with `chat.update`** *(same `ts`, no channel spam, needs only `chat:write`)*. **A roster read compares each `beat` against now:**
 
@@ -1190,7 +1223,7 @@ comm -23 <(sed -n '/parseArgs({/,/^});/p' f.mjs | grep -oE "^\s+'?[a-z][a-z-]*'?
 | :-- | --- |
 | ✅ **§5 delivery** | **Broken, by `slack-watch`** — *but only for a session that personally arms one.* |
 | # ⚠⚠ **NEW: the bus is PER-SESSION OPT-IN** | ### **There is no "the channel is watched" — only "I am watching."** **A session that has not armed a watcher is UNREACHABLE, and nothing tells the sender.** *Messages look delivered.* ⚠ *Watchers are also time-bounded; coordination outlives them.* |
-| # ⚠⚠ **NEW: THE HANDOVER HOLE** | ### **Priming is right for a COLD start and WRONG for a RE-ARM — and the script cannot tell them apart.** *Both are "a watcher starting with no cursor".* # **Re-arm bare and anything posted between stopping the old watcher and starting the new one is swallowed SILENTLY.** ## ⚠ *A dropped message during a deliberate watcher restart is the worst possible moment to drop one, and the `primed at` line looks identical either way.* ★ **RULE: bare on a cold start, `--since <last ts you saw>` on a re-arm.** *The script now reports how many messages it skipped, so the hole is at least visible — but only the operator knows which case it was.* |
+| # ⚠⚠ **NEW: THE HANDOVER HOLE** | ### **Priming is right for a COLD start and WRONG for a RE-ARM — and the script cannot tell them apart.** *Both are "a watcher starting with no cursor".* # **Re-arm bare and anything posted between stopping the old watcher and starting the new one is swallowed SILENTLY.** ## ⚠ *A dropped message during a deliberate watcher restart is the worst possible moment to drop one, and the `primed at` line looks identical either way.* ★ **RULE: bare on a cold start, `--since <last ts you saw>` on a re-arm — and BOTH arm it under the harness's `Monitor` tool with `persistent: true`, or a correct flag still delivers nothing (#197).** *The script now reports how many messages it skipped, so the hole is at least visible — but only the operator knows which case it was.* |
 | :-- | --- |
 | # ⚠⚠ **NEW: BACKLOG REPLAY HANDS YOU CLOSED WORK** | ### **Observed live.** *A watcher armed with no cursor replayed the whole channel, including a task already claimed, resolved and closed twenty minutes earlier.* # **IT ARRIVED LOOKING EXACTLY LIKE NEW WORK.** ★ *Fixed in the DEFAULT rather than documented as a footgun: the first poll now primes the cursor silently and emits nothing; history is opt-in via `--replay`.* ## **What saved the session that hit it was re-reading the thread instead of trusting the watcher — §4 protecting against an unreliable delivery layer, which is exactly what it is for.** |
 
