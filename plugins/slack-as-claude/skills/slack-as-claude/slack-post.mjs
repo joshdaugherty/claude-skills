@@ -93,6 +93,24 @@ function tokenVar() {
 }
 
 /**
+ * The coordinator role's own token variable, resolved the same way tokenVar() resolves the
+ * ordinary one - a SEPARATE Slack app/bot token, declared via `coordinator_token_env` in
+ * slack-workspace.json, defaulting to SLACK_COORDINATOR_BOT_TOKEN. (#165)
+ *
+ * ⚠ THIS IS DELIBERATELY A SIBLING, NOT A PARAMETERISED tokenVar(). tokenVar() has exactly
+ * one caller-facing meaning ("the token this repo posts as"); a coordinator token is a
+ * DIFFERENT credential for a different role, not an alternate value of the same setting - the
+ * two must never silently fall back to each other.
+ */
+function coordinatorTokenVar() {
+  try {
+    return repoWorkspace()?.coordinator_token_env || 'SLACK_COORDINATOR_BOT_TOKEN';
+  } catch {
+    return 'SLACK_COORDINATOR_BOT_TOKEN';
+  }
+}
+
+/**
  * Read a user environment variable that may have been set AFTER this process launched.
  *
  * ⚠ Windows `setx` writes to HKCU\Environment, but a running process keeps the environment
@@ -185,8 +203,7 @@ function missingTokenMessage(varName, platform) {
   );
 }
 
-function botToken() {
-  const VAR = tokenVar();
+function botToken(VAR = tokenVar()) {
   const fromEnv = process.env[VAR];
   const fromReg = envFromRegistry(VAR);
   if (fromEnv && fromReg && fromEnv !== fromReg) {
@@ -385,6 +402,13 @@ function claudeUser(includeEmail) {
  *
  * `team_id` is the strongest key: exact, and stable across workspace renames. `team` and
  * `url` are accepted for convenience and matched case-insensitively when present.
+ *
+ * ★ Two more OPTIONAL keys, for the coordinator role (#165): `coordinator_token_env` names
+ * the env var holding a SECOND, distinct bot token, the same way `token_env` names the
+ * first. `coordinator_bot_id` is that token's `bot_id` (from `--whoami --as-coordinator`) -
+ * an IDENTIFIER, not a credential, safe to commit here exactly like `team_id` is. Neither
+ * key is validated by this function - an absent or wrong `coordinator_bot_id` fails in the
+ * safe direction (a real directive reads as unverified, never the reverse).
  */
 function repoWorkspace() {
   const root = gitRoot();
@@ -411,7 +435,9 @@ async function whoAmI(token) {
     const j = await (
       await fetch('https://slack.com/api/auth.test', { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
     ).json();
-    return j.ok ? { ok: true, team: j.team, team_id: j.team_id, url: j.url } : { ok: false, error: j.error };
+    return j.ok
+      ? { ok: true, team: j.team, team_id: j.team_id, url: j.url, bot_id: j.bot_id, user_id: j.user_id }
+      : { ok: false, error: j.error };
   } catch (err) {
     return { ok: false, error: err.message };
   }
@@ -522,6 +548,8 @@ const OPTIONS = {
     'no-context': { type: 'boolean', default: false },
     'unsafe-claim': { type: 'boolean', default: false },
     'as-app': { type: 'boolean', default: false },
+    'as-coordinator': { type: 'boolean', default: false },
+    whoami: { type: 'boolean', default: false },
     'dry-run': { type: 'boolean', default: false },
     'self-test': { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h', default: false },
@@ -703,8 +731,17 @@ const USAGE =
       '       [--worktree X] [--raw-markdown]\n' +
       '       [--user X] [--machine X] [--closes <ts>] [--broadcast] [--no-broadcast]\n' +
       '       [--user-email] [--username X] [--icon-emoji :x:] [--unsafe-claim]\n' +
-      '       [--no-context] [--as-app] [--dry-run] [--self-test]\n' +
+      '       [--no-context] [--as-app] [--as-coordinator] [--whoami] [--dry-run] [--self-test]\n' +
       '\n' +
+      '  --as-coordinator  post using the COORDINATOR token (coordinator_token_env in\n' +
+      '                  slack-workspace.json, default SLACK_COORDINATOR_BOT_TOKEN) instead\n' +
+      '                  of the ordinary one. A separate credential for a separate role -\n' +
+      '                  see slack-session-bus/SKILL.md for what a reader can and cannot\n' +
+      '                  conclude from a message posted this way. (#165)\n' +
+      '  --whoami        resolve the token (respecting --as-coordinator) and print its\n' +
+      '                  team/bot_id/user_id from auth.test, then exit. Prints identifiers\n' +
+      "                  only, never the token - run this once to learn a coordinator token's\n" +
+      '                  bot_id and paste it into coordinator_bot_id.\n' +
       '  --text-file <p> read the body from a FILE, or - for stdin, instead of --text.\n' +
       '                  USE THIS FOR ANYTHING CONTAINING CODE. Backticks in a double-\n' +
       '                  quoted shell string are command-substituted and VANISH before\n' +
@@ -919,6 +956,27 @@ function selfTest() {
 
 if (a['self-test']) selfTest();
 
+/**
+ * ⚠ SHORT-CIRCUITS BEFORE THE --channel/--text GATE, LIKE --self-test ABOVE IT. This is an
+ * identity check, not a post - it needs neither a channel nor a body, and gating it behind
+ * either would make "learn my coordinator token's bot_id" require inputs the operation
+ * never uses. (#165)
+ *
+ * ⛔ PRINTS ONLY IDENTIFIERS. bot_id/user_id/team_id are safe to paste into a committed
+ * slack-workspace.json exactly like team_id already is - NEVER the token itself.
+ */
+if (a.whoami) {
+  const varName = a['as-coordinator'] ? coordinatorTokenVar() : tokenVar();
+  const wToken = a['as-coordinator'] ? botToken(coordinatorTokenVar()) : botToken();
+  if (!wToken) die(missingTokenMessage(varName, process.platform));
+  const who = await whoAmI(wToken);
+  if (!who.ok) die(`auth.test failed: ${who.error}`, 1);
+  console.log(`team    : ${who.team} (${who.team_id})`);
+  console.log(`bot_id  : ${who.bot_id ?? '(none - is this really a bot token?)'}`);
+  console.log(`user_id : ${who.user_id ?? '(none)'}`);
+  process.exit(0);
+}
+
 if (a.help || !a.channel || (a.text === undefined && a['text-file'] === undefined)) {
   console.error(USAGE);
   process.exit(a.help ? 0 : 1);
@@ -945,7 +1003,12 @@ if (MRKDWN_FIXES) {
   }
 }
 
-const token = botToken();
+// ⚠ --as-coordinator SWAPS THE CREDENTIAL, NOT THE MESSAGE SHAPE. Everything below this line
+// (type, context elements, mrkdwn) is unchanged - only WHICH token authenticates the post
+// changes, so Slack stamps the resulting message with the coordinator's bot_id instead of
+// the ordinary bot's. See slack-session-bus/SKILL.md for what a reader can conclude from
+// that. (#165)
+const token = a['as-coordinator'] ? botToken(coordinatorTokenVar()) : botToken();
 if (!token) {
   /**
    * ⛔⛔ THIS NAMED THE RESOLVED VARIABLE AND THEN TOLD macOS USERS TO EXPORT THE DEFAULT.
@@ -968,7 +1031,7 @@ if (!token) {
    * several workspaces' tokens, so ANYONE SEEING THIS MESSAGE IS BY CONSTRUCTION SOMEONE FOR
    * WHOM THE DEFAULT IS WRONG.
    */
-  die(missingTokenMessage(tokenVar(), process.platform));
+  die(missingTokenMessage(a['as-coordinator'] ? coordinatorTokenVar() : tokenVar(), process.platform));
 }
 
 // --- payload ----------------------------------------------------------------
@@ -1154,6 +1217,24 @@ if (a.type && !KNOWN_TYPES.includes(a.type) && !a.type.startsWith('x-')) {
       '  Use an x- prefix for a custom type (e.g. x-heartbeat).\n' +
       '  These are validated because the claim protocol matches on them exactly:\n' +
       '  a misspelled type posts successfully and is counted by nobody.',
+  );
+}
+
+/**
+ * ⚠ A WARNING, NOT A die(). The two flags are DELIBERATELY not coupled - the security
+ * boundary lives entirely in verifyBotId() on the READ side (slack-watch.mjs), and no
+ * amount of coupling here would strengthen it: an adversary forging a directive would
+ * simply omit --as-coordinator, so refusing this combination would only ever block an
+ * HONEST sender who forgot a flag, not a dishonest one. What IS worth catching is exactly
+ * that honest mistake - a post that succeeds, returns ok:true, and silently never
+ * verifies, which is this repo's own most common failure shape: a wrong value rendering
+ * exactly like a right one. (#165)
+ */
+if (a.type === 'x-directive' && !a['as-coordinator']) {
+  console.error(
+    "[post] ⚠ --type x-directive without --as-coordinator: this token's bot_id will not\n" +
+      '       match the declared coordinator, so a verifying reader sees this as NOT VERIFIED.\n' +
+      '       Pass --as-coordinator if this is meant to read as authoritative.',
   );
 }
 
