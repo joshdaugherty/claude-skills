@@ -748,7 +748,7 @@ active posts-never-beats  no beat, but POSTED 2s ago  <- present, NOT reachable
 
 ## ⚠⚠ AND A STATE THIS TABLE DOES NOT NAME: BEATING, BUT NEVER WOKEN
 
-**A heartbeat is published by the WATCHER PROCESS, not by the session behind it.** A watcher armed as a plain background process (see the arming warning above) beats exactly as reliably as one armed correctly — roster reads `alive`, `--doctor` agrees, the process is running — while the session it serves receives nothing, ever:
+**A heartbeat is published by the WATCHER PROCESS, not by the session behind it.** A watcher armed as a plain background process (see the arming warning below) beats exactly as reliably as one armed correctly — roster reads `alive`, `--doctor` agrees, the process is running — while the session it serves receives nothing, ever:
 
 ```
 alive     beating, session reachable                                       (documented above)
@@ -810,7 +810,7 @@ Monitor({
 
 ⚠ **This is a property of ANY long-running watcher under this harness, not of this one.** *A session broke its own pull-request watcher exactly this way — killed a working `Monitor`-armed watcher, re-armed it as a background task while fixing an unrelated visibility complaint, and a PR sat unclaimed until a human asked about it.*
 
-✔ **Confirm arming worked by checking that THIS watcher's own startup line arrived AS A NOTIFICATION** — not merely that the process exists. A process check, a roster read and the log file all look identical whether it is armed correctly or not; the tell is the notification wording itself: a working watcher's events read `Monitor event: "…"`, a background-armed one's eventual completion reads `Background command "…" failed`.
+✔ **Confirm arming worked by checking that THIS watcher's own startup line arrived AS A NOTIFICATION** — not merely that the process exists. A process check, a roster read and the log file all look identical whether it is armed correctly or not. The tell is whether per-event notifications arrive AT ALL: a correctly-armed watcher's events read `Monitor event: "…"`, one at a time, for as long as it runs. A background-armed one produces none of those — and a watcher is not supposed to exit, so if it ever DOES notify (`Background command "…" completed` or `"…" failed`, depending on how the process ended), that completion is itself the sign something is wrong, whatever its exact wording.
 
 **It maintains ONE presence message, refreshed in place with `chat.update`** *(same `ts`, no channel spam, needs only `chat:write`)*. **A roster read compares each `beat` against now:**
 
