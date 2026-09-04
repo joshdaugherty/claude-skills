@@ -43,8 +43,9 @@ Fix the mismatch, or ask your human to, before continuing.
 
 `slack-post.mjs` (`>= 2.23.1`) also makes this same comparison on every `--as-coordinator`
 send and prints a `⚠` if it fails — a backstop, not a substitute for this step: it warns
-rather than refusing, and only after the message is already sent, so a mismatch caught here
-costs nothing while one caught only by the backstop has already posted as `!NOT-FROM-COORDINATOR`.
+rather than refusing, and the message goes out in that same command either way, so a mismatch
+caught here (before you have posted anything) costs nothing, while one caught only by the
+backstop means the message has already gone out and rendered as `!NOT-FROM-COORDINATOR`.
 
 ## Step 2b — confirm the coordinator bot is actually IN the channel, before your first real post
 

@@ -1406,15 +1406,11 @@ const WS = await checkWorkspace(token, { enforce: !a['dry-run'] });
  * WS.who.bot_id is already the answer. Guarded on WS.who.ok - an unanswered auth.test
  * is not a mismatch, the same distinction checkWorkspace()'s own docblock draws.
  */
-if (
-  a['as-coordinator'] &&
-  repoWorkspace()?.coordinator_bot_id &&
-  WS.who.ok &&
-  WS.who.bot_id !== repoWorkspace().coordinator_bot_id
-) {
+const declaredCoordinatorBotId = repoWorkspace()?.coordinator_bot_id;
+if (a['as-coordinator'] && declaredCoordinatorBotId && WS.who.ok && WS.who.bot_id !== declaredCoordinatorBotId) {
   console.error(
     "[post] ⚠ --as-coordinator, but this token's bot_id does not match this repo's\n" +
-      `       declared coordinator_bot_id (declared ${repoWorkspace().coordinator_bot_id}, actual\n` +
+      `       declared coordinator_bot_id (declared ${declaredCoordinatorBotId}, actual\n` +
       `       ${WS.who.bot_id}). A verifying reader sees this as !NOT-FROM-COORDINATOR - the\n` +
       '       same rendering as a forged directive. Run --whoami --as-coordinator and update\n' +
       '       coordinator_bot_id if the coordinator app was reinstalled or its token rotated.',
