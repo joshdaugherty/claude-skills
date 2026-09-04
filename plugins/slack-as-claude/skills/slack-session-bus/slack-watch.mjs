@@ -920,17 +920,35 @@ function coordinatorBotId() {
  *   forged       - a directive-typed message whose bot_id does not match, or is absent.
  *   unconfigured - no coordinator_bot_id declared; nothing here can be verified either way.
  *
- * ✔ MEASURED AGAINST A REAL conversations.history RESPONSE (2026-09-04, this workspace's
- * #bus channel, ordinary bot token - `--raw` now prints both fields for exactly this check):
+ * ✔✔ MEASURED, INDEPENDENTLY, TWICE (2026-09-04) - this reads msg.bot_id, never
+ * msg.bot_profile?.id, and both measurements say that was the only correct choice:
  *
+ * (1) This workspace's #bus channel, ordinary bot token, `conversations.history`:
  *     bot_id=B0BTPRJNFQ9  bot_profile={"id":"B0BTPRJNFQ9","app_id":"A0BTMMKRPRQ",...}
  *
- * `msg.bot_id` IS a top-level field on an ordinary bot-posted message, not only on `auth.test`
- * or the `bot_message` subtype - `bot_profile.id` also carries it, redundantly. This is a
- * schema fact about how Slack tags ANY bot-authored message, so it holds regardless of which
- * bot token posted it - a second, distinct coordinator token was not needed to settle it.
- * Independent confirmation from a second workspace/machine is still worth having (see #165)
- * before fully retiring the caution this comment used to carry.
+ * (2) A second, independent workspace - 196 bot-posted messages sampled across BOTH
+ * `conversations.history` and `conversations.replies`, with a genuine control (two DIFFERENT
+ * apps' tokens, confirming the check can return `forged` and not just a constant `verified`):
+ *
+ *     msg.bot_id       present on 196 of 196 bot-posted messages, both endpoints
+ *     msg.bot_profile  ABSENT on all 82 that carry subtype=thread_broadcast
+ *     two apps' tokens -> two DISTINCT bot_id values (proves discrimination, not a constant)
+ *     one human post   -> neither field present -> correctly resolves 'forged'
+ *
+ * thread_broadcast is exactly what the claim protocol posts (§5's done/fail --broadcast), so
+ * reading `msg.bot_profile?.id` INSTEAD OF `msg.bot_id` - the change this comment used to
+ * leave open as a live possibility - would have resolved 'forged' for every claim broadcast
+ * while ordinary posts kept verifying: a failure shaped to evade notice, since the surface
+ * most readers check by hand would keep reporting success. That option is REJECTED, not
+ * merely untried - full methodology in the #165 comment thread, since it does not fit here.
+ *
+ * ⚠ WHAT THIS DOES NOT ESTABLISH: this checks WHICH TOKEN posted a message, not WHICH SESSION
+ * or WHICH PERSON. A separate, independently-run repo (UAMS-Web/wordpress-importer #868)
+ * measured 13 distinct session labels sharing the SAME ordinary-token bot_id, because they
+ * all post through that one token. `verified` on a directive means "the coordinator token
+ * posted this," never "this specific coordinator session posted this" - if the coordinator
+ * token is ever held by more than one process at once, the badge cannot tell them apart, the
+ * same way it already cannot for the ordinary token.
  */
 function verifyBotId(msg, expectedBotId) {
   if (!expectedBotId) return 'unconfigured';
