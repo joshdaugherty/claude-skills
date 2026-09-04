@@ -1228,9 +1228,10 @@ function presenceBlocks(label, every, recentFailures = 0) {
 }
 
 let presenceTs = null;
-// How many beats in a row have failed to land, successful or not - reset on any success,
-// incremented on any failure regardless of cause. Read by presenceBlocks() so a lane that
-// struggled and then landed says so. (#179)
+// How many beats in a row have failed to land - decayed by one on any success (never reset
+// to 0 outright: chat.update overwrites the whole body, so a hard reset made a "recovered"
+// marker visible for exactly one beat, measured live), incremented on any failure regardless
+// of cause. Read by presenceBlocks() so a lane that struggled and then landed says so. (#179)
 let consecutiveBeatFailures = 0;
 
 /**
