@@ -770,7 +770,21 @@ async function slackPost(method, body) {
   return j;
 }
 
-async function recentMessages(limit = 200) {
+/**
+ * ⚠⚠ A `chat.update`d MESSAGE NEVER MOVES. Its `ts` - and so its position in the channel's
+ * chronological order - is fixed at first post, forever, however often the BODY is refreshed.
+ * A count-bounded, single-page read therefore has NOTHING to do with "is this still current" -
+ * a presence message beating perfectly right now can sit at any depth in the timeline, purely
+ * as a function of how long ago it first posted and how much has been posted since. (#177)
+ *
+ * Paging to exhaustion (bounded by MAX_HISTORY_PAGES, matching --audit's own cap - unbounded
+ * pagination against a channel with years of history would be its own denial-of-service) is
+ * the default for exactly this reason. The one exception is `--ping`'s wait loop, which only
+ * ever needs messages newer than the ping it just sent - passing `{ full: false }` there.
+ */
+const MAX_HISTORY_PAGES = 25;
+
+async function recentMessages(limit = 200, { full = true } = {}) {
   const url = new URL(HISTORY);
   url.searchParams.set('channel', a.channel);
   url.searchParams.set('limit', String(limit));
@@ -800,16 +814,34 @@ async function recentMessages(limit = 200) {
    * The shape is deliberate: callers must destructure, so a site that ignores `ok` reads
    * as obviously wrong rather than quietly wrong.
    */
-  const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  // Shares the poll bucket's backoff clock with poll() and beat() - a 429 seen here must
-  // also stand the heartbeat down, or it keeps hitting the same limit on its own timer. (#143)
-  if (r.status === 429) {
-    const headerSecs = Number(r.headers.get('retry-after'));
-    const waitMs = (Number.isFinite(headerSecs) && headerSecs > 0 ? headerSecs : 60) * 1000;
-    rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + waitMs);
-  }
-  const res = await safeJson(r);
-  return res.ok ? { ok: true, messages: res.messages ?? [] } : { ok: false, error: res.error, messages: [] };
+  const messages = [];
+  let cur = null;
+  let pages = 0;
+  do {
+    if (cur) url.searchParams.set('cursor', cur);
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    // Shares the poll bucket's backoff clock with poll() and beat() - a 429 seen here must
+    // also stand the heartbeat down, or it keeps hitting the same limit on its own timer. (#143)
+    if (r.status === 429) {
+      const headerSecs = Number(r.headers.get('retry-after'));
+      const waitMs = (Number.isFinite(headerSecs) && headerSecs > 0 ? headerSecs : 60) * 1000;
+      rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + waitMs);
+    }
+    const res = await safeJson(r);
+    // ⚠ A FAILURE MID-PAGINATION DISCARDS THE PAGES ALREADY READ, DELIBERATELY. A positive
+    // find in page 1 would stay true regardless of what page 3 says - but a caller asking
+    // "does X exist" and getting no-match-so-far from pages 1-2 cannot conclude absence
+    // while page 3 is unread. Returning the partial messages here would invite exactly
+    // that wrong conclusion; failing the whole read keeps the "ok:false means learned
+    // nothing" contract this function has always made. (#177)
+    if (!res.ok) return { ok: false, error: res.error, messages: [], truncated: false };
+    messages.push(...(res.messages ?? []));
+    cur = full && res.has_more ? (res.response_metadata?.next_cursor || null) : null;
+    pages++;
+  } while (cur && pages < MAX_HISTORY_PAGES);
+  // `cur` still set here means the loop stopped on the page cap, not because Slack ran out -
+  // there IS more, and it was not read. Distinct from `!full`, which never even asks.
+  return { ok: true, messages, truncated: Boolean(cur) };
 }
 
 /**
@@ -1276,6 +1308,17 @@ async function roster() {
     console.error('your peers, and nothing was learned about them. Do not treat any session as');
     console.error('stale on the strength of this, and do not authorise a --takeover from it.');
     process.exit(1);
+  }
+  // ⚠ SILENT TRUNCATION IS WHAT MADE EVERY ABSENCE CLAIM IN #177 UNSOUND. recentMessages()
+  // now pages to a bounded limit, not to exhaustion - `truncated` means the channel has
+  // MORE history than that bound covers, and a session whose presence message is older
+  // still than every page read here reads exactly like one that never existed. Said here,
+  // not buried, because this IS the surface a human is told to consult before a takeover. (#177)
+  if (read.truncated) {
+    console.error(`⚠ CHANNEL HISTORY EXCEEDS THE ${MAX_HISTORY_PAGES}-PAGE SEARCH BOUND. A session`);
+    console.error('  whose presence message is older than everything read here would be ABSENT');
+    console.error('  from what follows without being gone. Treat any missing lane as UNKNOWN,');
+    console.error('  not stale, until this is confirmed some other way.');
   }
   const msgs = read.messages;
   const seen = new Map();
@@ -1761,7 +1804,10 @@ if (a.ping) {
   const deadline = Date.now() + waitSec * 1000;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 5000));
-    const look = await recentMessages(50);
+    // ⚠ full: false, DELIBERATELY - this only ever wants messages NEWER than the ping it
+    // just sent (the loop below discards anything with ts <= sent.ts), so pagination back
+    // through old history buys nothing and would cost a poll cycle every 5s. (#177)
+    const look = await recentMessages(50, { full: false });
     if (!look.ok) { console.error(`[ping] read failed (${look.error}) - still waiting; a missed read is not a missed pong.`); continue; }
     for (const m of look.messages) {
       if (tsCmp(m.ts, sent.ts) <= 0) continue;
@@ -2021,6 +2067,14 @@ if (a.retire) {
     else console.error(`  could not delete ${m.ts}: ${res.error}`);
   }
   console.log(`Retired "${selfLabel}": announced${rel.length ? ` (releasing ${rel.length} claim(s))` : ''}, removed ${removed} presence message(s).`);
+  // ⚠ "removed N" USED TO MEAN "found N within a 200-message window", not "N exist". A
+  // duplicate orphaned outside that window got a clean success line while the orphan sat
+  // untouched, and re-arming afterward added a THIRD message. Now that the lookup pages
+  // to MAX_HISTORY_PAGES, say plainly when even that was not the whole channel. (#177)
+  if (look.truncated) {
+    console.log(`⚠ Channel history exceeds the ${MAX_HISTORY_PAGES}-page search bound - a`);
+    console.log('  presence message older than everything read may still exist, unremoved.');
+  }
   console.log('Claims and dones stay in their threads: this discards STATUS, never history.');
   process.exit(0);
 }
@@ -2778,6 +2832,14 @@ if (a.doctor) {
   console.log(
     `PEERS      ${!readable ? `UNREADABLE (${read.error}) - nothing was learned about any peer` : alive.length ? alive.map(fmt).join(', ') : 'none live'}`,
   );
+  // ⚠ SHARES roster()'s TRUNCATION BOUND, SAYS SO FOR THE SAME REASON. PEERS and --presence
+  // read the same underlying data and must not disagree about it - a peer whose presence
+  // message is older than this read's window would be silently absent from PEERS the same
+  // way it would vanish from --presence, if this were left unstated. (#177)
+  if (readable && read.truncated) {
+    console.log(`           ⚠ channel history exceeds the ${MAX_HISTORY_PAGES}-page search bound -`);
+    console.log('           a peer older than everything read here would be missing, not gone.');
+  }
   if (acting.length) {
     console.log(
       `           ACTIVE, not beating: ${acting
@@ -3839,6 +3901,17 @@ if (a.raw) {
     console.log(`  ${msgs.length} were read from the channel. Drop --since to see all of them.`);
   } else {
     console.log('No filtering was applied: every message read is above.');
+  }
+  // ⚠ THIS INSPECTOR USED TO SHARE THE ROSTER'S BLIND SPOT SILENTLY: both called the same
+  // 200-message-window read, so asked "does this message exist", --raw could only ever
+  // answer from inside a window it never disclosed. Now it pages the same way roster()
+  // does and says so when even that was not the whole channel - stated, not left for the
+  // reader to assume from a command whose entire purpose is being trusted when the
+  // rendering already looks wrong. (#177)
+  if (read.truncated) {
+    console.log(`\n⚠ CHANNEL HISTORY EXCEEDS THE ${MAX_HISTORY_PAGES}-PAGE SEARCH BOUND. A message`);
+    console.log('  older than everything above may still exist and simply not be shown here.');
+    console.log('  Absence from this list is NOT evidence the message does not exist.');
   }
   process.exit(0);
 }
