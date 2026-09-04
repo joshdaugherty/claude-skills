@@ -895,15 +895,17 @@ function coordinatorBotId() {
  *   forged       - a directive-typed message whose bot_id does not match, or is absent.
  *   unconfigured - no coordinator_bot_id declared; nothing here can be verified either way.
  *
- * ⚠⚠⚠ UNVERIFIED AGAINST A REAL conversations.history RESPONSE. `auth.test` and the
- * `bot_message` SUBTYPE docs both confirm a top-level `bot_id` field exists - neither is
- * the same endpoint/shape as an ORDINARY chat.postMessage bot post read back through
- * conversations.history/conversations.replies, which is what this function actually reads
- * in production. Shipped anyway on explicit instruction, stated as unverified rather than
- * guessed, per this repo's own tier-3 rule. If a live check ever finds `bot_id` sits under
- * `msg.bot_profile?.id` instead (or in addition), the fix is a one-line change to this
- * function's `msg.bot_id` reads - not a redesign - but until that check happens, treat
- * "forged" as UNTESTED against a real coordinator token, not merely untested by fixture.
+ * ✔ MEASURED AGAINST A REAL conversations.history RESPONSE (2026-09-04, this workspace's
+ * #bus channel, ordinary bot token - `--raw` now prints both fields for exactly this check):
+ *
+ *     bot_id=B0BTPRJNFQ9  bot_profile={"id":"B0BTPRJNFQ9","app_id":"A0BTMMKRPRQ",...}
+ *
+ * `msg.bot_id` IS a top-level field on an ordinary bot-posted message, not only on `auth.test`
+ * or the `bot_message` subtype - `bot_profile.id` also carries it, redundantly. This is a
+ * schema fact about how Slack tags ANY bot-authored message, so it holds regardless of which
+ * bot token posted it - a second, distinct coordinator token was not needed to settle it.
+ * Independent confirmation from a second workspace/machine is still worth having (see #165)
+ * before fully retiring the caution this comment used to carry.
  */
 function verifyBotId(msg, expectedBotId) {
   if (!expectedBotId) return 'unconfigured';
@@ -3656,6 +3658,16 @@ if (a.raw) {
     if (m.thread_ts && m.thread_ts !== m.ts) bits.push(`thread=${m.thread_ts}`);
     if (m.subtype) bits.push(`subtype=${m.subtype}`);
     if (m.username) bits.push(`username=${JSON.stringify(m.username)}`);
+    // ⚠ THE ONE FIELD ON THIS LINE SLACK ASSIGNS, NOT THE POSTER - kept here rather than
+    // parsed/interpreted, because --raw's whole job is showing what actually arrived. Added
+    // specifically so a --as-coordinator post's bot_id can be READ, not inferred: neither
+    // this line nor --show printed it before, so verifyBotId()'s assumption about where it
+    // lives in a real response had nothing here to check it against. (#165)
+    if (m.bot_id) bits.push(`bot_id=${m.bot_id}`);
+    // ⚠ PRINTED, NOT ASSUMED AWAY. verifyBotId() reads msg.bot_id specifically - if a real
+    // bot post instead (or also) carries bot_profile.id, this line is what would show it,
+    // rather than the shape staying invisible until something downstream broke on it.
+    if (m.bot_profile) bits.push(`bot_profile=${JSON.stringify(m.bot_profile)}`);
     console.log(`--- ${bits.join(' ')}`);
     for (const b of m.blocks ?? []) {
       if (b.type === 'context') for (const e of b.elements ?? []) console.log(`    ctx  | ${e.text ?? JSON.stringify(e)}`);
