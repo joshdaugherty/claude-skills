@@ -315,7 +315,7 @@ async function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 64; // raise when adding cases - a constant, reviewed on change (+5 for verifyBotId, #165)
+  const CASE_FLOOR = 66; // raise when adding cases - a constant, reviewed on change (+7 for verifyBotId, #165)
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -456,6 +456,8 @@ async function selfTest() {
     ['bot_id absent -> forged', verifyBotId({}, 'B123'), 'forged'],
     ['no expected id -> unconfigured', verifyBotId({ bot_id: 'B123' }, null), 'unconfigured'],
     ['neither present -> unconfigured, not forged', verifyBotId({}, null), 'unconfigured'],
+    ['a null message reads as forged, not a crash', verifyBotId(null, 'B123'), 'forged'],
+    ['an undefined message reads as forged, not a crash', verifyBotId(undefined, 'B123'), 'forged'],
   ];
   for (const [name, got, want] of vbCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  verifyBotId: ${name}`);
   const vbBad = vbCases.filter(([, got, want]) => got !== want).length;
@@ -905,7 +907,10 @@ function coordinatorBotId() {
  */
 function verifyBotId(msg, expectedBotId) {
   if (!expectedBotId) return 'unconfigured';
-  return msg.bot_id && msg.bot_id === expectedBotId ? 'verified' : 'forged';
+  // `msg?.` - not reachable through poll() today (a message only gets here after
+  // parseMessage() already succeeded on it), but a null/undefined msg has no bot_id and
+  // must read the same as any other absent one: forged, not a crash. (found by review, #165)
+  return msg?.bot_id && msg.bot_id === expectedBotId ? 'verified' : 'forged';
 }
 
 /** Who does this token actually belong to? One call, and it is the only source of truth. */

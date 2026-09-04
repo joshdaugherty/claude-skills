@@ -880,7 +880,7 @@ function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 47; // raise when adding cases - a constant, reviewed on change
+  const CASE_FLOOR = 49; // raise when adding cases - a constant, reviewed on change (+2 for as-coordinator/whoami, #165)
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
