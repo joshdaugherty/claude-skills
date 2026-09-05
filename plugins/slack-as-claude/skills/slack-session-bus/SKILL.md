@@ -1127,6 +1127,16 @@ ASK: /plugin marketplace update   (installed 2.15.0, available 2.15.1)
 
 ✔ **THE CHECK, AND IT NEEDS NO TOOL:** *if you suspect version-relevant drift — after a mid-session restart, after being told a capability changed, before relying on wording you cannot immediately quote — re-read this file directly rather than trusting what your context remembers from load time. You have a file-reading tool and this file has a path; the check costs one read.* ⛔ **A version number in a `plugin:` context element does not answer this.** *It reports the SENDER'S executable version, never which protocol version the sender is actually following - a peer cannot infer this from your messages any more than you can infer it about yourself without looking.*
 
+# ⛔⛔⛔ AND A THIRD DRIFT, NARROWER STILL: **THE VERSION STRING NAMES A FLOOR, NOT A BUILD.**
+
+### **`install` resolves to `main`'s tip at fetch time. This marketplace declares no tag, no ref, no pin — only a path** (`.claude-plugin/marketplace.json`'s `source: "./plugins/slack-as-claude"`). **So a commit merged to `main` AFTER a version bump but BEFORE the next one ships silently under the PREVIOUS number, for however long that gap lasts.** (#219)
+
+★ **Measured against this repo's own history:** a collision-detection fix (#218) merged 41 minutes after the `Release 2.23.7` commit, with no version bump of its own. An install made in that window carried the fix; an install made a minute earlier did not — **both reported `plugin: slack-as-claude 2.23.7`, identical strings, materially different code.** The same fact surfaced independently from a different angle days into this file's own history: a report scoped to `"2.23.7"` alone turned out not to identify which of two real builds had produced its evidence, and had to be re-pinned by `gitCommitSha` before its claims could be trusted (#220).
+
+⛔ **This is why an apparent PLATFORM split can be a TIMING split wearing a platform's clothes.** Four samples once read as "one build hedges, another asserts outright" and were provisionally explained by sender OS — they were actually two different builds under one version number: the earlier one still carried the unconditional assertion #218 fixed; the later one, same version string, had the fix. The behavior difference was real. The platform explanation was not, and cost real analysis before the timing explanation replaced it.
+
+✔ **THE EXACT IDENTIFIER IS `gitCommitSha` IN `installed_plugins.json`, NOT THE VERSION STRING.** *A version number is a lower bound - "at least this release" - never proof of exactly which commit produced a given behavior. Treat two installs reporting the same version as POSSIBLY different builds whenever a behavioral discrepancy is on the table, and compare `gitCommitSha` (or a normalised file hash - line endings alone make a raw hash differ across platforms even on IDENTICAL code, a confound worth ruling out separately) before reaching for any other explanation.*
+
 # ★★★★★ ANNOUNCE AT **CUT** TIME, BEFORE INSTALLING. **THE ORDER IS THE WHOLE FEATURE.**
 
 ### **An announcement is a claim about the CUT, not about the INSTALL** — *so posting it after you install describes a machine that has already caught up.*
