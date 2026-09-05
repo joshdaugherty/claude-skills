@@ -878,9 +878,24 @@ if (a['self-test']) await selfTest();
  * membership: invalid_auth` - not a crash, but not the MACHINE CONSISTENCY report the
  * caller asked for either. Both flags added here so correctness does not depend on which
  * block happens to sit first in the file - the same fragility that let this hide. (#234)
+ *
+ * ⚠ `--show`/`--raw` ADDED PRE-EMPTIVELY, NOT BECAUSE EITHER WAS MEASURED BROKEN. Both
+ * blocks sit AFTER `--consistency`'s own unconditional exit in file order, so `--consistency
+ * --show <ts>`/`--consistency --raw` are safe today - the same accident of ordering that
+ * made `--announce-install` safe before this list also named it. Excluded here so the next
+ * reorder cannot silently reopen this, rather than waiting for a third review to find it
+ * the way #234's review found the `--member` case. (#237)
  */
 const LOCAL_ONLY =
-  Boolean(a.consistency) && !a.presence && !a.ping && !a.audit && !a.retire && !a.member && !a['announce-install'];
+  Boolean(a.consistency) &&
+  !a.presence &&
+  !a.ping &&
+  !a.audit &&
+  !a.retire &&
+  !a.member &&
+  !a['announce-install'] &&
+  !a.show &&
+  !a.raw;
 
 if (a.help || (!a.channel && !LOCAL_ONLY)) {
   console.error(USAGE);
@@ -4632,6 +4647,10 @@ if (a.show) {
   if (!/^\d{10,}\.\d{6}$/.test(a.show)) {
     die(`--show ${a.show}: not a Slack ts. Quote it exactly as printed - 1788293713.927319.`, 2);
   }
+  // ⛔⛔ #237: --show and --raw are exactly the surfaces a reader reaches for BECAUSE
+  // something already looks wrong - the last place a silent wrong-workspace read should
+  // hide. Same call as --ping/--audit/--member/--retire/--announce-install got in #234.
+  console.log(`WORKSPACE  ${workspaceLine(await checkWorkspace(token, { enforce: false }))}`);
   // ⚠ STOPS THE INSTANT THE TS IS FOUND, EARLY-EXITING PAGINATION - "is there a message
   // with THIS exact ts" needs no further pages once answered. (#177)
   const read = await recentMessages(200, { stopWhen: (msgs) => msgs.some((m) => m.ts === a.show) });
@@ -4677,6 +4696,7 @@ if (a.show) {
 }
 
 if (a.raw) {
+  console.log(`WORKSPACE  ${workspaceLine(await checkWorkspace(token, { enforce: false }))}`); // see --show above (#237)
   // ⚠ ALWAYS 200, not a smaller default without --since. The summary below tells a reader
   // withheld by --since to "Drop --since to see all of them" - if dropping it also shrank
   // the fetch window, that advice would show FEWER messages than the run it was printed
