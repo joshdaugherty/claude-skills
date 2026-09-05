@@ -374,28 +374,67 @@ function looksLikeCollision(age, every) {
  * four WorkingSet* memory counters. A cwd-based test is not portable; the command line,
  * which carries --session, is - the same field on both supported platforms.
  *
- * ⚠ THE non-win32 BRANCH (`ps -eo command=`) IS UNVERIFIED. Everything above, including
- * the token-boundary regex it shares with the Windows branch, was measured against real
- * Windows processes only - no macOS or Linux machine was available to this change. Treat
- * this branch as reasoned-from-the-`ps`-contract, not observed, until a session on one of
- * those platforms runs it for real. (#213)
+ * ⛔⛔ THE non-win32 BRANCH WAS UNVERIFIED, AND ONCE MEASURED, WAS WRONG. `ps -eo command=`
+ * enumerates EVERY process, and a wrapper shell that exec'd this watcher (bash, perl, a
+ * bound/logging harness) carries the FULL command line it launched - including
+ * `--session <label>` - on its OWN `ps` row. It therefore satisfies the exact same regex
+ * as the watcher it launched. Those wrappers are ANCESTORS of the watcher process, so they
+ * cannot exit before it does: the count never falls below 2 while any watcher runs at all,
+ * on POSIX, which defeats the persistence recheck below entirely (#218's whole point was
+ * distinguishing "count stayed >= 2 because a handoff is in progress" from "count stayed
+ * >= 2 because it always does" - and on POSIX it always does). Measured: a real launch
+ * chain of `bash -> bash -> bash -> node` inflated a true count of 1 to 4; a wrapper-based
+ * deployment (a bound/logging shell, a perl alarm wrapper, then node) reads >= 2 on EVERY
+ * adoption, permanently, because both ancestors are fixed and always carry the label. The
+ * win32 branch never had this problem, because `Name='node.exe'` filters to the
+ * executable FIRST - this brings the POSIX branch to the same two-step shape rather than
+ * patching around the inflation after the fact. (#229)
+ *
+ * ⚠ AND THE FIX ITSELF IS UNEVENLY VERIFIED - CARRYING THE HEDGE FORWARD RATHER THAN
+ * DROPPING IT NOW THAT THE OLD DEFECT IS FIXED. `ps -eo comm=,command=` filtered on `comm`
+ * is verified LIVE on macOS (measured in #229's own thread) and by a fabricated-fixture
+ * negative control here on Windows - not against a real Linux process tree by anyone. Two
+ * narrower gaps this predicate does not close, named rather than guessed past: a process
+ * launched via the legacy `nodejs` invocation some pre-2016 Debian/Ubuntu wrapper habits
+ * still carry would report `comm=nodejs`, matching neither branch here, and would exclude
+ * the REAL watcher from its own count - the opposite failure, an undercount; and a
+ * Node-based (not shell-based) supervisor whose own argv happens to also carry
+ * `--session <label>` still has `comm=node` and still inflates the count, exactly like the
+ * wrapper this fix removes, because the discriminator here is the EXECUTABLE, not
+ * ancestry. Neither has been observed in a real deployment - recorded as a known limit of
+ * this fix's shape, not evidence against it. (#229 review)
  */
+function isNodeProcessLine(line) {
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+  const spaceIdx = trimmed.indexOf(' ');
+  const comm = spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx);
+  return comm === 'node' || comm.endsWith('/node');
+}
+
 function localProcessesWithLabel(label) {
   try {
-    const lines =
-      process.platform === 'win32'
-        ? execFileSync(
-            'powershell',
-            ['-NoProfile', '-NonInteractive', '-Command', "(Get-CimInstance Win32_Process -Filter \"Name='node.exe'\").CommandLine"],
-            { encoding: 'utf8', timeout: 5000, windowsHide: true },
-          ).split(/\r?\n/)
-        : execFileSync('ps', ['-eo', 'command='], { encoding: 'utf8', timeout: 5000 }).split(/\r?\n/);
     // Matched as a distinct CLI token, not a substring - "session-a" must not also match a
     // process running "session-ab". Escapes regex metacharacters in the label itself, since
     // a label is operator-chosen text, not a literal this file controls.
     const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const re = new RegExp(`--session[= ]+["']?${escaped}["']?(\\s|$)`);
-    return lines.filter((line) => line && re.test(line)).length;
+    if (process.platform === 'win32') {
+      const lines = execFileSync(
+        'powershell',
+        ['-NoProfile', '-NonInteractive', '-Command', "(Get-CimInstance Win32_Process -Filter \"Name='node.exe'\").CommandLine"],
+        { encoding: 'utf8', timeout: 5000, windowsHide: true },
+      ).split(/\r?\n/);
+      return lines.filter((line) => line && re.test(line)).length;
+    }
+    // `comm=,command=` (both un-headered, per POSIX `-o field=`) - comm is the short
+    // executable name, always the first whitespace-delimited token regardless of how the
+    // columns are padded, since it is itself space-free. Filtered to comm first, THEN
+    // matched against the whole line for the label - the ancestor wrappers this file used
+    // to count carry comm=bash/perl/sh, never comm=node, so they drop out before the label
+    // regex ever sees them.
+    const lines = execFileSync('ps', ['-eo', 'comm=,command='], { encoding: 'utf8', timeout: 5000 }).split(/\r?\n/);
+    return lines.filter((line) => isNodeProcessLine(line) && re.test(line)).length;
   } catch {
     return null; // could not check - NOT zero, NOT one
   }
@@ -453,7 +492,7 @@ async function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 124; // raise when adding cases - a constant, reviewed on change (+4 rearmBlocks, +5 collisionVerdict, #213; -3 rearmBlocks, +1 collisionVerdict, +5 stillCollided, +6 confirmedCollisionBlocks, #216; +4 rearmBlocks, +1 collisionVerdict for the 'overlap' state, review fix, #216; +1 --exclude-type in the automatic flag-in-usage loop, #220; +7 resolutionTrace, #222) - verified against the real --self-test count, not computed by eye
+  const CASE_FLOOR = 131; // raise when adding cases - a constant, reviewed on change (+4 rearmBlocks, +5 collisionVerdict, #213; -3 rearmBlocks, +1 collisionVerdict, +5 stillCollided, +6 confirmedCollisionBlocks, #216; +4 rearmBlocks, +1 collisionVerdict for the 'overlap' state, review fix, #216; +1 --exclude-type in the automatic flag-in-usage loop, #220; +7 resolutionTrace, #222; +7 isNodeProcessLine, #229) - verified against the real --self-test count, not computed by eye
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -622,6 +661,25 @@ async function selfTest() {
   const rbBad = rbCases.filter(([, got, want]) => got !== want).length;
 
   /**
+   * isNodeProcessLine() (#229). Fabricated `ps -eo comm=,command=`-shaped lines, never a
+   * real process call - this is exactly the wrapper-shell adversarial case the issue
+   * measured: a bash/perl ancestor's OWN ps row carries the full re-exec'd command line,
+   * including --session <label>, so a label-only match (the pre-fix behaviour) counted it
+   * as a second watcher. comm must rule it out before the label regex ever sees it.
+   */
+  const plCases = [
+    ['a real node process line matches', isNodeProcessLine('node     /usr/local/bin/node slack-watch.mjs --session foo --heartbeat 60'), true],
+    ['a bash wrapper carrying the SAME --session text does NOT match - the #229 defect', isNodeProcessLine('bash     /bin/bash -c node slack-watch.mjs --session foo'), false],
+    ['a perl wrapper carrying the label does NOT match', isNodeProcessLine('perl     watchdog.pl --session foo'), false],
+    ['comm reported as a full path still matches (some ps implementations)', isNodeProcessLine('/usr/bin/node /path/to/slack-watch.mjs --session foo'), true],
+    ['a comm that merely CONTAINS "node" (e.g. a hypothetical "nodemon") does NOT match', isNodeProcessLine('nodemon  nodemon slack-watch.mjs --session foo'), false],
+    ['an empty line does not crash or match', isNodeProcessLine(''), false],
+    ['whitespace-only does not crash or match', isNodeProcessLine('   '), false],
+  ];
+  for (const [name, got, want] of plCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  isNodeProcessLine: ${name}`);
+  const plBad = plCases.filter(([, got, want]) => got !== want).length;
+
+  /**
    * collisionVerdict() (#213, refined by #216). Takes an ALREADY-COMPUTED count (not a
    * function to call - see the doc comment on the real function for why sharing one count
    * across the caller's own decisions matters). A process count, when available, must be
@@ -786,12 +844,12 @@ async function selfTest() {
   const tooFew = ran < CASE_FLOOR;
   if (tooFew) console.log(`\n⛔ ONLY ${ran} CASES RAN, floor is ${CASE_FLOOR} - a block stopped running.`);
   console.log(
-    missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || cvBad || scBad || ccBad || rtBad || tooFew
+    missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || cvBad || scBad || ccBad || rtBad || plBad || tooFew
       ? `\n${tooFew ? `ONLY ${ran} CASES RAN, FLOOR IS ${CASE_FLOOR} - A BLOCK STOPPED RUNNING. ` : ''}${missing.length} FLAG(S) MISSING FROM USAGE${missing.length ? `: ${missing.join(', ')}` : ''}` +
-        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}${xuBad ? `, ${xuBad} X-UPDATE CASE(S) WRONG` : ''}${sjBad ? `, ${sjBad} SAFEJSON CASE(S) WRONG` : ''}${vbBad ? `, ${vbBad} VERIFYBOTID CASE(S) WRONG` : ''}${msBad ? `, ${msBad} MEMBERSTATUS CASE(S) WRONG` : ''}${pbBad ? `, ${pbBad} PRESENCEBLOCKS CASE(S) WRONG` : ''}${rbBad ? `, ${rbBad} REARMBLOCKS CASE(S) WRONG` : ''}${pvBad ? `, ${pvBad} PONGVERDICT CASE(S) WRONG` : ''}${cvBad ? `, ${cvBad} COLLISIONVERDICT CASE(S) WRONG` : ''}${scBad ? `, ${scBad} STILLCOLLIDED CASE(S) WRONG` : ''}${ccBad ? `, ${ccBad} CONFIRMEDCOLLISIONBLOCKS CASE(S) WRONG` : ''}${rtBad ? `, ${rtBad} RESOLUTIONTRACE CASE(S) WRONG` : ''}`
+        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}${xuBad ? `, ${xuBad} X-UPDATE CASE(S) WRONG` : ''}${sjBad ? `, ${sjBad} SAFEJSON CASE(S) WRONG` : ''}${vbBad ? `, ${vbBad} VERIFYBOTID CASE(S) WRONG` : ''}${msBad ? `, ${msBad} MEMBERSTATUS CASE(S) WRONG` : ''}${pbBad ? `, ${pbBad} PRESENCEBLOCKS CASE(S) WRONG` : ''}${rbBad ? `, ${rbBad} REARMBLOCKS CASE(S) WRONG` : ''}${pvBad ? `, ${pvBad} PONGVERDICT CASE(S) WRONG` : ''}${cvBad ? `, ${cvBad} COLLISIONVERDICT CASE(S) WRONG` : ''}${scBad ? `, ${scBad} STILLCOLLIDED CASE(S) WRONG` : ''}${ccBad ? `, ${ccBad} CONFIRMEDCOLLISIONBLOCKS CASE(S) WRONG` : ''}${rtBad ? `, ${rtBad} RESOLUTIONTRACE CASE(S) WRONG` : ''}${plBad ? `, ${plBad} ISNODEPROCESSLINE CASE(S) WRONG` : ''}`
       : `\n${ran} cases, all pass`,
   );
-  process.exit(missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || cvBad || scBad || ccBad || rtBad || tooFew ? 1 : 0);
+  process.exit(missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || cvBad || scBad || ccBad || rtBad || plBad || tooFew ? 1 : 0);
 }
 
 if (a['self-test']) await selfTest();
