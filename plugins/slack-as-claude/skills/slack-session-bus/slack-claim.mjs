@@ -858,6 +858,43 @@ async function channelHistory() {
 }
 
 /**
+ * Channel-level messages posted at or after `oldestTs`, addressed (to:) to `label` - the
+ * half of #202's "read the discharge as informed" ask that a thread-scoped read cannot
+ * reach: a contribution posted to the channel timeline rather than into the task thread
+ * with --thread-ts. #202's own investigation found this is exactly what happened in the
+ * incident it was filed from - a thread-only check ran correctly, found nothing, and the
+ * confounding message was never in the thread to find. (#205)
+ *
+ * Bounded by the CLAIM'S OWN ts, not the whole channel - the API's own oldest/latest range
+ * filtering does the narrowing, mirroring --audit's oldest/latest-bounded pagination in
+ * slack-watch.mjs, applied here to a moving upper bound (now) rather than a fixed thread
+ * span. For the ordinary case (a task claimed and finished in a reasonable time) this reads
+ * a handful of messages, not the whole channel - proportional to how long the task took,
+ * not to the channel's total history.
+ *
+ * Returns {ok, messages, truncated} - same discipline as channelHistory(): a FAILED or
+ * TRUNCATED read is not "nothing addressed to you" and must not collapse into it.
+ */
+async function channelContributionsSince(oldestTs, label) {
+  const messages = [];
+  let cur = null;
+  let pages = 0;
+  do {
+    const params = { channel: a.channel, oldest: oldestTs, inclusive: 'true', limit: '200' };
+    if (cur) params.cursor = cur;
+    const res = await api(HISTORY, params);
+    if (!res.ok) return { ok: false, error: res.error, messages: [], truncated: false };
+    for (const m of res.messages ?? []) {
+      const mm = meta(m);
+      if (mm.to === label) messages.push({ ts: m.ts, text: m.text, ...mm });
+    }
+    pages++;
+    cur = res.has_more ? res.response_metadata?.next_cursor || null : null;
+  } while (cur && pages < MAX_HISTORY_PAGES);
+  return { ok: true, messages, truncated: Boolean(cur) };
+}
+
+/**
  * Has this session ANNOUNCED that it left? Returns the newest x-retired ts, `null` if none
  * was found, or `{ unknown: true }` if the read failed OR was truncated before finding one -
  * a caller must not read either of those as "confirmed not retired". (#204: added the
@@ -993,6 +1030,32 @@ if (a.done || a.fail) {
     console.log('read --show depends on can miss it entirely - the text above is read directly');
     console.log('from the same fetch that found this message exists.');
   }
+
+  // ⛔⛔ THE HALF THE CHECK ABOVE CANNOT REACH: a contribution posted to the CHANNEL,
+  // addressed to the holder, but never placed in this task's thread - invisible to any
+  // thread-scoped check, however correctly built. #202's own investigation found this is
+  // exactly what happened in the incident it was filed from - the holder ran --audit on the
+  // thread immediately before discharging, correctly found nothing, and discharged anyway.
+  // Bounded by the claim's OWN ts, not the whole channel - proportional to how long the
+  // task took, not to the channel's total history. (#205)
+  const channelContribs = await channelContributionsSince(mine.ts, label);
+  if (!channelContribs.ok) {
+    console.log(`⚠ Could not check the channel for messages addressed to you: ${channelContribs.error}.`);
+    console.log('  Proceeding anyway - a failed read is not a fact about whether anything is there.');
+  } else if (channelContribs.truncated) {
+    console.log(`⚠ Channel history since your claim exceeds the ${MAX_HISTORY_PAGES}-page search`);
+    console.log('  bound - a message addressed to you could exist further back and not be checked.');
+  } else if (channelContribs.messages.length) {
+    const n = channelContribs.messages.length;
+    console.log(`⚠ ${n} channel message(s) addressed to you since your claim, outside this task's thread:`);
+    console.log('');
+    for (const c of channelContribs.messages) {
+      console.log(`  --- ${c.ts}  ${c.session ?? '?'} ---`);
+      console.log(`  ${(c.text || '(no text)').replace(/\n/g, '\n  ')}`);
+      console.log('');
+    }
+    console.log("Read before relying on this - posted to the channel, not into this task's thread.");
+  }
   const els = [
     { type: 'mrkdwn', text: `type: \`${kind}\`` },
     { type: 'mrkdwn', text: `session: \`${label}\`` },
@@ -1015,18 +1078,13 @@ if (a.done || a.fail) {
   }
   console.log(`Posted ${kind} at ${res.ts}, closing your claim ${mine.ts}.`);
   console.log('closes: was filled from the thread, not from you - which is the point.');
-  // ⚠ THE CHECK ABOVE IS THREAD-SCOPED, AND THAT IS NOT THE WHOLE CHANNEL. A contribution
-  // posted to the channel timeline, addressed to the holder but never placed in this
-  // thread with --thread-ts, is invisible to it - measured live: the incident #202 was
-  // filed from was recovered only because a Monitor event woke the holder, and a second,
-  // narrower miss during that same incident was a channel-level reply the thread read
-  // legitimately could not see. UNKNOWN MUST NOT RENDER AS OPEN applies to the SCOPE of a
-  // check, not only its result - so this says what it did not look at, rather than
-  // printing an unqualified clean discharge. (#202, channel-scope scan filed as its own
-  // follow-up rather than built here - see the issue for why)
-  console.log('⚠ This checked the THREAD only. Channel messages addressed to you since your');
-  console.log('  claim were NOT scanned - a peer who replied outside the thread would not have');
-  console.log('  been seen here.');
+  // ⛔ THE BLANKET "channel messages were NOT scanned" DISCLOSURE THAT USED TO BE HERE IS
+  // GONE, DELIBERATELY - not trimmed, REMOVED, because it would now be FALSE. #205 added
+  // the channel-scope scan above (before the discharge post), so both halves are checked;
+  // the one caveat that can still be true - the scan hit its own page bound - is already
+  // reported at the point it happens, not repeated here as a second, stale-by-construction
+  // blanket statement. A claim about what was checked belongs where the check ran, not
+  // duplicated after a write that cannot change whether it was true.
   process.exit(0);
 }
 
