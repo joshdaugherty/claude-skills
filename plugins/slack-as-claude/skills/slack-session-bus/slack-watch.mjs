@@ -4691,6 +4691,18 @@ if (heartbeatSec > 0) {
   setInterval(() => beat(selfLabel, heartbeatSec), heartbeatSec * 1000).unref?.();
 }
 
+/**
+ * ⛔⛔ roster() got this line (#222); the ORDINARY poll/watch path - including a bare
+ * `--once`, the exact command §0 step 3 of slack-as-claude/SKILL.md tells a reader to run
+ * to confirm their invite - never did. A `channel_not_found` or `not_in_channel` from THIS
+ * path names a channel or invite problem; if resolution actually fell back to the wrong
+ * workspace's token, that is a working-directory problem wearing a channel-shaped error,
+ * and nothing printed here said so. Printed once, before the first poll, not per-iteration
+ * - the same one-time-status convention the heartbeat-arming messages just above already
+ * use. (#227)
+ */
+if (!LOCAL_ONLY) console.log(`WORKSPACE  ${workspaceLine(await checkWorkspace(token, { enforce: false }))}`);
+
 const keepGoing = await poll();
 if (a.once || !keepGoing) process.exit(keepGoing ? (wasRateLimited ? 1 : 0) : 1);
 
