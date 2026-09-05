@@ -4749,6 +4749,27 @@ if (heartbeatSec > 0) {
   setInterval(() => beat(selfLabel, heartbeatSec), heartbeatSec * 1000).unref?.();
 }
 
+/**
+ * ⛔⛔ roster() got this line (#222); the ORDINARY poll/watch path - including a bare
+ * `--once`, the exact command §0 step 3 of slack-as-claude/SKILL.md tells a reader to run
+ * to confirm their invite - never did. A `channel_not_found` or `not_in_channel` from THIS
+ * path names a channel or invite problem; if resolution actually fell back to the wrong
+ * workspace's token, that is a working-directory problem wearing a channel-shaped error,
+ * and nothing printed here said so. Printed once, before the first poll, not per-iteration
+ * - the same one-time-status convention the heartbeat-arming messages just above already
+ * use. (#227)
+ *
+ * ⚠ `!LOCAL_ONLY` IS DEFENSIVE HERE, NOT LOAD-BEARING - SAID PLAINLY SO IT IS NOT MISREAD
+ * AS THE REASON A `--consistency`-ONLY RUN IS SAFE. Every branch of the `a.consistency`
+ * block above this line calls `process.exit(0)` unconditionally, so control can never
+ * actually reach here with `LOCAL_ONLY` true and `token` null - confirmed by reading every
+ * branch, not assumed. The guard is kept anyway, matching the one on the token-unset check
+ * above, in case that invariant ever changes; `checkWorkspace(null, ...)` would degrade
+ * safely regardless (`workspaceLine()`'s `!who.ok` branch), so nothing here depends on it
+ * holding. (#227 review)
+ */
+if (!LOCAL_ONLY) console.log(`WORKSPACE  ${workspaceLine(await checkWorkspace(token, { enforce: false }))}`);
+
 const keepGoing = await poll();
 if (a.once || !keepGoing) process.exit(keepGoing ? (wasRateLimited ? 1 : 0) : 1);
 
