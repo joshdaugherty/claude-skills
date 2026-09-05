@@ -198,6 +198,7 @@ const OPTIONS = {
     ping: { type: 'string' },
     wait: { type: 'string', default: '45' },
     'ignore-session': { type: 'string', multiple: true, default: [] },
+    'exclude-type': { type: 'string', multiple: true, default: [] },
     'include-self': { type: 'boolean', default: false },
     once: { type: 'boolean', default: false },
     'self-test': { type: 'boolean', default: false },
@@ -224,6 +225,7 @@ const USAGE =
     'usage: node slack-watch.mjs --channel <id> [--interval 30] [--since <ts>] [--replay]\n' +
       '       [--session <label>] [--heartbeat <sec>] [--presence] [--raw]\n' +
       '       [--ignore-session <label>]... [--include-self] [--once]\n' +
+      '       [--exclude-type <type>]...\n' +
       '\n' +
       '       [--heartbeat <sec>] [--retire] [--releases <ts,ts>] [--all]\n' +
       '       [--announce-install] [--from <version>] [--show <ts>] [--consistency]\n' +
@@ -283,6 +285,13 @@ const USAGE =
       '               and the count printed says how many it withheld.\n' +
       '               Reach for this the moment the rendering looks wrong: the renderer\n' +
       '               is where fields go to die.\n' +
+      '  --exclude-type <type>  drop rendered lines of this type (e.g. x-presence, to quiet\n' +
+      '               a busy heartbeat lane). Repeatable. FILTER INSIDE THE PROCESS, NOT\n' +
+      '               DOWNSTREAM OF IT WITH A PIPE: this script still exits with its own\n' +
+      '               true code either way, where `| grep -v x-presence` hands that exit\n' +
+      '               code to grep instead - and grep can fail on its OWN terms (nothing\n' +
+      '               left to filter) even under `set -o pipefail`, silently substituting\n' +
+      '               its exit code for the one that actually matters. (#220)\n' +
       '\n' +
       '  By default the first poll primes the cursor silently and emits only NEW messages.\n' +
       '  --replay  emit the existing backlog too (it can contain closed work).\n' +
@@ -444,7 +453,7 @@ async function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 116; // raise when adding cases - a constant, reviewed on change (+4 rearmBlocks, +5 collisionVerdict, #213; -3 rearmBlocks, +1 collisionVerdict, +5 stillCollided, +6 confirmedCollisionBlocks, #216; +4 rearmBlocks, +1 collisionVerdict for the 'overlap' state, review fix, #216) - verified against the real --self-test count, not computed by eye
+  const CASE_FLOOR = 117; // raise when adding cases - a constant, reviewed on change (+4 rearmBlocks, +5 collisionVerdict, #213; -3 rearmBlocks, +1 collisionVerdict, +5 stillCollided, +6 confirmedCollisionBlocks, #216; +4 rearmBlocks, +1 collisionVerdict for the 'overlap' state, review fix, #216; +1 --exclude-type in the automatic flag-in-usage loop, #220) - verified against the real --self-test count, not computed by eye
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -852,6 +861,19 @@ const selfLabel =
 const selfLabelDefaulted = !a.session && !process.env.CLAUDE_SESSION_NAME && Boolean(selfLabel);
 const ignored = new Set(a['ignore-session']);
 if (selfLabel && !a['include-self']) ignored.add(selfLabel);
+
+/**
+ * --exclude-type (#220). Filtering IN the process rather than downstream of it with
+ * `| grep -v <type>`: this script always exits with its own true code, whatever that is -
+ * a shell pipe hands the exit code to whichever command is LAST in it, and that command can
+ * fail on ITS OWN terms (e.g. grep finding nothing left to filter) even under
+ * `set -o pipefail`, which only recovers an upstream failure when the last stage would
+ * otherwise have SUCCEEDED. Measured: a died watcher whose only output was on stderr (an
+ * unknown-flag exit) left grep with empty stdin, so grep's own "no lines selected" exit
+ * masked the watcher's real exit code with OR without pipefail - the die was invisible
+ * either way. Filtering here removes the reason to pipe at all.
+ */
+const excludedTypes = new Set(a['exclude-type']);
 
 /**
  * Pull the identity out of a message.
@@ -2140,6 +2162,7 @@ async function poll() {
     const seamWarn = bareSeams ? ` !JOINED(${bareSeams} seam${bareSeams > 1 ? 's' : ''} with no stored separator)` : '';
     const from = meta.session ?? '?';
     if (ignored.has(from)) continue;
+    if (meta.type && excludedTypes.has(meta.type)) continue;
 
     const to = meta.to ? ` to=${meta.to}` : '';
     let type = '';
