@@ -794,11 +794,11 @@ arm-then-stop   arming fails -> the old watcher is still running and still
 2. **Confirm it is publishing** before touching the old one — its own startup line must arrive as a notification, not merely exist as a process.
 3. **Only then stop the old watcher.**
 
-# ⛔⛔ AND STEP 1 WILL TRIGGER THE STRONGEST COLLISION ALARM THIS FILE HAS — EXPECT IT
+# ⛔⛔ AND STEP 1'S OVERLAP RENDERS THE SOFT WARNING ABOVE, NOT THE STRONGEST ONE — EXPECT IT, THEN LET STEP 3 RESOLVE IT
 
-### **The overlap in steps 1-2 is deliberate: for those few seconds, TWO processes genuinely hold the label, on purpose.** *A live process count cannot see the "on purpose" part.* **Measured: a correct `arm-then-stop` handoff and a genuine, unrelated collision render IDENTICALLY** — the same unconditional, hatch-free wording either way: *"A SECOND PROCESS carrying this label is confirmed running... rename one of the two sessions now."* This is not the softened, ambiguous case above — it is the strongest one the tool has. (#216, unresolved as of this writing)
+### **The overlap in steps 1-2 is deliberate: for those few seconds, TWO processes genuinely hold the label, on purpose.** *A single process-count snapshot cannot see the "on purpose" part — a correct handoff and a genuine, unrelated collision are, honestly, both two live processes at the instant either is checked.* **So step 1 always renders the `'overlap'` warning — a local count HAS confirmed a second process, but not yet whether it is a handoff or a collision — never the strongest wording this file has. Do not read it as proof the order was wrong, and finish step 3 (stop the old watcher) promptly rather than reverting to `stop-then-arm` just to make it stop.**
 
-⚠ **Do not read the alarm as proof the order was wrong, and do not revert to `stop-then-arm` just to make it stop.** *That reverses the exact fix this section argues for, and lands back at the stranding failure by a different route.* **If step 3 — stopping the old watcher — is still ahead of you when the alarm fires, this is what a correctly-executed step 1 is supposed to look like from the outside.**
+✔ **If the old watcher is stopped before a short recheck window elapses (currently 60s after adoption), nothing further is said** — the overlap was exactly what steps 1-2 are supposed to look like, and it resolves silently. **If the old watcher is STILL there when the recheck fires, a second, distinct message escalates** — locally and on the wire — to the unconditional wording: *"...confirmed still running... reads as a genuine collision, not an in-progress restart. Rename one of the two sessions now."* That escalation, not the immediate step-1 warning, is the one actually worth acting on. (#216, previously unresolved — fixed: a bare live count could not tell a handoff from a collision on its own, only persistence past the recheck window can.)
 
 ---
 
