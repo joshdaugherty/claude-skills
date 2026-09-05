@@ -18,7 +18,7 @@
  *
  * Node 18+. No dependencies.
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -492,7 +492,7 @@ async function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 131; // raise when adding cases - a constant, reviewed on change (+4 rearmBlocks, +5 collisionVerdict, #213; -3 rearmBlocks, +1 collisionVerdict, +5 stillCollided, +6 confirmedCollisionBlocks, #216; +4 rearmBlocks, +1 collisionVerdict for the 'overlap' state, review fix, #216; +1 --exclude-type in the automatic flag-in-usage loop, #220; +7 resolutionTrace, #222; +7 isNodeProcessLine, #229) - verified against the real --self-test count, not computed by eye
+  const CASE_FLOOR = 137; // raise when adding cases - a constant, reviewed on change (+4 rearmBlocks, +5 collisionVerdict, #213; -3 rearmBlocks, +1 collisionVerdict, +5 stillCollided, +6 confirmedCollisionBlocks, #216; +4 rearmBlocks, +1 collisionVerdict for the 'overlap' state, review fix, #216; +1 --exclude-type in the automatic flag-in-usage loop, #220; +7 resolutionTrace, #222; +7 isNodeProcessLine, #229; +6 --consistency gate (spawnSync, real CLI), #234/#237 review) - verified against the real --self-test count, not computed by eye
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -758,6 +758,32 @@ async function selfTest() {
   const rtBad = rtCases.filter(([, got, want]) => got !== want).length;
 
   /**
+   * LOCAL_ONLY / --consistency's no-channel invariant (#234, #237 review). RUNS THE REAL
+   * CLI via spawnSync, not a re-implementation - this is exactly the level (argv parsing +
+   * the top-level `!a.channel && !LOCAL_ONLY` gate) that hid the --member regression in
+   * #234 and the --announce-install/--show/--raw regression in #237's review from every
+   * other case in this file, because none of them exercise flag-combination dispatch.
+   * `--consistency` combined with a flag whose OWN block sits AFTER it in file order must
+   * still need no --channel (that later block never runs); combined with a flag whose block
+   * sits BEFORE it, --channel is genuinely required (that block is what actually executes).
+   * Both directions asserted so a fix to one cannot silently break the other again.
+   */
+  const gcCases = [
+    { name: '--consistency --announce-install (after-block flag) needs no --channel', args: ['--consistency', '--announce-install'], wantZero: true },
+    { name: '--consistency --raw (after-block flag) needs no --channel', args: ['--consistency', '--raw'], wantZero: true },
+    { name: '--consistency --show <ts> (after-block flag) needs no --channel', args: ['--consistency', '--show', '1788101338.332479'], wantZero: true },
+    { name: '--consistency --doctor (after-block flag) needs no --channel', args: ['--consistency', '--doctor'], wantZero: true },
+    { name: '--consistency --member <id> (before-block flag) DOES need --channel', args: ['--consistency', '--member', 'U000TESTFAKE'], wantZero: false },
+    { name: '--consistency --presence (before-block flag) DOES need --channel', args: ['--consistency', '--presence'], wantZero: false },
+  ];
+  const gcResults = gcCases.map((g) => {
+    const r = spawnSync(process.execPath, [fileURLToPath(import.meta.url), ...g.args], { encoding: 'utf8' });
+    return [g.name, r.status === 0, g.wantZero];
+  });
+  for (const [name, got, want] of gcResults) console.log(`  ${got === want ? 'pass' : 'FAIL'}  --consistency gate: ${name}`);
+  const gcBad = gcResults.filter(([, got, want]) => got !== want).length;
+
+  /**
    * safeJson() (#161). Stubbed Response-likes, not the real network - what matters is
    * whether a throwing .json() is turned into a branchable value, which needs no fetch to
    * exercise. A negative control: a WORKING .json() must still pass its value through
@@ -844,12 +870,12 @@ async function selfTest() {
   const tooFew = ran < CASE_FLOOR;
   if (tooFew) console.log(`\n⛔ ONLY ${ran} CASES RAN, floor is ${CASE_FLOOR} - a block stopped running.`);
   console.log(
-    missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || cvBad || scBad || ccBad || rtBad || plBad || tooFew
+    missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || cvBad || scBad || ccBad || rtBad || plBad || gcBad || tooFew
       ? `\n${tooFew ? `ONLY ${ran} CASES RAN, FLOOR IS ${CASE_FLOOR} - A BLOCK STOPPED RUNNING. ` : ''}${missing.length} FLAG(S) MISSING FROM USAGE${missing.length ? `: ${missing.join(', ')}` : ''}` +
-        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}${xuBad ? `, ${xuBad} X-UPDATE CASE(S) WRONG` : ''}${sjBad ? `, ${sjBad} SAFEJSON CASE(S) WRONG` : ''}${vbBad ? `, ${vbBad} VERIFYBOTID CASE(S) WRONG` : ''}${msBad ? `, ${msBad} MEMBERSTATUS CASE(S) WRONG` : ''}${pbBad ? `, ${pbBad} PRESENCEBLOCKS CASE(S) WRONG` : ''}${rbBad ? `, ${rbBad} REARMBLOCKS CASE(S) WRONG` : ''}${pvBad ? `, ${pvBad} PONGVERDICT CASE(S) WRONG` : ''}${cvBad ? `, ${cvBad} COLLISIONVERDICT CASE(S) WRONG` : ''}${scBad ? `, ${scBad} STILLCOLLIDED CASE(S) WRONG` : ''}${ccBad ? `, ${ccBad} CONFIRMEDCOLLISIONBLOCKS CASE(S) WRONG` : ''}${rtBad ? `, ${rtBad} RESOLUTIONTRACE CASE(S) WRONG` : ''}${plBad ? `, ${plBad} ISNODEPROCESSLINE CASE(S) WRONG` : ''}`
+        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}${xuBad ? `, ${xuBad} X-UPDATE CASE(S) WRONG` : ''}${sjBad ? `, ${sjBad} SAFEJSON CASE(S) WRONG` : ''}${vbBad ? `, ${vbBad} VERIFYBOTID CASE(S) WRONG` : ''}${msBad ? `, ${msBad} MEMBERSTATUS CASE(S) WRONG` : ''}${pbBad ? `, ${pbBad} PRESENCEBLOCKS CASE(S) WRONG` : ''}${rbBad ? `, ${rbBad} REARMBLOCKS CASE(S) WRONG` : ''}${pvBad ? `, ${pvBad} PONGVERDICT CASE(S) WRONG` : ''}${cvBad ? `, ${cvBad} COLLISIONVERDICT CASE(S) WRONG` : ''}${scBad ? `, ${scBad} STILLCOLLIDED CASE(S) WRONG` : ''}${ccBad ? `, ${ccBad} CONFIRMEDCOLLISIONBLOCKS CASE(S) WRONG` : ''}${rtBad ? `, ${rtBad} RESOLUTIONTRACE CASE(S) WRONG` : ''}${plBad ? `, ${plBad} ISNODEPROCESSLINE CASE(S) WRONG` : ''}${gcBad ? `, ${gcBad} CONSISTENCY-GATE CASE(S) WRONG` : ''}`
       : `\n${ran} cases, all pass`,
   );
-  process.exit(missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || cvBad || scBad || ccBad || rtBad || plBad || tooFew ? 1 : 0);
+  process.exit(missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || cvBad || scBad || ccBad || rtBad || plBad || gcBad || tooFew ? 1 : 0);
 }
 
 if (a['self-test']) await selfTest();
@@ -866,21 +892,32 @@ if (a['self-test']) await selfTest();
  * reachable by following the tool's own advice. A required argument that is never read is an
  * instruction to go hunting for a credential you do not need. (#112)
  *
- * ⛔⛔ THE EXCLUSION LIST WAS INCOMPLETE, AND `--member` SITS BEFORE THE `--consistency`
- * BLOCK IN FILE ORDER - SO THE GAP WAS LIVE, NOT THEORETICAL. `--member` and
- * `--announce-install` were absent from this list. `--announce-install`'s own block
- * happens to sit AFTER `--consistency`'s unconditional exit further down the file, so it
- * was safe by accident of ordering - but `--member`'s block sits BEFORE it. Passing
- * `--consistency --member <id>` together made LOCAL_ONLY true, forced `token` to `null`,
- * and reached `--member`'s block with that null token WITHOUT --consistency's own report
- * ever running - silently. Measured live: `WORKSPACE unverified (auth.test failed:
- * invalid_auth)` followed by a real, wasted network call and `Could not read channel
- * membership: invalid_auth` - not a crash, but not the MACHINE CONSISTENCY report the
- * caller asked for either. Both flags added here so correctness does not depend on which
- * block happens to sit first in the file - the same fragility that let this hide. (#234)
+ * ⛔⛔ THE LIST NAMES FLAGS WHOSE BLOCK SITS *BEFORE* --consistency's IN FILE ORDER - AND
+ * ONLY THOSE. `--consistency`'s own block always runs and unconditionally exits before any
+ * LATER flag's block is ever reached, so when `--consistency` is set together with a flag
+ * whose block sits AFTER it, that later block never executes at all - `--channel` is never
+ * actually needed for that combination, whatever that later flag's OWN requirements are in
+ * isolation. `--member` sits BEFORE this block, so it belongs here; `--announce-install`
+ * sits AFTER it and does NOT.
+ *
+ * ⛔⛔⛔ ADDING AN AFTER-BLOCK FLAG HERE ANYWAY - THE INSTINCT THIS COMMENT EXISTS TO STOP -
+ * WAS TRIED TWICE AND BROKE A WORKING INVOCATION BOTH TIMES. `--announce-install` was added
+ * in #234 reasoning "future-proof it regardless of file order"; this same commit was about
+ * to add `--show`/`--raw` for the identical reason, before review caught it. Any of the
+ * three, added here, makes `--consistency --announce-install`/`--show`/`--raw`, run
+ * WITHOUT --channel, exit 1 with the full USAGE dump instead of running the report - a
+ * real, live regression of --consistency's own documented no-channel-needed invariant,
+ * invisible to every self-test in this file because none of them exercise argv-level
+ * flag-combination dispatch. Measured, bracketed both directions: removing the after-block
+ * flags from this list restores `--consistency --announce-install` (no --channel) to exit
+ * 0 with the report; adding them back reproduces the exit-1 usage dump. `--member` was
+ * measured the opposite way in #234 - WITHOUT it, `--consistency --member <id>` (WITH
+ * --channel, since --member requires one) forced `token` to null and produced a false
+ * `invalid_auth` diagnosis instead of running the report. Two flags, two opposite fixes,
+ * because they sit on opposite sides of --consistency's own block - the property this
+ * comment is now explicit about, checked in gcCases below. (#234, #237 review)
  */
-const LOCAL_ONLY =
-  Boolean(a.consistency) && !a.presence && !a.ping && !a.audit && !a.retire && !a.member && !a['announce-install'];
+const LOCAL_ONLY = Boolean(a.consistency) && !a.presence && !a.ping && !a.audit && !a.retire && !a.member;
 
 if (a.help || (!a.channel && !LOCAL_ONLY)) {
   console.error(USAGE);
@@ -4632,6 +4669,10 @@ if (a.show) {
   if (!/^\d{10,}\.\d{6}$/.test(a.show)) {
     die(`--show ${a.show}: not a Slack ts. Quote it exactly as printed - 1788293713.927319.`, 2);
   }
+  // ⛔⛔ #237: --show and --raw are exactly the surfaces a reader reaches for BECAUSE
+  // something already looks wrong - the last place a silent wrong-workspace read should
+  // hide. Same call as --ping/--audit/--member/--retire/--announce-install got in #234.
+  console.log(`WORKSPACE  ${workspaceLine(await checkWorkspace(token, { enforce: false }))}`);
   // ⚠ STOPS THE INSTANT THE TS IS FOUND, EARLY-EXITING PAGINATION - "is there a message
   // with THIS exact ts" needs no further pages once answered. (#177)
   const read = await recentMessages(200, { stopWhen: (msgs) => msgs.some((m) => m.ts === a.show) });
@@ -4677,6 +4718,7 @@ if (a.show) {
 }
 
 if (a.raw) {
+  console.log(`WORKSPACE  ${workspaceLine(await checkWorkspace(token, { enforce: false }))}`); // see --show above (#237)
   // ⚠ ALWAYS 200, not a smaller default without --since. The summary below tells a reader
   // withheld by --since to "Drop --since to see all of them" - if dropping it also shrank
   // the fetch window, that advice would show FEWER messages than the run it was printed
