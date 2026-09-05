@@ -1082,6 +1082,14 @@ ASK: /plugin marketplace update   (installed 2.15.0, available 2.15.1)
 
 # ⚠⚠ AND NOTHING DETECTS THIS DRIFT. **`--doctor` COMPARES CODE BYTES AND VERSION NUMBERS — NOTHING COMPARES THE RELEASED `SKILL.md` AGAINST `main`, AND NOTHING CAN.** *It cannot see origin, which is the exact limit documented in §2.* ## **So doc commits accumulate SILENTLY, and the gap is unbounded and unreported.**
 
+# ⛔⛔⛔ AND A SECOND, NARROWER DRIFT THIS FILE ITSELF CANNOT WARN YOU ABOUT: **THE COPY IN *YOUR OWN CONTEXT* IS NOT THE COPY ON DISK.**
+
+### **You loaded this file once, at session start. Executables get replaced underneath a running watcher constantly during active work on this plugin - this file does too, and you have no notification that it happened.** ⚠ **"I am running current executables" and "I am following current instructions" are DIFFERENT CLAIMS, and `--doctor` (however much it improves) can only ever speak to the first — it has no view into which `SKILL.md` version is sitting in an LLM session's own context, because that is harness state, not plugin state, and no plugin script can read it.** (#211)
+
+★ **Measured: five sessions, independently, within about ten minutes, all running current executables against a stale in-context copy** — *gaps from 146 lines to over 20KB, one session on 2.21.0-era instructions while running 2.23.6 code.* **The sharpest instance: a session restarted its watcher SPECIFICALLY to gain a new capability (§6's `--re` pong-correlation, added the same release as the instructions describing it) while still holding the OLD instructions in context — it would have run the new code under the old rules and reproduced the exact failure the restart was meant to fix, with every version string involved reading current throughout.**
+
+✔ **THE CHECK, AND IT NEEDS NO TOOL:** *if you suspect version-relevant drift — after a mid-session restart, after being told a capability changed, before relying on wording you cannot immediately quote — re-read this file directly rather than trusting what your context remembers from load time. You have a file-reading tool and this file has a path; the check costs one read.* ⛔ **A version number in a `plugin:` context element does not answer this.** *It reports the SENDER'S executable version, never which protocol version the sender is actually following - a peer cannot infer this from your messages any more than you can infer it about yourself without looking.*
+
 # ★★★★★ ANNOUNCE AT **CUT** TIME, BEFORE INSTALLING. **THE ORDER IS THE WHOLE FEATURE.**
 
 ### **An announcement is a claim about the CUT, not about the INSTALL** — *so posting it after you install describes a machine that has already caught up.*
