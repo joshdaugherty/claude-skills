@@ -865,8 +865,22 @@ if (a['self-test']) await selfTest();
  * and no Slack credential at all. And --doctor tells the reader to run it, so the dead end was
  * reachable by following the tool's own advice. A required argument that is never read is an
  * instruction to go hunting for a credential you do not need. (#112)
+ *
+ * ⛔⛔ THE EXCLUSION LIST WAS INCOMPLETE, AND `--member` SITS BEFORE THE `--consistency`
+ * BLOCK IN FILE ORDER - SO THE GAP WAS LIVE, NOT THEORETICAL. `--member` and
+ * `--announce-install` were absent from this list. `--announce-install`'s own block
+ * happens to sit AFTER `--consistency`'s unconditional exit further down the file, so it
+ * was safe by accident of ordering - but `--member`'s block sits BEFORE it. Passing
+ * `--consistency --member <id>` together made LOCAL_ONLY true, forced `token` to `null`,
+ * and reached `--member`'s block with that null token WITHOUT --consistency's own report
+ * ever running - silently. Measured live: `WORKSPACE unverified (auth.test failed:
+ * invalid_auth)` followed by a real, wasted network call and `Could not read channel
+ * membership: invalid_auth` - not a crash, but not the MACHINE CONSISTENCY report the
+ * caller asked for either. Both flags added here so correctness does not depend on which
+ * block happens to sit first in the file - the same fragility that let this hide. (#234)
  */
-const LOCAL_ONLY = Boolean(a.consistency) && !a.presence && !a.ping && !a.audit && !a.retire;
+const LOCAL_ONLY =
+  Boolean(a.consistency) && !a.presence && !a.ping && !a.audit && !a.retire && !a.member && !a['announce-install'];
 
 if (a.help || (!a.channel && !LOCAL_ONLY)) {
   console.error(USAGE);
@@ -2491,6 +2505,20 @@ if (a.ping) {
     console.error("own to:-exclusion in a responder's --re check has nothing to compare against.");
     process.exit(1);
   }
+  /**
+   * ⛔⛔ #227 gave the ordinary poll path a WORKSPACE line; the five commands below it in
+   * the file - --ping, --audit, --member, --retire, --announce-install - did not get it in
+   * that sweep. All five resolve and use `token` the same way the poll path does, so all
+   * five can silently act against a resolved-but-wrong workspace with no diagnostic at all:
+   * a ping into a channel that exists in the wrong workspace waits forever for a pong that
+   * was never going to arrive from a peer who is not there; an audit or membership read
+   * against the wrong workspace reads as a real, if surprising, answer. Reachable by this
+   * command specifically because LOCAL_ONLY is false whenever --ping/--audit/--retire is
+   * set (by the boolean's own construction) and --member/--announce-install are only ever
+   * reached once --consistency's own unconditional early exit has already been ruled out -
+   * `token` is therefore always the real resolution here, never the LOCAL_ONLY null. (#234)
+   */
+  console.log(`WORKSPACE  ${workspaceLine(await checkWorkspace(token, { enforce: false }))}`);
   const target = a.ping;
   const waitSec = Math.max(5, Number(a.wait) || 45);
   const sent = await slackPost('chat.postMessage', {
@@ -2606,6 +2634,7 @@ if (a.audit) {
     console.error(`--audit "${a.audit}" is not a Slack timestamp. Quote it.`);
     process.exit(2);
   }
+  console.log(`WORKSPACE  ${workspaceLine(await checkWorkspace(token, { enforce: false }))}`); // see --ping above (#234)
   const repRes = await fetch(
     `https://slack.com/api/conversations.replies?channel=${a.channel}&ts=${a.audit}&limit=200`,
     { headers: { Authorization: `Bearer ${token}` } },
@@ -2703,6 +2732,7 @@ if (a.member) {
   // FIRST - a check here was DEAD CODE, silently replaced by the generic guard's own exit 1
   // and full USAGE dump instead of this block's intended exit 2 and specific message. Found
   // by review, not by reading: the guard had never actually been reached. (#173)
+  console.log(`WORKSPACE  ${workspaceLine(await checkWorkspace(token, { enforce: false }))}`); // see --ping above (#234)
   const memberIds = [];
   let cur = null;
   let pages = 0;
@@ -2755,6 +2785,7 @@ if (a.retire) {
     console.error('--retire needs a label: pass --session, or set CLAUDE_SESSION_NAME.');
     process.exit(1);
   }
+  console.log(`WORKSPACE  ${workspaceLine(await checkWorkspace(token, { enforce: false }))}`); // see --ping above (#234)
 
   // ★★ RETIREMENT IS POSITIVE EVIDENCE OF ABSENCE, AND IT IS THE ONLY SUCH SIGNAL ON THIS
   // BUS. Every other absence signal here is an inference from SILENCE, which is why §6 is
@@ -4237,6 +4268,7 @@ function xUpdateBlocks({ session, machine, cached, from, baselineSrc, restartReq
 
 if (a['announce-install']) {
   if (!a.session) die('--announce-install needs --session <label>: the notice says who moved.', 2);
+  console.log(`WORKSPACE  ${workspaceLine(await checkWorkspace(token, { enforce: false }))}`); // see --ping above (#234)
 
   /**
    * ⛔⛔ THE LABEL WAS CHECKED FOR EXISTENCE AND NEVER FOR REACHABILITY.
