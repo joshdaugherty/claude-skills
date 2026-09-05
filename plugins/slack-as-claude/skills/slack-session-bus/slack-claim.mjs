@@ -244,6 +244,25 @@ function repoWorkspace() {
   }
 }
 
+/**
+ * ⛔⛔ ONE LINE NAMING WHERE TOKEN-NAME RESOLUTION ACTUALLY LOOKED - MISSING FROM EVERY
+ * SURFACE THAT ACTS ON THE RESULT WITHOUT SHOWING checkWorkspace()'s FULLER VERDICT.
+ *
+ * The claim protocol is worthless across a workspace boundary (see the comment at this
+ * file's token gate below) - a claim posted to the wrong workspace is invisible to every
+ * peer, and the claimant reads an empty thread and concludes it holds the task. None of
+ * this file's existing messages name the working directory, which is the cause whenever
+ * resolution goes somewhere unintended. (#222)
+ *
+ * Injectable so this is checkable without touching the real filesystem or shelling out to
+ * git - see rtCases in selfTest().
+ */
+function resolutionTrace(varName = tokenVar(), root = gitRoot(), exists = existsSync) {
+  if (!root) return `no git root found from ${process.cwd()} - falling back to ${varName}`;
+  const p = join(root, '.claude', 'slack-workspace.json');
+  return exists(p) ? `bound to ${p} (token_env: ${varName})` : `${p} not found - falling back to ${varName}`;
+}
+
 /** Who does this token actually belong to? One call, and it is the only source of truth. */
 async function whoAmI(token) {
   try {
@@ -461,7 +480,7 @@ function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 30; // raise when adding cases - a constant, reviewed on change (+5 for unreadContributions, #202)
+  const CASE_FLOOR = 37; // raise when adding cases - a constant, reviewed on change (+5 for unreadContributions, #202; +7 resolutionTrace, #222)
   let failed = 0;
   const check = (name, got, want) => {
     const ok = JSON.stringify(got) === JSON.stringify(want);
@@ -532,6 +551,19 @@ function selfTest() {
    * These spawn this same file, so they exercise the real entry point rather than a
    * re-implementation of it - the distinction that let the original bug through.
    */
+  /**
+   * resolutionTrace() (#222). Injected root/exists so the three states (no git root, a
+   * root with no workspace file, a bound workspace) are checkable without a real git call
+   * or filesystem read - and never touch a real credential, only a fixture var NAME.
+   */
+  check('no git root names the cwd, not just the var', resolutionTrace('SLACK_BOT_TOKEN', null, () => false).includes(process.cwd()), true);
+  check('no git root falls back to the given var', resolutionTrace('SLACK_BOT_TOKEN_ACME', null, () => false).includes('falling back to SLACK_BOT_TOKEN_ACME'), true);
+  check('a root with no workspace file names the path it looked for', resolutionTrace('SLACK_BOT_TOKEN', 'C:\\repo', () => false).includes('C:\\repo\\.claude\\slack-workspace.json'), true);
+  check('a root with no workspace file also falls back, not silently', resolutionTrace('SLACK_BOT_TOKEN', 'C:\\repo', () => false).includes('falling back to'), true);
+  check('a bound workspace says BOUND, not fallback', resolutionTrace('SLACK_BOT_TOKEN_ACME', 'C:\\repo', () => true).includes('bound to'), true);
+  check('a bound workspace does NOT say falling back', resolutionTrace('SLACK_BOT_TOKEN_ACME', 'C:\\repo', () => true).includes('falling back'), false);
+  check('a bound workspace still names which var it declared', resolutionTrace('SLACK_BOT_TOKEN_ACME', 'C:\\repo', () => true).includes('SLACK_BOT_TOKEN_ACME'), true);
+
   const OK = ['--channel', 'C0123456789', '--task', '1788101338.332479', '--session', 'probe'];
   const guards = [
     { name: '--done --fail', args: [...OK, '--done', '--fail'], want: 'Pass --done OR --fail, not both.', code: 2 },
@@ -668,11 +700,23 @@ if (!/^\d{10,}\.\d{6}$/.test(a.task)) {
 // wrong workspace is invisible to every peer, so the claimant reads an empty thread and
 // concludes it holds the task. Verified before any claim is written.
 const token = botToken();
-if (!a.help) await checkWorkspace(token ?? '');
+const WS = a.help ? null : await checkWorkspace(token ?? '');
+
+/**
+ * ⛔⛔ A CLAIM HAD NO EQUIVALENT OF slack-post.mjs's --dry-run `workspace:` LINE, AND CANNOT
+ * GET ONE THE SAME WAY - this file has no preview mode; every invocation writes. A mismatch
+ * already dies with full detail via checkWorkspace() above, but the two cases with nothing
+ * WRONG on that check's own terms said nothing at all: no local binding (silently falls
+ * back to a bare var name), and a binding that matches but belongs to the wrong repo (two
+ * repos sharing one team_id/token_env). Printed on every real invocation, and named here
+ * rather than repeated below the token-unset check that follows. (#222)
+ */
+if (!a.help) {
+  console.error(WS.want ? `[claim] bound to ${WS.want.path}` : `[claim] ⚠ ${resolutionTrace()} - if this claim lands somewhere unexpected, that is why.`);
+}
 
 if (!token) {
-  console.error(`${tokenVar()} is not set.`);
-  process.exit(2);
+  die(`${tokenVar()} is not set.`, 2);
 }
 
 const auth = { Authorization: `Bearer ${token}` };

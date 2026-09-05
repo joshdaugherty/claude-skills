@@ -453,7 +453,7 @@ async function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 117; // raise when adding cases - a constant, reviewed on change (+4 rearmBlocks, +5 collisionVerdict, #213; -3 rearmBlocks, +1 collisionVerdict, +5 stillCollided, +6 confirmedCollisionBlocks, #216; +4 rearmBlocks, +1 collisionVerdict for the 'overlap' state, review fix, #216; +1 --exclude-type in the automatic flag-in-usage loop, #220) - verified against the real --self-test count, not computed by eye
+  const CASE_FLOOR = 124; // raise when adding cases - a constant, reviewed on change (+4 rearmBlocks, +5 collisionVerdict, #213; -3 rearmBlocks, +1 collisionVerdict, +5 stillCollided, +6 confirmedCollisionBlocks, #216; +4 rearmBlocks, +1 collisionVerdict for the 'overlap' state, review fix, #216; +1 --exclude-type in the automatic flag-in-usage loop, #220; +7 resolutionTrace, #222) - verified against the real --self-test count, not computed by eye
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -683,6 +683,23 @@ async function selfTest() {
   const ccBad = ccCases.filter(([, got, want]) => got !== want).length;
 
   /**
+   * resolutionTrace() (#222). Injected root/exists so the three states (no git root, a
+   * root with no workspace file, a bound workspace) are checkable without a real git call
+   * or filesystem read - and never touch a real credential, only a fixture var NAME.
+   */
+  const rtCases = [
+    ['no git root names the cwd, not just the var', resolutionTrace('SLACK_BOT_TOKEN', null, () => false).includes(process.cwd()), true],
+    ['no git root falls back to the given var', resolutionTrace('SLACK_BOT_TOKEN_ACME', null, () => false).includes('falling back to SLACK_BOT_TOKEN_ACME'), true],
+    ['a root with no workspace file names the path it looked for', resolutionTrace('SLACK_BOT_TOKEN', 'C:\\repo', () => false).includes('C:\\repo\\.claude\\slack-workspace.json'), true],
+    ['a root with no workspace file also falls back, not silently', resolutionTrace('SLACK_BOT_TOKEN', 'C:\\repo', () => false).includes('falling back to'), true],
+    ['a bound workspace says BOUND, not fallback', resolutionTrace('SLACK_BOT_TOKEN_ACME', 'C:\\repo', () => true).includes('bound to'), true],
+    ['a bound workspace does NOT say falling back', resolutionTrace('SLACK_BOT_TOKEN_ACME', 'C:\\repo', () => true).includes('falling back'), false],
+    ['a bound workspace still names which var it declared', resolutionTrace('SLACK_BOT_TOKEN_ACME', 'C:\\repo', () => true).includes('SLACK_BOT_TOKEN_ACME'), true],
+  ];
+  for (const [name, got, want] of rtCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  resolutionTrace: ${name}`);
+  const rtBad = rtCases.filter(([, got, want]) => got !== want).length;
+
+  /**
    * safeJson() (#161). Stubbed Response-likes, not the real network - what matters is
    * whether a throwing .json() is turned into a branchable value, which needs no fetch to
    * exercise. A negative control: a WORKING .json() must still pass its value through
@@ -769,12 +786,12 @@ async function selfTest() {
   const tooFew = ran < CASE_FLOOR;
   if (tooFew) console.log(`\n⛔ ONLY ${ran} CASES RAN, floor is ${CASE_FLOOR} - a block stopped running.`);
   console.log(
-    missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || cvBad || scBad || ccBad || tooFew
+    missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || cvBad || scBad || ccBad || rtBad || tooFew
       ? `\n${tooFew ? `ONLY ${ran} CASES RAN, FLOOR IS ${CASE_FLOOR} - A BLOCK STOPPED RUNNING. ` : ''}${missing.length} FLAG(S) MISSING FROM USAGE${missing.length ? `: ${missing.join(', ')}` : ''}` +
-        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}${xuBad ? `, ${xuBad} X-UPDATE CASE(S) WRONG` : ''}${sjBad ? `, ${sjBad} SAFEJSON CASE(S) WRONG` : ''}${vbBad ? `, ${vbBad} VERIFYBOTID CASE(S) WRONG` : ''}${msBad ? `, ${msBad} MEMBERSTATUS CASE(S) WRONG` : ''}${pbBad ? `, ${pbBad} PRESENCEBLOCKS CASE(S) WRONG` : ''}${rbBad ? `, ${rbBad} REARMBLOCKS CASE(S) WRONG` : ''}${pvBad ? `, ${pvBad} PONGVERDICT CASE(S) WRONG` : ''}${cvBad ? `, ${cvBad} COLLISIONVERDICT CASE(S) WRONG` : ''}${scBad ? `, ${scBad} STILLCOLLIDED CASE(S) WRONG` : ''}${ccBad ? `, ${ccBad} CONFIRMEDCOLLISIONBLOCKS CASE(S) WRONG` : ''}`
+        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}${xuBad ? `, ${xuBad} X-UPDATE CASE(S) WRONG` : ''}${sjBad ? `, ${sjBad} SAFEJSON CASE(S) WRONG` : ''}${vbBad ? `, ${vbBad} VERIFYBOTID CASE(S) WRONG` : ''}${msBad ? `, ${msBad} MEMBERSTATUS CASE(S) WRONG` : ''}${pbBad ? `, ${pbBad} PRESENCEBLOCKS CASE(S) WRONG` : ''}${rbBad ? `, ${rbBad} REARMBLOCKS CASE(S) WRONG` : ''}${pvBad ? `, ${pvBad} PONGVERDICT CASE(S) WRONG` : ''}${cvBad ? `, ${cvBad} COLLISIONVERDICT CASE(S) WRONG` : ''}${scBad ? `, ${scBad} STILLCOLLIDED CASE(S) WRONG` : ''}${ccBad ? `, ${ccBad} CONFIRMEDCOLLISIONBLOCKS CASE(S) WRONG` : ''}${rtBad ? `, ${rtBad} RESOLUTIONTRACE CASE(S) WRONG` : ''}`
       : `\n${ran} cases, all pass`,
   );
-  process.exit(missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || cvBad || scBad || ccBad || tooFew ? 1 : 0);
+  process.exit(missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || cvBad || scBad || ccBad || rtBad || tooFew ? 1 : 0);
 }
 
 if (a['self-test']) await selfTest();
@@ -800,7 +817,7 @@ if (a.help || (!a.channel && !LOCAL_ONLY)) {
 
 const token = LOCAL_ONLY ? null : botToken();
 if (!token && !LOCAL_ONLY) {
-  console.error(`${tokenVar()} is not set.`);
+  console.error(`${resolutionTrace()}\n\n${tokenVar()} is not set.`);
   process.exit(1);
 }
 
@@ -1231,6 +1248,27 @@ function repoWorkspace() {
     }
     throw e;
   }
+}
+
+/**
+ * ⛔⛔ ONE LINE NAMING WHERE TOKEN-NAME RESOLUTION ACTUALLY LOOKED - MISSING FROM EVERY
+ * SURFACE THAT ACTS ON THE RESULT WITHOUT SHOWING checkWorkspace()'s FULLER VERDICT.
+ *
+ * A read told the reader ONLY the downstream symptom of a wrong resolution - a plausible-
+ * looking empty roster, with nothing to say it was reading the wrong workspace entirely -
+ * never WHERE the lookup went. None of this file's existing messages name the working
+ * directory, which is the cause whenever resolution goes somewhere unintended. (#222)
+ *
+ * Injectable so this is checkable without touching the real filesystem or shelling out to
+ * git - see rtCases in selfTest(). `function`, not `const`, deliberately: this is called
+ * from the token-unset gate near the top of the file, well before this declaration's own
+ * line runs in module-evaluation order - a `const` here would TDZ-crash the exact way
+ * COLLISION_RECHECK_GRACE_SEC once did (#216); a hoisted function declaration does not.
+ */
+function resolutionTrace(varName = tokenVar(), root = gitRoot(), exists = existsSync) {
+  if (!root) return `no git root found from ${process.cwd()} - falling back to ${varName}`;
+  const p = join(root, '.claude', 'slack-workspace.json');
+  return exists(p) ? `bound to ${p} (token_env: ${varName})` : `${p} not found - falling back to ${varName}`;
 }
 
 /**
@@ -1856,6 +1894,17 @@ function lastSpokeAt(msgs, meta) {
 }
 
 async function roster() {
+  /**
+   * ⛔⛔ AN EMPTY ROSTER IS A STATE THAT GENUINELY OCCURS - A QUIET CHANNEL - SO IT READS
+   * AS A VALID ANSWER RATHER THAN A FAILURE, EVEN WHEN THE ANSWER CAME FROM THE WRONG
+   * WORKSPACE ENTIRELY. --doctor already prints WORKSPACE so a reader can check where it
+   * looked (line ~3198, this same checkWorkspace()/workspaceLine() pair); this read
+   * surface never did, despite being the one a peer is actually told to consult before a
+   * --takeover. Printed unconditionally, not only when something looks wrong - a quiet
+   * roster from the RIGHT workspace and a quiet roster from the WRONG one render
+   * identically otherwise, and the only difference is one line neither used to show. (#222)
+   */
+  console.log(`WORKSPACE  ${workspaceLine(await checkWorkspace(token, { enforce: false }))}`);
   const now = Math.floor(Date.now() / 1000);
   const read = await recentMessages();
   if (!read.ok) {

@@ -440,6 +440,27 @@ function repoWorkspace() {
   }
 }
 
+/**
+ * ⛔⛔ ONE LINE NAMING WHERE TOKEN-NAME RESOLUTION ACTUALLY LOOKED - MISSING FROM EVERY
+ * SURFACE THAT ACTS ON THE RESULT WITHOUT SHOWING checkWorkspace()'s FULLER VERDICT.
+ *
+ * A caller was told only the DOWNSTREAM symptom of a wrong resolution, never WHERE the
+ * lookup went: a bare "SLACK_BOT_TOKEN is not set" naming the DEFAULT while a repo's own
+ * declared token_env sat unset and unmentioned; a Slack channel_not_found for a channel
+ * that exists, just not in the workspace this token actually belongs to (the registry
+ * fallback resolving a DIFFERENT, real workspace's token on Windows); a plausible-looking
+ * empty read with nothing to say it was reading the wrong place at all. None of the three
+ * name the working directory, which is the cause in every one. (#222)
+ *
+ * Injectable so this is checkable without touching the real filesystem or shelling out to
+ * git - see rtCases in selfTest().
+ */
+function resolutionTrace(varName = tokenVar(), root = gitRoot(), exists = existsSync) {
+  if (!root) return `no git root found from ${process.cwd()} - falling back to ${varName}`;
+  const p = join(root, '.claude', 'slack-workspace.json');
+  return exists(p) ? `bound to ${p} (token_env: ${varName})` : `${p} not found - falling back to ${varName}`;
+}
+
 /** Who does this token actually belong to? One call, and it is the only source of truth. */
 async function whoAmI(token) {
   try {
@@ -899,7 +920,7 @@ function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 50; // raise when adding cases - a constant, reviewed on change (+1 for --re, #201)
+  const CASE_FLOOR = 57; // raise when adding cases - a constant, reviewed on change (+1 for --re, #201; +7 resolutionTrace, #222)
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -949,6 +970,24 @@ function selfTest() {
   ];
   for (const [name, got, want] of plat) console.log(`  ${got === want ? 'pass' : 'FAIL'}  token msg: ${name}`);
   const platFailed = plat.filter(([, got, want]) => got !== want).length;
+
+  /**
+   * resolutionTrace() (#222). Injected root/exists so the three states (no git root, a
+   * root with no workspace file, a bound workspace) are checkable without a real git call
+   * or filesystem read - and never touch a real credential, only a fixture var NAME.
+   */
+  const rt = [
+    ['no git root names the cwd, not just the var', resolutionTrace('SLACK_BOT_TOKEN', null, () => false).includes(process.cwd()), true],
+    ['no git root falls back to the given var', resolutionTrace('SLACK_BOT_TOKEN_ACME', null, () => false).includes('falling back to SLACK_BOT_TOKEN_ACME'), true],
+    ['a root with no workspace file names the path it looked for', resolutionTrace('SLACK_BOT_TOKEN', 'C:\\repo', () => false).includes('C:\\repo\\.claude\\slack-workspace.json'), true],
+    ['a root with no workspace file also falls back, not silently', resolutionTrace('SLACK_BOT_TOKEN', 'C:\\repo', () => false).includes('falling back to'), true],
+    ['a bound workspace says BOUND, not fallback', resolutionTrace('SLACK_BOT_TOKEN_ACME', 'C:\\repo', () => true).includes('bound to'), true],
+    ['a bound workspace does NOT say falling back', resolutionTrace('SLACK_BOT_TOKEN_ACME', 'C:\\repo', () => true).includes('falling back'), false],
+    ['a bound workspace still names which var it declared', resolutionTrace('SLACK_BOT_TOKEN_ACME', 'C:\\repo', () => true).includes('SLACK_BOT_TOKEN_ACME'), true],
+  ];
+  for (const [name, got, want] of rt) console.log(`  ${got === want ? 'pass' : 'FAIL'}  resolutionTrace: ${name}`);
+  const rtFailed = rt.filter(([, got, want]) => got !== want).length;
+
   const mdFailed = md.filter(([, got, want]) => got !== want).length;
   const tbl = toSlackMrkdwn('| a | b |\n| - | - |').changes.tableRows;
   console.log(`  ${tbl === 2 ? 'pass' : 'FAIL'}  mrkdwn: table rows counted (${tbl}), warned not converted`);
@@ -964,7 +1003,7 @@ function selfTest() {
   // it guards, which would move with them and assert nothing. Raise it when adding cases.
   const tooFew = ran < CASE_FLOOR;
   if (tooFew) console.log(`\n⛔ ONLY ${ran} CASES RAN, floor is ${CASE_FLOOR} - a block stopped running.`);
-  const bad = missing.length + manFailed + mdFailed + platFailed + (tbl === 2 ? 0 : 1) + (tooFew ? 1 : 0);
+  const bad = missing.length + manFailed + mdFailed + platFailed + rtFailed + (tbl === 2 ? 0 : 1) + (tooFew ? 1 : 0);
   console.log(
     bad
       ? `\n${bad} FAILURE(S)${missing.length ? ` - flags missing from usage: ${missing.join(', ')}` : ''}`
@@ -987,7 +1026,7 @@ if (a['self-test']) selfTest();
 if (a.whoami) {
   const varName = a['as-coordinator'] ? coordinatorTokenVar() : tokenVar();
   const wToken = a['as-coordinator'] ? botToken(coordinatorTokenVar()) : botToken();
-  if (!wToken) die(missingTokenMessage(varName, process.platform));
+  if (!wToken) die(`${resolutionTrace(varName)}\n\n${missingTokenMessage(varName, process.platform)}`);
   const who = await whoAmI(wToken);
   if (!who.ok) die(`auth.test failed: ${who.error}`, 1);
   console.log(`team    : ${who.team} (${who.team_id})`);
@@ -1050,7 +1089,8 @@ if (!token) {
    * several workspaces' tokens, so ANYONE SEEING THIS MESSAGE IS BY CONSTRUCTION SOMEONE FOR
    * WHOM THE DEFAULT IS WRONG.
    */
-  die(missingTokenMessage(a['as-coordinator'] ? coordinatorTokenVar() : tokenVar(), process.platform));
+  const missingVar = a['as-coordinator'] ? coordinatorTokenVar() : tokenVar();
+  die(`${resolutionTrace(missingVar)}\n\n${missingTokenMessage(missingVar, process.platform)}`);
 }
 
 // --- payload ----------------------------------------------------------------
@@ -1437,6 +1477,24 @@ if (!a['as-app']) {
 // ⚠ CHECKED EVEN ON --dry-run. "Where is this going" must be answerable WITHOUT
 // sending, and the destination is exactly what a preview was silently omitting.
 const WS = await checkWorkspace(token, { enforce: !a['dry-run'] });
+
+/**
+ * ⛔⛔ A REAL SEND HAD NO EQUIVALENT OF --dry-run's `workspace:` LINE. WS.want was already
+ * computed by the line above either way - a MISMATCH already dies with the full detail
+ * below, but the two cases with NOTHING WRONG on this check's own terms said nothing at
+ * all: no local binding at all (silently falls back to a bare var name - #222's first two
+ * measured arms), and a binding that DOES match but happens to belong to the WRONG repo
+ * (two repos sharing one team_id/token_env - #222's fourth arm, "the only tell is one
+ * field in a context block"). Printed on every real send, not only a --dry-run preview,
+ * because the preview is exactly the step a session under time pressure skips.
+ */
+if (!a['dry-run']) {
+  console.error(
+    WS.want
+      ? `[post] bound to ${WS.want.path}`
+      : `[post] ⚠ ${resolutionTrace(a['as-coordinator'] ? coordinatorTokenVar() : tokenVar())} - if this lands somewhere unexpected, that is why.`,
+  );
+}
 
 /**
  * ⚠ THE MISMATCH HALF OF THE ABSENCE CHECK ABOVE (line ~1255), NOT A NEW CHECK.
