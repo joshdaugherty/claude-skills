@@ -389,6 +389,20 @@ function looksLikeCollision(age, every) {
  * win32 branch never had this problem, because `Name='node.exe'` filters to the
  * executable FIRST - this brings the POSIX branch to the same two-step shape rather than
  * patching around the inflation after the fact. (#229)
+ *
+ * ⚠ AND THE FIX ITSELF IS UNEVENLY VERIFIED - CARRYING THE HEDGE FORWARD RATHER THAN
+ * DROPPING IT NOW THAT THE OLD DEFECT IS FIXED. `ps -eo comm=,command=` filtered on `comm`
+ * is verified LIVE on macOS (measured in #229's own thread) and by a fabricated-fixture
+ * negative control here on Windows - not against a real Linux process tree by anyone. Two
+ * narrower gaps this predicate does not close, named rather than guessed past: a process
+ * launched via the legacy `nodejs` invocation some pre-2016 Debian/Ubuntu wrapper habits
+ * still carry would report `comm=nodejs`, matching neither branch here, and would exclude
+ * the REAL watcher from its own count - the opposite failure, an undercount; and a
+ * Node-based (not shell-based) supervisor whose own argv happens to also carry
+ * `--session <label>` still has `comm=node` and still inflates the count, exactly like the
+ * wrapper this fix removes, because the discriminator here is the EXECUTABLE, not
+ * ancestry. Neither has been observed in a real deployment - recorded as a known limit of
+ * this fix's shape, not evidence against it. (#229 review)
  */
 function isNodeProcessLine(line) {
   const trimmed = line.trim();
