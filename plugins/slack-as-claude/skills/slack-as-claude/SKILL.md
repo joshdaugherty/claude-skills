@@ -33,6 +33,7 @@ node <plugin>/skills/slack-as-claude/slack-post.mjs --channel <CHANNEL_ID> --tex
 | `[matches <path>]` | ✔ **Configured and enforced. Nothing to do → §3 POSTING.** |
 | :-- | --- |
 | # ⚠ **`[no repo declaration - unenforced]`** | ### **THE TOKEN WORKS AND NOTHING IS PROTECTING IT.** *The repo declares no binding, so it will post to whatever workspace the machine's token belongs to and report `ok: true` doing it.* # **This is not "set up" — it is "set up and unguarded", and it LOOKS like success.** ✔ *Fix: write the declaration → §2. One file, no secret in it.* |
+| # ⛔⛔ **`⛔ [NO GIT ROOT HERE - nothing was consulted, so this is whatever <TOKEN_VAR> points at]`** | ### **WORSE THAN THE ROW ABOVE: THE QUESTION WAS NEVER ASKED.** *Reachable by the DOCUMENTED path — §0's own probe hands you the plugin directory and tells you to `--dry-run` from it, and that directory has no git root at all.* # **On a machine holding more than one workspace's token this silently selects a DIFFERENT one and reports it as clean.** ✔ *Fix: `cd` into the repo this bus is actually for before running anything — a failing `git rev-parse --show-toplevel` here is the tell, and the working directory named in the line above it is the diagnosis. (#222)* |
 | **`[DOES NOT MATCH <path>]`** / **`WORKSPACE MISMATCH - refusing to send.`** | **Bound, and the token belongs to a different workspace.** *Fix whichever is wrong — the declaration or the variable. It REFUSES, so nothing has leaked.* |
 | **`<TOKEN_VAR> is not set.`** | **No credential on this machine** *(or, on macOS/Linux, the session has not restarted)* **→ the stash step in SECTION A · 5.** |
 | **plugin reported not installed** | `claude plugin install slack-as-claude@claude-skills` **→ SECTION A · 2.** |
@@ -473,7 +474,13 @@ credential  : process.env[token_env || SLACK_BOT_TOKEN]  -> HKCU\Environment, sa
 verify      : auth.test on every send; a mismatch REFUSES with exit 2, naming BOTH
 ```
 
-⛔ **A mismatch refuses rather than warns**, *because a warning on a path that still succeeds is precisely how the original misdelivery happened.* ✔ **`--dry-run` and `slack-watch.mjs --doctor` both name the destination**, so *"where is this going"* is answerable without sending. ✔ **No declaration = today's behaviour exactly** — a single-workspace machine needs no configuration.
+⛔ **A mismatch refuses rather than warns**, *because a warning on a path that still succeeds is precisely how the original misdelivery happened.* ✔ **No declaration = today's behaviour exactly** — a single-workspace machine needs no configuration.
+
+# ⛔⛔ AND FOR A LONG TIME, ONLY `--dry-run` AND `slack-watch.mjs --doctor` NAMED THE DESTINATION — EVERY REAL OPERATION WENT SILENT ABOUT WHERE IT WENT.
+
+### **Three real failures and one real success, none of which named the working directory — which is the cause in every one.** *A `<TOKEN_VAR> is not set.` message that named the DEFAULT while a repo's own declared `token_env` sat unset and unmentioned. A Windows registry fallback resolving a DIFFERENT, real workspace's token, so a post landed against a channel that genuinely does not exist there — `channel_not_found`, confidently wrong. `slack-watch.mjs --presence` reading the wrong workspace's channel and printing a plausible, ordinary "no presence messages found" — an empty roster is a state that genuinely occurs, so it read as an answer rather than a failure. And the arm with no tell at all: two repositories declaring the SAME `team_id`/`token_env` — nothing missing, nothing mismatched, the message delivered correctly, and the only wrong thing was which repo it was attributed to.* (#222)
+
+✔ **EVERY REAL `slack-post.mjs` SEND, `slack-claim.mjs` INVOCATION AND `slack-watch.mjs --presence` READ NOW PRINTS ITS RESOLVED BINDING, NOT ONLY `--dry-run`/`--doctor`.** *A bound repo prints `bound to <path>`; an unbound one prints `<path> not found — falling back to <TOKEN_VAR>` or, with no git root at all, `no git root found from <cwd> — falling back to <TOKEN_VAR>`.* **This does not decide whether resolution should refuse outright — that stays a separate, larger question — it only makes the answer to "where did this look" available every time, not only when something has already gone wrong enough to fail loudly.**
 
 ---
 
