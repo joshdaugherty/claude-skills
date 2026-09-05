@@ -1431,11 +1431,12 @@ function warnIfColliding(p, label) {
         '        machine right now. The roster would show ONE row for two sessions, and neither\n' +
         `        could be --ping'd or addressed with --to.\n` +
         '        Pass a distinct --session <label>.'
-      : `[watch] ⚠ A presence message labelled "${label}" beat ${age}s ago (every ${p.every || '?'}s) -\n` +
-        '        a local process count could not confirm or rule out a second session under this\n' +
-        '        name; age alone is consistent with one. The roster would then show ONE row for\n' +
-        `        two sessions, and neither could be --ping'd or addressed with --to.\n` +
-        '        Pass a distinct --session <label>. If this is your own restart, ignore this.',
+      : `[watch] ⚠ A presence message labelled "${label}" beat ${age}s ago (every ${p.every || '?'}s).\n` +
+        '        If this is your own restart, ignore this. A local process count could not\n' +
+        '        confirm or rule out a second session under this name; age alone is consistent\n' +
+        `        with one, and the roster would then show ONE row for two sessions, neither of\n` +
+        `        which could be --ping'd or addressed with --to. Check whether one is still\n` +
+        '        running, and pass a distinct --session <label> if you find one.',
   );
 }
 
@@ -1464,9 +1465,9 @@ function rearmBlocks(label, age, every, verdict) {
   ];
   const bodyText =
     verdict === 'collision'
-      ? `A watcher for \`${label}\` just adopted an existing presence message (${ageText}) - A SECOND PROCESS carrying this label is confirmed still running on that machine. This is very likely a genuine label collision, not a restart; check before treating the older process as gone.`
+      ? `A watcher for \`${label}\` just adopted an existing presence message (${ageText}). A SECOND PROCESS carrying this label is confirmed still running on that machine - this is a genuine label collision, not a restart. Rename one of the two sessions now; do not treat the older process as gone.`
       : verdict === 'uncertain'
-        ? `A watcher for \`${label}\` just adopted an existing presence message (${ageText}) - RECENTLY ENOUGH that another session may still be live under this name, and a local process count could not confirm or rule that out. If this is not your own restart, you may be sharing a label; check before treating the older process as gone.`
+        ? `A watcher for \`${label}\` just adopted an existing presence message (${ageText}). If this is your own restart, no action is needed. A local process count could not confirm whether another session may still be live under this name - check before treating the older process as gone, and rename only if you find one.`
         : `A watcher for \`${label}\` just adopted an existing presence message (${ageText}). This is continuity: the roster row for this label spans a process that stopped and one that started, same as always - now visible on the wire instead of silent.`;
   return {
     text: `rearmed: ${label}`,
