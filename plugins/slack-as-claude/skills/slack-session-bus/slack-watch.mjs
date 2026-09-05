@@ -2886,6 +2886,20 @@ if (a.doctor) {
   }
   console.log(`RUNNING    ${pluginName} ${runningVer}   ${inCache ? '(cached copy)' : '(REPO checkout - authoring only)'}`);
   console.log(`           ${selfFile}`);
+  // ⛔⛔ EVERYTHING ABOVE AND BELOW THIS LINE IS AN EXECUTABLE. THE SKILL.md YOUR SESSION
+  // LOADED AT START IS NOT, AND IT IS THE ARTIFACT THAT DECIDES WHAT YOU ACTUALLY DO. This
+  // script cannot see it - "which SKILL.md version did the invoking session load" is
+  // harness state, not plugin state, and nothing a plugin script runs has a view into an
+  // LLM session's own context. So this reports EXECUTABLES CURRENT and is silent on
+  // INSTRUCTIONS CURRENT - two different claims a clean --doctor run does not distinguish.
+  // Measured: a session restarted specifically to gain #201's pong-correlation capability
+  // while still holding a SKILL.md from before that release in context - it would have run
+  // the new code under the old rules and produced exactly the failure the restart was
+  // meant to fix, with every version string involved reading current throughout. (#211)
+  console.log('⚠ THIS CANNOT SEE THE SKILL.md YOUR SESSION LOADED. "Executables current" and');
+  console.log('  "instructions current" are different claims - if you suspect drift (e.g. after');
+  console.log('  a mid-session update), re-read the SKILL.md file directly rather than trusting');
+  console.log('  what your context remembers from when it loaded.');
 
   // Installed: newest version directory in any marketplace cache for this plugin.
   const cacheRoot = join(homedir(), '.claude', 'plugins', 'cache');
