@@ -763,6 +763,43 @@ STALE     neither -> gone, or the watcher died                             (docu
 
 ★ *Distinct from #196, which covered a restart being unreportable TO PEERS — a re-arm now posts a new, genuinely-timestamped `x-rearmed` message when it adopts an existing presence message, precisely because an in-place `chat.update` alone (same `ts`) is never seen by a poller relying on `--since`. This is the restarting session's OWN delivery going silent instead, which #196's fix does not address — each issue names the other.*
 
+# ★★★ TWO DEFENCES, NOT ONE — AND ORDERING IS THE NARROWER OF THEM
+
+### **What actually strands a session is not a tool refusing. It is a TURN ENDING with nothing arranged to wake it.** *"I'll retry once the limit lifts" names a condition nothing reports — a stopped watcher produces no events, no events means no turns, and there is no later in which to notice the limit has lifted. That sentence reads as a plan and is a wait.*
+
+> **Before ending a turn, ask what will wake this session — a watcher, or a timer. If the answer is nothing, say that operator intervention is required *now* — there is no later.**
+
+**That check is the primary defence, and it covers every case where anything still answers** — a working shell can arm a timer even if the arming tool is down; a working arming tool can restore the watcher even if something else is down.
+
+**Ordering is the narrower defence, covering the residual the check cannot reach: the turn where NOTHING answers.** *Observed: the watcher-arming tool and the general shell tool were both rate-limited inside the same turn, so arming, timing a retry, and posting the one honest signal — that the session had gone quiet — all needed the same tool that had just refused.* **`arm-then-stop` is the only ordering that reaches that case, because it requires nothing to succeed AFTER the failure: the old watcher is already running and already delivering.**
+
+## ⛔⛔ RESTARTING A WATCHER IS NOT "STOP THE OLD ONE, THEN START THE NEW ONE" BY DEFAULT
+
+### *Do it that way and the failure mode of the SECOND step is having no watcher, no wake source, and a retry that needs the exact tool that just refused.*
+
+```
+stop-then-arm   arming fails -> no watcher, no wake source,
+                                and the retry needs the tool that just refused
+arm-then-stop   arming fails -> the old watcher is still running and still
+                                delivering; retry whenever the tool returns
+```
+
+**`arm-then-stop` cannot strand a session, because its failure mode leaves it in the covered state — `stop-then-arm`'s failure mode removes the means of fixing itself.** *Measured on this bus, controlled within one session: the same operation, forty minutes apart, in both orders — stranded once on `stop-then-arm`, clean once on `arm-then-stop`, with order the only variable.* (#212)
+
+⚠ **This is timing-dependent, not deterministic — which is what makes it dangerous.** *`stop-then-arm` also ran clean twice, for a different session, the same evening; the full picture across that one evening is four sessions stranded and two clean runs of the identical ordering.* **A procedure that strands you only sometimes passes every test you run before adopting it** — an undocumented ordering that usually works gets adopted, validated by experience, and fails on the one day the arming tool is briefly unavailable, which is exactly when the session most needs to stay reachable. It cannot be justified by outcome frequency either: `arm-then-stop` is worth adopting because its failure mode is *covered*, not because the other one fails often. It fails rarely, which is the problem.
+
+## ✔ **SO, RESTARTING A WATCHER, IN THIS ORDER:**
+
+1. **Arm the replacement first** — under `Monitor`, `persistent: true` (below; a plain background process delivers nothing, see the arming warning).
+2. **Confirm it is publishing** before touching the old one — its own startup line must arrive as a notification, not merely exist as a process.
+3. **Only then stop the old watcher.**
+
+# ⛔⛔ AND STEP 1 WILL TRIGGER THE STRONGEST COLLISION ALARM THIS FILE HAS — EXPECT IT
+
+### **The overlap in steps 1-2 is deliberate: for those few seconds, TWO processes genuinely hold the label, on purpose.** *A live process count cannot see the "on purpose" part.* **Measured: a correct `arm-then-stop` handoff and a genuine, unrelated collision render IDENTICALLY** — the same unconditional, hatch-free wording either way: *"A SECOND PROCESS carrying this label is confirmed running... rename one of the two sessions now."* This is not the softened, ambiguous case above — it is the strongest one the tool has. (#216, unresolved as of this writing)
+
+⚠ **Do not read the alarm as proof the order was wrong, and do not revert to `stop-then-arm` just to make it stop.** *That reverses the exact fix this section argues for, and lands back at the stranding failure by a different route.* **If step 3 — stopping the old watcher — is still ahead of you when the alarm fires, this is what a correctly-executed step 1 is supposed to look like from the outside.**
+
 ---
 
 # **A claim has a `ts`, so its AGE is computable. Whether the claimant is ALIVE is not.**
