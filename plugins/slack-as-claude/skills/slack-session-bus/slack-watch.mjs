@@ -322,6 +322,71 @@ function looksLikeCollision(age, every) {
 }
 
 /**
+ * How many LOCAL processes currently carry `--session <label>` on their command line -
+ * the discriminator looksLikeCollision() above has never had, since it derives everything
+ * from a presence MESSAGE's age, never from a process. Under #196's arm-then-stop re-arm
+ * order (#212), the new and old watcher legitimately overlap for seconds, landing well
+ * inside the age floor every time - so the age heuristic alone cannot separate "a correct
+ * re-arm in its bounded overlap window" from "a genuine second session under this label",
+ * and fires on both identically. (#213)
+ *
+ * Returns the count, or `null` if it could not be taken (unsupported platform, or the
+ * enumeration call itself failed) - a caller must not read `null` as "definitely one",
+ * the same three-way discipline this file already applies to a failed presence read.
+ *
+ * ⚠ LOCAL ONLY. This machine's own process list cannot see a genuine collision from a
+ * SECOND MACHINE running the identical label - the established `-a-<machine>` labelling
+ * convention makes that rare in practice, but a clean local count is not proof against it,
+ * only against a same-machine collision. Not claimed as more than that anywhere this is used.
+ *
+ * ⚠ Win32_Process EXPOSES NO WORKING DIRECTORY AT ALL - measured: its own properties
+ * matching Dir|Path|Cwd|Work return only ExecutablePath (identical for every watcher) and
+ * four WorkingSet* memory counters. A cwd-based test is not portable; the command line,
+ * which carries --session, is - the same field on both supported platforms.
+ *
+ * ⚠ THE non-win32 BRANCH (`ps -eo command=`) IS UNVERIFIED. Everything above, including
+ * the token-boundary regex it shares with the Windows branch, was measured against real
+ * Windows processes only - no macOS or Linux machine was available to this change. Treat
+ * this branch as reasoned-from-the-`ps`-contract, not observed, until a session on one of
+ * those platforms runs it for real. (#213)
+ */
+function localProcessesWithLabel(label) {
+  try {
+    const lines =
+      process.platform === 'win32'
+        ? execFileSync(
+            'powershell',
+            ['-NoProfile', '-NonInteractive', '-Command', "(Get-CimInstance Win32_Process -Filter \"Name='node.exe'\").CommandLine"],
+            { encoding: 'utf8', timeout: 5000, windowsHide: true },
+          ).split(/\r?\n/)
+        : execFileSync('ps', ['-eo', 'command='], { encoding: 'utf8', timeout: 5000 }).split(/\r?\n/);
+    // Matched as a distinct CLI token, not a substring - "session-a" must not also match a
+    // process running "session-ab". Escapes regex metacharacters in the label itself, since
+    // a label is operator-chosen text, not a literal this file controls.
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`--session[= ]+["']?${escaped}["']?(\\s|$)`);
+    return lines.filter((line) => line && re.test(line)).length;
+  } catch {
+    return null; // could not check - NOT zero, NOT one
+  }
+}
+
+/**
+ * Does a SECOND live process currently hold `label`? Prefers an actual process count over
+ * the age-based heuristic, which proves nothing about whether a process still exists to
+ * have published a message - only that the message itself is recent. Falls back to the
+ * heuristic ONLY when a count could not be taken, and even then only to decide between
+ * 'clean' and 'uncertain' - never asserts a probable collision the count would have ruled
+ * out for free. `countLocalProcesses` is injectable so the DECISION here is checkable
+ * without a real process enumeration - see cvCases in selfTest(). (#213)
+ */
+function collisionVerdict(label, age, every, countLocalProcesses = localProcessesWithLabel) {
+  const count = countLocalProcesses(label);
+  if (count == null) return looksLikeCollision(age, every) ? 'uncertain' : 'clean';
+  return count >= 2 ? 'collision' : 'clean';
+}
+
+/**
  * EVERY DECLARED FLAG MUST APPEAR IN USAGE - see the long note in slack-post.mjs.
  * Four flags shipped invisible before this check existed, and the audit meant to catch
  * them gave a FALSE PASS by grepping the whole file instead of the usage text.
@@ -337,7 +402,7 @@ async function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 94; // raise when adding cases - a constant, reviewed on change (+9 for pongVerdict, #201) - verified against the real --self-test count, not computed by eye
+  const CASE_FLOOR = 103; // raise when adding cases - a constant, reviewed on change (+4 rearmBlocks, +5 collisionVerdict, #213) - verified against the real --self-test count, not computed by eye
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -474,22 +539,46 @@ async function selfTest() {
    * missing beat field must degrade to "no prior beat on record", never a crash or a
    * fabricated age.
    */
-  const rbClean = rearmBlocks('fixture-session', 3600, 60, false);
+  const rbClean = rearmBlocks('fixture-session', 3600, 60, 'clean');
   const rbCleanCtx = rbClean.blocks[0]?.elements ?? [];
-  const rbAmbiguous = rearmBlocks('fixture-session', 8, 60, true);
-  const rbNoBeat = rearmBlocks('fixture-session', null, 60, false);
+  const rbUncertain = rearmBlocks('fixture-session', 8, 60, 'uncertain');
+  const rbCollision = rearmBlocks('fixture-session', 8, 60, 'collision');
+  const rbNoBeat = rearmBlocks('fixture-session', null, 60, 'clean');
   const rbCases = [
     ['type element carries the new x-rearmed type', rbCleanCtx.some((e) => e.text === 'type: `x-rearmed`'), true],
     ['session element carries the label', rbCleanCtx.some((e) => e.text === 'session: `fixture-session`'), true],
     ['clean restart body says continuity, not a warning', rbClean.blocks[1]?.text?.text.includes('This is continuity'), true],
     ['clean restart body does NOT say another session may be live', rbClean.blocks[1]?.text?.text.includes('may still be live'), false],
-    ['ambiguous case body warns another session may be live', rbAmbiguous.blocks[1]?.text?.text.includes('may still be live'), true],
-    ['ambiguous case body does NOT claim continuity', rbAmbiguous.blocks[1]?.text?.text.includes('This is continuity'), false],
+    ['uncertain case body warns another session may be live', rbUncertain.blocks[1]?.text?.text.includes('may still be live'), true],
+    ['uncertain case body names the process count as unconfirmed', rbUncertain.blocks[1]?.text?.text.includes('could not confirm'), true],
+    ['uncertain case body does NOT claim continuity', rbUncertain.blocks[1]?.text?.text.includes('This is continuity'), false],
+    ['collision case body asserts confirmed, not merely likely', rbCollision.blocks[1]?.text?.text.includes('confirmed still running'), true],
+    ['collision case body does NOT claim continuity', rbCollision.blocks[1]?.text?.text.includes('This is continuity'), false],
+    ['collision wording is stronger than uncertain wording - not identical text', rbCollision.blocks[1]?.text?.text === rbUncertain.blocks[1]?.text?.text, false],
     ['a null age degrades to "no prior beat on record", not a crash', rbNoBeat.blocks[1]?.text?.text.includes('no prior beat on record'), true],
     ['context block still comes before the section block', rbClean.blocks.map((b) => b.type).join(','), 'context,section'],
   ];
   for (const [name, got, want] of rbCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  rearmBlocks: ${name}`);
   const rbBad = rbCases.filter(([, got, want]) => got !== want).length;
+
+  /**
+   * collisionVerdict() (#213). A process count, when available, must be TRUSTED over the
+   * age heuristic in both directions - overriding it toward 'collision' (a young message,
+   * but the count says only one process) is the exact false-positive #213 was filed over,
+   * and overriding it toward 'clean' when the count says two is the false negative that
+   * would make this whole fix pointless. Only when the count is unavailable (injected as
+   * null) does the age heuristic get a vote, and even then only to choose between 'clean'
+   * and 'uncertain' - never to assert 'collision' outright, which a count alone may confirm.
+   */
+  const cvCases = [
+    ["count says 1 -> 'clean', even though age alone would look ambiguous", collisionVerdict('s', 8, 60, () => 1), 'clean'],
+    ["count says 2+ -> 'collision', even though age alone would look clean", collisionVerdict('s', 3600, 60, () => 2), 'collision'],
+    ["count unavailable (null) + age within the floor -> 'uncertain', never 'collision' outright", collisionVerdict('s', 8, 60, () => null), 'uncertain'],
+    ["count unavailable (null) + age past the floor -> 'clean'", collisionVerdict('s', 3600, 60, () => null), 'clean'],
+    ['count of exactly 0 (should not happen - the caller itself is always at least 1 - but must not crash or read as a collision) -> clean', collisionVerdict('s', 8, 60, () => 0), 'clean'],
+  ];
+  for (const [name, got, want] of cvCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  collisionVerdict: ${name}`);
+  const cvBad = cvCases.filter(([, got, want]) => got !== want).length;
 
   /**
    * safeJson() (#161). Stubbed Response-likes, not the real network - what matters is
@@ -578,12 +667,12 @@ async function selfTest() {
   const tooFew = ran < CASE_FLOOR;
   if (tooFew) console.log(`\n⛔ ONLY ${ran} CASES RAN, floor is ${CASE_FLOOR} - a block stopped running.`);
   console.log(
-    missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || tooFew
+    missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || cvBad || tooFew
       ? `\n${tooFew ? `ONLY ${ran} CASES RAN, FLOOR IS ${CASE_FLOOR} - A BLOCK STOPPED RUNNING. ` : ''}${missing.length} FLAG(S) MISSING FROM USAGE${missing.length ? `: ${missing.join(', ')}` : ''}` +
-        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}${xuBad ? `, ${xuBad} X-UPDATE CASE(S) WRONG` : ''}${sjBad ? `, ${sjBad} SAFEJSON CASE(S) WRONG` : ''}${vbBad ? `, ${vbBad} VERIFYBOTID CASE(S) WRONG` : ''}${msBad ? `, ${msBad} MEMBERSTATUS CASE(S) WRONG` : ''}${pbBad ? `, ${pbBad} PRESENCEBLOCKS CASE(S) WRONG` : ''}${rbBad ? `, ${rbBad} REARMBLOCKS CASE(S) WRONG` : ''}${pvBad ? `, ${pvBad} PONGVERDICT CASE(S) WRONG` : ''}`
+        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}${xuBad ? `, ${xuBad} X-UPDATE CASE(S) WRONG` : ''}${sjBad ? `, ${sjBad} SAFEJSON CASE(S) WRONG` : ''}${vbBad ? `, ${vbBad} VERIFYBOTID CASE(S) WRONG` : ''}${msBad ? `, ${msBad} MEMBERSTATUS CASE(S) WRONG` : ''}${pbBad ? `, ${pbBad} PRESENCEBLOCKS CASE(S) WRONG` : ''}${rbBad ? `, ${rbBad} REARMBLOCKS CASE(S) WRONG` : ''}${pvBad ? `, ${pvBad} PONGVERDICT CASE(S) WRONG` : ''}${cvBad ? `, ${cvBad} COLLISIONVERDICT CASE(S) WRONG` : ''}`
       : `\n${ran} cases, all pass`,
   );
-  process.exit(missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || tooFew ? 1 : 0);
+  process.exit(missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || cvBad || tooFew ? 1 : 0);
 }
 
 if (a['self-test']) await selfTest();
@@ -1327,17 +1416,33 @@ let consecutiveBeatFailures = 0;
  * ⚠ WARN, DO NOT REFUSE. A false positive here would kill a legitimate restart that
  * happened to land inside the window, and being unable to start your watcher is worse than
  * a duplicate label you were told about.
+ *
+ * ⛔⛔ AND THE AGE THRESHOLD ALONE PRODUCED EXACTLY THAT FALSE POSITIVE, ON EVERY CORRECT
+ * RE-ARM. #212's arm-then-stop order (the fix for the stranding failure mode this file's
+ * OTHER re-arm hole created) makes the new and old watcher overlap for seconds, by design -
+ * landing well inside this predicate's 90-second floor every time. Measured: four real
+ * adoptions at --heartbeat 60 rendered the collision variant at 18s, 48s and 57s; only the
+ * slowest swap, 91s, rendered clean - the only clean render belonged to the swap that
+ * actually left a gap. collisionVerdict() now checks an actual process count first and
+ * only falls back to this age heuristic when a count could not be taken. (#213)
  */
 function warnIfColliding(p, label) {
   if (!p.beat) return;
   const age = Math.max(0, Math.floor(Date.now() / 1000 - p.beat));
-  if (!looksLikeCollision(age, p.every)) return;
+  const verdict = collisionVerdict(label, age, p.every);
+  if (verdict === 'clean') return;
   console.error(
-    `[watch] ⚠ A presence message labelled "${label}" beat ${age}s ago (every ${p.every || '?'}s) -\n` +
-      '        ANOTHER SESSION IS PROBABLY LIVE UNDER THIS NAME, and you are about to share its\n' +
-      '        presence message. The roster would then show ONE row for two sessions, and\n' +
-      `        neither could be --ping'd or addressed with --to.\n` +
-      '        Pass a distinct --session <label>. If this is your own restart, ignore this.',
+    verdict === 'collision'
+      ? `[watch] ⛔ A SECOND PROCESS carrying "--session ${label}" is confirmed running on this\n` +
+        '        machine right now. The roster would show ONE row for two sessions, and neither\n' +
+        `        could be --ping'd or addressed with --to.\n` +
+        '        Pass a distinct --session <label>.'
+      : `[watch] ⚠ A presence message labelled "${label}" beat ${age}s ago (every ${p.every || '?'}s).\n` +
+        '        If this is your own restart, ignore this. A local process count could not\n' +
+        '        confirm or rule out a second session under this name; age alone is consistent\n' +
+        `        with one, and the roster would then show ONE row for two sessions, neither of\n` +
+        `        which could be --ping'd or addressed with --to. Check whether one is still\n` +
+        '        running, and pass a distinct --session <label> if you find one.',
   );
 }
 
@@ -1352,33 +1457,27 @@ function warnIfColliding(p, label) {
  * (#196)
  *
  * The fix is a genuinely NEW message (a fresh ts, always seen by a poller), posted at the
- * one moment both variants share: adoption. `ambiguous` mirrors looksLikeCollision()'s own
- * threshold on the SAME age warnIfColliding() computed - this reports the OBSERVATION (how
- * long since the last beat), never the conclusion ("this is my own restart"), because the
- * tool genuinely cannot tell that from here, only the operator can. A pure function so its
- * text can be checked without a network call - see rbCases in selfTest().
+ * one moment both variants share: adoption. `verdict` is collisionVerdict()'s three-way
+ * result ('collision', 'clean', or 'uncertain' - a process count could not be taken, and
+ * the age heuristic alone is not enough to assert a probable collision). A pure function so
+ * its text can be checked without a network call - see rbCases in selfTest(). (#196, #213)
  */
-function rearmBlocks(label, age, every, ambiguous) {
+function rearmBlocks(label, age, every, verdict) {
   const ageText = age == null ? 'no prior beat on record' : `${age}s since its last beat`;
   const elements = [
     { type: 'mrkdwn', text: `type: \`${REARMED_TYPE}\`` },
     { type: 'mrkdwn', text: `session: \`${label}\`` },
     ...(OWN_PLUGIN ? [{ type: 'mrkdwn', text: `plugin: \`${OWN_PLUGIN}\`` }] : []),
   ];
+  const bodyText =
+    verdict === 'collision'
+      ? `A watcher for \`${label}\` just adopted an existing presence message (${ageText}). A SECOND PROCESS carrying this label is confirmed still running on that machine - this is a genuine label collision, not a restart. Rename one of the two sessions now; do not treat the older process as gone.`
+      : verdict === 'uncertain'
+        ? `A watcher for \`${label}\` just adopted an existing presence message (${ageText}). If this is your own restart, no action is needed. A local process count could not confirm whether another session may still be live under this name - check before treating the older process as gone, and rename only if you find one.`
+        : `A watcher for \`${label}\` just adopted an existing presence message (${ageText}). This is continuity: the roster row for this label spans a process that stopped and one that started, same as always - now visible on the wire instead of silent.`;
   return {
     text: `rearmed: ${label}`,
-    blocks: [
-      { type: 'context', elements },
-      {
-        type: 'section',
-        text: {
-          type: 'mrkdwn',
-          text: ambiguous
-            ? `A watcher for \`${label}\` just adopted an existing presence message (${ageText}) - RECENTLY ENOUGH that another session may still be live under this name. If this is not your own restart, you may be sharing a label; check before treating the older process as gone.`
-            : `A watcher for \`${label}\` just adopted an existing presence message (${ageText}). This is continuity: the roster row for this label spans a process that stopped and one that started, same as always - now visible on the wire instead of silent.`,
-        },
-      },
-    ],
+    blocks: [{ type: 'context', elements }, { type: 'section', text: { type: 'mrkdwn', text: bodyText } }],
   };
 }
 
@@ -1401,11 +1500,11 @@ function rearmBlocks(label, age, every, ambiguous) {
  */
 async function announceRearm(label, p) {
   const age = p.beat ? Math.max(0, Math.floor(Date.now() / 1000 - p.beat)) : null;
-  const ambiguous = age != null && looksLikeCollision(age, p.every);
+  const verdict = age != null ? collisionVerdict(label, age, p.every) : 'clean';
   const res = await slackPost('chat.postMessage', {
     channel: a.channel,
     reply_broadcast: true,
-    ...rearmBlocks(label, age, p.every, ambiguous),
+    ...rearmBlocks(label, age, p.every, verdict),
   });
   if (!res.ok) console.error(`[watch] could not announce re-arm continuity: ${res.error}`);
 }
