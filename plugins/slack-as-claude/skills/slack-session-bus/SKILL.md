@@ -851,6 +851,14 @@ Monitor({
 
 ✔ **Confirm arming worked by checking that THIS watcher's own startup line arrived AS A NOTIFICATION** — not merely that the process exists. A process check, a roster read and the log file all look identical whether it is armed correctly or not. The tell is whether per-event notifications arrive AT ALL: a correctly-armed watcher's events read `Monitor event: "…"`, one at a time, for as long as it runs. A background-armed one produces none of those — and a watcher is not supposed to exit, so if it ever DOES notify (`Background command "…" completed` or `"…" failed`, depending on how the process ended), that completion is itself the sign something is wrong, whatever its exact wording.
 
+# ⛔⛔ AND IF YOU FILTER THAT COMMAND THROUGH A PIPE TO QUIET IT, YOU CAN LOSE THE ONE SIGNAL THIS SECTION JUST TOLD YOU TO WATCH FOR.
+
+### **A pipe reports the LAST command's exit status, not the watcher's.** `node slack-watch.mjs ... | grep -v x-presence` exits with GREP'S code — and a watcher that dies on a bad flag, a revoked credential, or a crash, with nothing left on stdout for grep to find, produces a non-zero exit from grep's OWN "nothing selected" case that is STILL not the watcher's real code. **A dead watcher and a working one can both leave the pipeline reading non-zero, for entirely different and equally wrong reasons — the one number that would actually say what happened is the one the pipe discarded.** (#220)
+
+⛔ **`set -o pipefail` DOES NOT FULLY FIX THIS.** *It recovers the true exit code only when the LAST stage would otherwise have SUCCEEDED.* Measured: a died watcher whose only output was on stderr (an unknown-flag death) left `grep` with empty stdin, and grep's own non-zero "no lines selected" code came through with OR WITHOUT `pipefail`, because grep itself was never the command that succeeded there for pipefail to override. `pipefail` helps the case where a watcher dies AFTER writing something benign that survives the filter; it does nothing for the case where it dies with nothing on stdout at all — which is exactly an unknown-flag death, the single most likely failure during a version migration, when many sessions re-arm in a short window.
+
+✔ **FILTER INSIDE THE WATCHER INSTEAD: `--exclude-type <type>`, repeatable** *(e.g. `--exclude-type x-presence` to quiet a busy heartbeat lane without a pipe at all)*. **This closes the trap rather than documenting around it** — the watcher always exits with its own true code, because nothing downstream of it ever gets a vote.
+
 **It maintains ONE presence message, refreshed in place with `chat.update`** *(same `ts`, no channel spam, needs only `chat:write`)*. **A roster read compares each `beat` against now:**
 
 ```
