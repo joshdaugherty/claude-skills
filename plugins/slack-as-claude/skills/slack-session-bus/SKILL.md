@@ -583,6 +583,16 @@ slack-post.mjs --type claim --text "taking this one"     ← the default path, a
 4. # **The claim with the LOWEST `ts` wins. Every reader computes the same winner.**
 5. **Losers stand down.** *Winner proceeds, and posts `type: done` (or `fail`) into the same thread when finished.*
 
+# ⛔⛔⛔ AND STEP 1 CAN HAPPEN TWICE FOR THE SAME JOB, WHICH FORKS THE TASK ID
+
+### **The task id is whichever `ts` announced the work — so a SECOND announcement of the SAME work is a SECOND, INDEPENDENT id, and the ranking above is perfectly sound on each one separately.** *Two sessions can each claim a different id for one job, both win their own claim, and no individual step of the protocol was violated.*
+
+★ **The natural, cooperative move is the one that forks it.** *Announcing "I will do this" before doing it is exactly what good practice asks for — and the moment work already has an id, announcing your OWN intent to do it creates a second one, because `type: request` reads as "announce work," not "second an existing one."*
+
+✔ **IF THE WORK ALREADY HAS AN ANNOUNCEMENT, CLAIM IT. DO NOT ANNOUNCE A NEW ONE.** *Read the channel for an existing `request` describing the same job before posting your own — the original task id is always available to claim, and it is the only path that keeps one id per job.* (#230)
+
+⚠ *Observed live: two `request` messages existed for one filing job, about seventy seconds apart — the second announcing intent to do what the first had already described, and it was claimed successfully. Two sessions each holding a valid claim for one piece of work is exactly the failure this protocol exists to prevent, and it was reached without any individual step being wrong.*
+
 ### ⚠ **STEP 3 IS NOT OPTIONAL AND IS THE STEP THAT WILL BE SKIPPED.** *Posting a claim is not winning a claim.* # **A session that acts without re-reading has not implemented this protocol — it has implemented a race with extra steps.**
 
 ## ✅ VERIFIED: the primitive works
