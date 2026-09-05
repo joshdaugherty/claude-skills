@@ -690,7 +690,7 @@ async function selfTest() {
   const rtCases = [
     ['no git root names the cwd, not just the var', resolutionTrace('SLACK_BOT_TOKEN', null, () => false).includes(process.cwd()), true],
     ['no git root falls back to the given var', resolutionTrace('SLACK_BOT_TOKEN_ACME', null, () => false).includes('falling back to SLACK_BOT_TOKEN_ACME'), true],
-    ['a root with no workspace file names the path it looked for', resolutionTrace('SLACK_BOT_TOKEN', 'C:\\repo', () => false).includes('C:\\repo\\.claude\\slack-workspace.json'), true],
+    ['a root with no workspace file names the path it looked for', resolutionTrace('SLACK_BOT_TOKEN', 'C:\\repo', () => false).includes(join('C:\\repo', '.claude', 'slack-workspace.json')), true],
     ['a root with no workspace file also falls back, not silently', resolutionTrace('SLACK_BOT_TOKEN', 'C:\\repo', () => false).includes('falling back to'), true],
     ['a bound workspace says BOUND, not fallback', resolutionTrace('SLACK_BOT_TOKEN_ACME', 'C:\\repo', () => true).includes('bound to'), true],
     ['a bound workspace does NOT say falling back', resolutionTrace('SLACK_BOT_TOKEN_ACME', 'C:\\repo', () => true).includes('falling back'), false],
