@@ -865,8 +865,22 @@ if (a['self-test']) await selfTest();
  * and no Slack credential at all. And --doctor tells the reader to run it, so the dead end was
  * reachable by following the tool's own advice. A required argument that is never read is an
  * instruction to go hunting for a credential you do not need. (#112)
+ *
+ * ⛔⛔ THE EXCLUSION LIST WAS INCOMPLETE, AND `--member` SITS BEFORE THE `--consistency`
+ * BLOCK IN FILE ORDER - SO THE GAP WAS LIVE, NOT THEORETICAL. `--member` and
+ * `--announce-install` were absent from this list. `--announce-install`'s own block
+ * happens to sit AFTER `--consistency`'s unconditional exit further down the file, so it
+ * was safe by accident of ordering - but `--member`'s block sits BEFORE it. Passing
+ * `--consistency --member <id>` together made LOCAL_ONLY true, forced `token` to `null`,
+ * and reached `--member`'s block with that null token WITHOUT --consistency's own report
+ * ever running - silently. Measured live: `WORKSPACE unverified (auth.test failed:
+ * invalid_auth)` followed by a real, wasted network call and `Could not read channel
+ * membership: invalid_auth` - not a crash, but not the MACHINE CONSISTENCY report the
+ * caller asked for either. Both flags added here so correctness does not depend on which
+ * block happens to sit first in the file - the same fragility that let this hide. (#234)
  */
-const LOCAL_ONLY = Boolean(a.consistency) && !a.presence && !a.ping && !a.audit && !a.retire;
+const LOCAL_ONLY =
+  Boolean(a.consistency) && !a.presence && !a.ping && !a.audit && !a.retire && !a.member && !a['announce-install'];
 
 if (a.help || (!a.channel && !LOCAL_ONLY)) {
   console.error(USAGE);
