@@ -305,6 +305,27 @@ const STALE_AFTER = 2.5; // missed beats before a session is considered gone
 const STALE_FLOOR_SEC = 90;
 
 /**
+ * How long a live count of 2+ must PERSIST before it is escalated from 'uncertain' to a
+ * confirmed collision. A single snapshot cannot tell a handoff in progress from a genuine
+ * collision apart - both are, honestly, two live processes at the instant they are counted
+ * (#216). Only elapsed time can: a real arm-then-stop swap (arm, confirm publishing, stop)
+ * is a matter of an operator noticing a startup notification and running one command, not
+ * this long; a genuine collision has no reason to resolve itself at all. A guess, like
+ * every other timing constant in this file - not measured against a real handoff's actual
+ * duration, because that duration is operator-paced and has no fixed value.
+ *
+ * ⛔⛔ DECLARED HERE, NOT NEAR ITS OWN FUNCTIONS. selfTest() is CALLED early in this file
+ * (see the bare `if (a['self-test']) await selfTest();` well above where the collision
+ * functions live) - `function` declarations are hoisted whole and callable from anywhere,
+ * but a `const` is only reachable once its own line has executed. A first attempt declared
+ * this next to scheduleCollisionRecheck(), hundreds of lines below that call site, and
+ * self-test threw `Cannot access 'COLLISION_RECHECK_GRACE_SEC' before initialization` the
+ * first time it ran - the exact TDZ-in-a-hoisted-scope defect class this file's own review
+ * discipline names. Caught by running the suite, not by reading the diff. (#216)
+ */
+const COLLISION_RECHECK_GRACE_SEC = 60;
+
+/**
  * Is a presence message with MY label still being beaten by somebody else?
  *
  * ★ THE DISCRIMINATOR, AND IT NEEDS NO NEW DATA: a RESTART adopts a presence whose last
@@ -376,14 +397,29 @@ function localProcessesWithLabel(label) {
  * the age-based heuristic, which proves nothing about whether a process still exists to
  * have published a message - only that the message itself is recent. Falls back to the
  * heuristic ONLY when a count could not be taken, and even then only to decide between
- * 'clean' and 'uncertain' - never asserts a probable collision the count would have ruled
- * out for free. `countLocalProcesses` is injectable so the DECISION here is checkable
- * without a real process enumeration - see cvCases in selfTest(). (#213)
+ * 'clean' and 'uncertain'. `countLocalProcesses` is injectable so the DECISION here is
+ * checkable without a real process enumeration - see cvCases in selfTest(). (#213)
+ *
+ * ⛔⛔ A COUNT OF 2+ IS NOT, BY ITSELF, A COLLISION - IT IS EXACTLY WHAT A CORRECT
+ * arm-then-stop HANDOFF LOOKS LIKE WHILE IT IS HAPPENING. warnIfColliding() runs on the NEW
+ * process's very first beat, which under arm-then-stop is BY DESIGN the moment the OLD
+ * process is still running - that overlap is the entire point of confirming before
+ * stopping. A single snapshot counts the old process and the one running this check and
+ * gets 2 either way, whether this is a planned handoff or a genuine, unrelated collision.
+ * Measured live: two real watchers under one label, seven seconds apart, older process
+ * never killed - the shape of a textbook-correct restart - rendered the unconditional
+ * "CONFIRMED... rename now" wording this function used to return outright for count >= 2.
+ * That is #216: this function no longer asserts 'collision' from a bare count on its own -
+ * only 'clean' (count <= 1, no live second process to argue about) or 'uncertain' (a second
+ * process exists RIGHT NOW, but a snapshot cannot say whether it is mid-handoff or has been
+ * there indefinitely). A genuine collision can still be CONFIRMED - see
+ * scheduleCollisionRecheck() below, which is what asserts it, by re-counting after enough
+ * time has passed that a normal handoff would have finished. (#216)
  */
 function collisionVerdict(label, age, every, countLocalProcesses = localProcessesWithLabel) {
   const count = countLocalProcesses(label);
   if (count == null) return looksLikeCollision(age, every) ? 'uncertain' : 'clean';
-  return count >= 2 ? 'collision' : 'clean';
+  return count >= 2 ? 'uncertain' : 'clean';
 }
 
 /**
@@ -402,7 +438,7 @@ async function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 103; // raise when adding cases - a constant, reviewed on change (+4 rearmBlocks, +5 collisionVerdict, #213) - verified against the real --self-test count, not computed by eye
+  const CASE_FLOOR = 112; // raise when adding cases - a constant, reviewed on change (+4 rearmBlocks, +5 collisionVerdict, #213; -3 rearmBlocks, +1 collisionVerdict, +5 stillCollided, +6 confirmedCollisionBlocks, #216) - verified against the real --self-test count, not computed by eye
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -538,11 +574,18 @@ async function selfTest() {
    * message's beat age looks like a clean restart or a possible label collision - and a
    * missing beat field must degrade to "no prior beat on record", never a crash or a
    * fabricated age.
+   *
+   * ⛔ ONLY TWO STATES NOW, NOT THREE. Before #216, a third 'collision' verdict rendered an
+   * unconditional, hatch-free confirmation here - but collisionVerdict() never hands this
+   * function that value any more (a live count of 2+ is exactly what a correct arm-then-stop
+   * handoff looks like while it is happening, so it can only ever produce 'clean' or
+   * 'uncertain' - see collisionVerdict()'s own comment). A genuine collision is confirmed
+   * elsewhere, by persistence over time, not by this function - see
+   * confirmedCollisionBlocks() below, which is what a RECHECK posts instead. (#216)
    */
   const rbClean = rearmBlocks('fixture-session', 3600, 60, 'clean');
   const rbCleanCtx = rbClean.blocks[0]?.elements ?? [];
   const rbUncertain = rearmBlocks('fixture-session', 8, 60, 'uncertain');
-  const rbCollision = rearmBlocks('fixture-session', 8, 60, 'collision');
   const rbNoBeat = rearmBlocks('fixture-session', null, 60, 'clean');
   const rbCases = [
     ['type element carries the new x-rearmed type', rbCleanCtx.some((e) => e.text === 'type: `x-rearmed`'), true],
@@ -552,9 +595,6 @@ async function selfTest() {
     ['uncertain case body warns another session may be live', rbUncertain.blocks[1]?.text?.text.includes('may still be live'), true],
     ['uncertain case body names the process count as unconfirmed', rbUncertain.blocks[1]?.text?.text.includes('could not confirm'), true],
     ['uncertain case body does NOT claim continuity', rbUncertain.blocks[1]?.text?.text.includes('This is continuity'), false],
-    ['collision case body asserts confirmed, not merely likely', rbCollision.blocks[1]?.text?.text.includes('confirmed still running'), true],
-    ['collision case body does NOT claim continuity', rbCollision.blocks[1]?.text?.text.includes('This is continuity'), false],
-    ['collision wording is stronger than uncertain wording - not identical text', rbCollision.blocks[1]?.text?.text === rbUncertain.blocks[1]?.text?.text, false],
     ['a null age degrades to "no prior beat on record", not a crash', rbNoBeat.blocks[1]?.text?.text.includes('no prior beat on record'), true],
     ['context block still comes before the section block', rbClean.blocks.map((b) => b.type).join(','), 'context,section'],
   ];
@@ -562,23 +602,61 @@ async function selfTest() {
   const rbBad = rbCases.filter(([, got, want]) => got !== want).length;
 
   /**
-   * collisionVerdict() (#213). A process count, when available, must be TRUSTED over the
-   * age heuristic in both directions - overriding it toward 'collision' (a young message,
-   * but the count says only one process) is the exact false-positive #213 was filed over,
-   * and overriding it toward 'clean' when the count says two is the false negative that
-   * would make this whole fix pointless. Only when the count is unavailable (injected as
-   * null) does the age heuristic get a vote, and even then only to choose between 'clean'
-   * and 'uncertain' - never to assert 'collision' outright, which a count alone may confirm.
+   * collisionVerdict() (#213, refined by #216). A process count, when available, must be
+   * TRUSTED over the age heuristic toward 'clean' - overriding it toward 'clean' when the
+   * count says only one process is the exact false-positive #213 was filed over. It must
+   * NOT be trusted toward an outright 'collision': a live count of 2+ is exactly what a
+   * correct arm-then-stop handoff looks like while it is happening (#216), so the strongest
+   * this function itself ever asserts is 'uncertain' - a genuine collision is confirmed
+   * separately, by a RECHECK finding the count still 2+ after a grace period (see
+   * stillCollided()/scheduleCollisionRecheck() below). Only when the count is unavailable
+   * (injected as null) does the age heuristic get a vote, to choose between 'clean' and
+   * 'uncertain'.
    */
   const cvCases = [
     ["count says 1 -> 'clean', even though age alone would look ambiguous", collisionVerdict('s', 8, 60, () => 1), 'clean'],
-    ["count says 2+ -> 'collision', even though age alone would look clean", collisionVerdict('s', 3600, 60, () => 2), 'collision'],
+    ["count says 2+ -> 'uncertain', not an outright 'collision' - a snapshot alone cannot rule out an in-progress handoff, even though age alone would look clean (#216)", collisionVerdict('s', 3600, 60, () => 2), 'uncertain'],
+    ["an absurdly large count (10) is STILL only 'uncertain' from this function alone - only a recheck over time can confirm a collision (#216)", collisionVerdict('s', 8, 60, () => 10), 'uncertain'],
     ["count unavailable (null) + age within the floor -> 'uncertain', never 'collision' outright", collisionVerdict('s', 8, 60, () => null), 'uncertain'],
     ["count unavailable (null) + age past the floor -> 'clean'", collisionVerdict('s', 3600, 60, () => null), 'clean'],
     ['count of exactly 0 (should not happen - the caller itself is always at least 1 - but must not crash or read as a collision) -> clean', collisionVerdict('s', 8, 60, () => 0), 'clean'],
   ];
   for (const [name, got, want] of cvCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  collisionVerdict: ${name}`);
   const cvBad = cvCases.filter(([, got, want]) => got !== want).length;
+
+  /**
+   * stillCollided() (#216). The decision half of scheduleCollisionRecheck() - a `null` count
+   * (the recheck's own enumeration failed) must read as "not confirmed", never as a crash
+   * and never as a confirmed collision by accident.
+   */
+  const scCases = [
+    ['count of 2 -> confirmed', stillCollided(2), true],
+    ['count of 10 -> confirmed (any count >= 2 counts)', stillCollided(10), true],
+    ['count of 1 -> not confirmed - the handoff completed on schedule', stillCollided(1), false],
+    ['count of 0 -> not confirmed, not a crash', stillCollided(0), false],
+    ['count unavailable (null) -> not confirmed, never mistaken for a live collision', stillCollided(null), false],
+  ];
+  for (const [name, got, want] of scCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  stillCollided: ${name}`);
+  const scBad = scCases.filter(([, got, want]) => got !== want).length;
+
+  /**
+   * confirmedCollisionBlocks() (#216). Renders the ESCALATED confirmation a recheck posts -
+   * distinct wording from rearmBlocks(), since "just adopted" is no longer honest framing by
+   * the time a recheck, up to a minute later, is what actually justifies the claim.
+   */
+  const ccBlocks = confirmedCollisionBlocks('fixture-session');
+  const ccCtx = ccBlocks.blocks[0]?.elements ?? [];
+  const ccBody = ccBlocks.blocks[1]?.text?.text ?? '';
+  const ccCases = [
+    ['type element carries the x-rearmed type', ccCtx.some((e) => e.text === 'type: `x-rearmed`'), true],
+    ['session element carries the label', ccCtx.some((e) => e.text === 'session: `fixture-session`'), true],
+    ['body asserts confirmed, not merely likely', ccBody.includes('STILL running'), true],
+    ['body does NOT claim this was just adopted - that framing belongs to rearmBlocks(), not a recheck up to a minute later', ccBody.includes('just adopted'), false],
+    ['body names the grace period, so a reader without the code can see why NOW rather than at adoption', ccBody.includes(String(COLLISION_RECHECK_GRACE_SEC)), true],
+    ['context block still comes before the section block', ccBlocks.blocks.map((b) => b.type).join(','), 'context,section'],
+  ];
+  for (const [name, got, want] of ccCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  confirmedCollisionBlocks: ${name}`);
+  const ccBad = ccCases.filter(([, got, want]) => got !== want).length;
 
   /**
    * safeJson() (#161). Stubbed Response-likes, not the real network - what matters is
@@ -667,12 +745,12 @@ async function selfTest() {
   const tooFew = ran < CASE_FLOOR;
   if (tooFew) console.log(`\n⛔ ONLY ${ran} CASES RAN, floor is ${CASE_FLOOR} - a block stopped running.`);
   console.log(
-    missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || cvBad || tooFew
+    missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || cvBad || scBad || ccBad || tooFew
       ? `\n${tooFew ? `ONLY ${ran} CASES RAN, FLOOR IS ${CASE_FLOOR} - A BLOCK STOPPED RUNNING. ` : ''}${missing.length} FLAG(S) MISSING FROM USAGE${missing.length ? `: ${missing.join(', ')}` : ''}` +
-        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}${xuBad ? `, ${xuBad} X-UPDATE CASE(S) WRONG` : ''}${sjBad ? `, ${sjBad} SAFEJSON CASE(S) WRONG` : ''}${vbBad ? `, ${vbBad} VERIFYBOTID CASE(S) WRONG` : ''}${msBad ? `, ${msBad} MEMBERSTATUS CASE(S) WRONG` : ''}${pbBad ? `, ${pbBad} PRESENCEBLOCKS CASE(S) WRONG` : ''}${rbBad ? `, ${rbBad} REARMBLOCKS CASE(S) WRONG` : ''}${pvBad ? `, ${pvBad} PONGVERDICT CASE(S) WRONG` : ''}${cvBad ? `, ${cvBad} COLLISIONVERDICT CASE(S) WRONG` : ''}`
+        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}${xuBad ? `, ${xuBad} X-UPDATE CASE(S) WRONG` : ''}${sjBad ? `, ${sjBad} SAFEJSON CASE(S) WRONG` : ''}${vbBad ? `, ${vbBad} VERIFYBOTID CASE(S) WRONG` : ''}${msBad ? `, ${msBad} MEMBERSTATUS CASE(S) WRONG` : ''}${pbBad ? `, ${pbBad} PRESENCEBLOCKS CASE(S) WRONG` : ''}${rbBad ? `, ${rbBad} REARMBLOCKS CASE(S) WRONG` : ''}${pvBad ? `, ${pvBad} PONGVERDICT CASE(S) WRONG` : ''}${cvBad ? `, ${cvBad} COLLISIONVERDICT CASE(S) WRONG` : ''}${scBad ? `, ${scBad} STILLCOLLIDED CASE(S) WRONG` : ''}${ccBad ? `, ${ccBad} CONFIRMEDCOLLISIONBLOCKS CASE(S) WRONG` : ''}`
       : `\n${ran} cases, all pass`,
   );
-  process.exit(missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || cvBad || tooFew ? 1 : 0);
+  process.exit(missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || cvBad || scBad || ccBad || tooFew ? 1 : 0);
 }
 
 if (a['self-test']) await selfTest();
@@ -1425,25 +1503,83 @@ let consecutiveBeatFailures = 0;
  * slowest swap, 91s, rendered clean - the only clean render belonged to the swap that
  * actually left a gap. collisionVerdict() now checks an actual process count first and
  * only falls back to this age heuristic when a count could not be taken. (#213)
+ *
+ * ⛔⛔ AND THE PROCESS COUNT PRODUCED THE SAME FAILURE IN A NEW SHAPE. A live count of 2+ is
+ * exactly what a correct arm-then-stop handoff looks like WHILE IT IS HAPPENING - this
+ * function's own first beat runs at the one moment the old process is still alive by
+ * design. Measured: two real watchers under one label, seven seconds apart, older process
+ * never killed - a textbook-correct restart - rendered the unconditional "CONFIRMED...
+ * rename now" wording this function used to print outright for a count of 2+. So this
+ * function now only ever prints the hatch-carrying 'uncertain' text below; it never asserts
+ * a confirmed collision on the strength of one snapshot. A genuine collision is confirmed
+ * separately, by persistence - see stillCollided()/scheduleCollisionRecheck() below, which
+ * re-checks after enough time that a normal handoff would have finished. (#216)
  */
 function warnIfColliding(p, label) {
   if (!p.beat) return;
   const age = Math.max(0, Math.floor(Date.now() / 1000 - p.beat));
-  const verdict = collisionVerdict(label, age, p.every);
-  if (verdict === 'clean') return;
+  if (collisionVerdict(label, age, p.every) === 'clean') return;
   console.error(
-    verdict === 'collision'
-      ? `[watch] ⛔ A SECOND PROCESS carrying "--session ${label}" is confirmed running on this\n` +
-        '        machine right now. The roster would show ONE row for two sessions, and neither\n' +
-        `        could be --ping'd or addressed with --to.\n` +
-        '        Pass a distinct --session <label>.'
-      : `[watch] ⚠ A presence message labelled "${label}" beat ${age}s ago (every ${p.every || '?'}s).\n` +
-        '        If this is your own restart, ignore this. A local process count could not\n' +
-        '        confirm or rule out a second session under this name; age alone is consistent\n' +
-        `        with one, and the roster would then show ONE row for two sessions, neither of\n` +
-        `        which could be --ping'd or addressed with --to. Check whether one is still\n` +
-        '        running, and pass a distinct --session <label> if you find one.',
+    `[watch] ⚠ A presence message labelled "${label}" beat ${age}s ago (every ${p.every || '?'}s).\n` +
+      '        If this is your own restart, ignore this. A local process count could not\n' +
+      '        confirm or rule out a second session under this name; age alone is consistent\n' +
+      `        with one, and the roster would then show ONE row for two sessions, neither of\n` +
+      `        which could be --ping'd or addressed with --to. Check whether one is still\n` +
+      '        running, and pass a distinct --session <label> if you find one.',
   );
+}
+
+/**
+ * The decision half of the recheck, pulled out so it is checkable without a real timer or
+ * process enumeration - see scCases in selfTest(). `null` (the count could not be taken)
+ * must read as "not confirmed", the same three-way discipline this file applies everywhere
+ * else a check can fail rather than answer.
+ */
+function stillCollided(count) {
+  return count != null && count >= 2;
+}
+
+/**
+ * Renders the ESCALATED confirmation - a fresh, standalone message, distinct from
+ * rearmBlocks() above. Deliberately not rearmBlocks() with a forced 'collision' verdict:
+ * that function's wording is anchored to the moment of ADOPTION ("just adopted... Ns since
+ * its last beat"), which is no longer the honest framing once a recheck, up to
+ * COLLISION_RECHECK_GRACE_SEC later, is what actually justifies the claim. A pure function
+ * so its text is checkable without a network call - see ccCases in selfTest(). (#216)
+ */
+function confirmedCollisionBlocks(label) {
+  const elements = [
+    { type: 'mrkdwn', text: `type: \`${REARMED_TYPE}\`` },
+    { type: 'mrkdwn', text: `session: \`${label}\`` },
+    ...(OWN_PLUGIN ? [{ type: 'mrkdwn', text: `plugin: \`${OWN_PLUGIN}\`` }] : []),
+  ];
+  const bodyText = `A watcher for \`${label}\` reported an unconfirmed second process ${COLLISION_RECHECK_GRACE_SEC}s ago; a recheck finds one STILL running under this label - long enough now that this reads as a genuine collision, not an in-progress restart. Rename one of the two sessions now; do not treat the older process as gone.`;
+  return {
+    text: `collision confirmed: ${label}`,
+    blocks: [{ type: 'context', elements }, { type: 'section', text: { type: 'mrkdwn', text: bodyText } }],
+  };
+}
+
+/**
+ * Fires once, COLLISION_RECHECK_GRACE_SEC after warnIfColliding() first found a live count
+ * of 2+ at adoption. Re-COUNTS rather than trusting the original snapshot's continued truth
+ * - a handoff that completed on schedule now reads back down to 1 and this says nothing
+ * further; one that has not is exactly the case a single snapshot could never confirm.
+ * `.unref()`'d so this timer never keeps the process alive on its own account.
+ * `countLocalProcesses` is injectable for the same reason it is on collisionVerdict(). (#216)
+ */
+function scheduleCollisionRecheck(label, countLocalProcesses = localProcessesWithLabel) {
+  setTimeout(async () => {
+    if (!stillCollided(countLocalProcesses(label))) return;
+    console.error(
+      `[watch] ⛔ RECHECKED ${COLLISION_RECHECK_GRACE_SEC}s after adopting - a SECOND PROCESS carrying\n` +
+        `        "--session ${label}" is STILL running. This has outlasted a normal restart's\n` +
+        '        handoff and reads as a genuine collision, not one in progress.\n' +
+        '        Pass a distinct --session <label>.',
+    );
+    const res = await slackPost('chat.postMessage', { channel: a.channel, reply_broadcast: true, ...confirmedCollisionBlocks(label) });
+    if (!res.ok) console.error(`[watch] could not announce confirmed collision: ${res.error}`);
+  }, COLLISION_RECHECK_GRACE_SEC * 1000).unref?.();
 }
 
 /**
@@ -1457,10 +1593,13 @@ function warnIfColliding(p, label) {
  * (#196)
  *
  * The fix is a genuinely NEW message (a fresh ts, always seen by a poller), posted at the
- * one moment both variants share: adoption. `verdict` is collisionVerdict()'s three-way
- * result ('collision', 'clean', or 'uncertain' - a process count could not be taken, and
- * the age heuristic alone is not enough to assert a probable collision). A pure function so
- * its text can be checked without a network call - see rbCases in selfTest(). (#196, #213)
+ * one moment both variants share: adoption. `verdict` is collisionVerdict()'s result -
+ * 'clean' or 'uncertain' ONLY. A live count of 2+ is exactly what a correct arm-then-stop
+ * handoff looks like while it is happening, so this function never asserts a confirmed
+ * collision from a single snapshot; see confirmedCollisionBlocks() (above, near
+ * scheduleCollisionRecheck()) for the message a RECHECK posts if the overlap outlasts a
+ * normal handoff. (#216) A pure function so its text can be checked without a network call
+ * - see rbCases in selfTest(). (#196, #213, #216)
  */
 function rearmBlocks(label, age, every, verdict) {
   const ageText = age == null ? 'no prior beat on record' : `${age}s since its last beat`;
@@ -1470,11 +1609,9 @@ function rearmBlocks(label, age, every, verdict) {
     ...(OWN_PLUGIN ? [{ type: 'mrkdwn', text: `plugin: \`${OWN_PLUGIN}\`` }] : []),
   ];
   const bodyText =
-    verdict === 'collision'
-      ? `A watcher for \`${label}\` just adopted an existing presence message (${ageText}). A SECOND PROCESS carrying this label is confirmed still running on that machine - this is a genuine label collision, not a restart. Rename one of the two sessions now; do not treat the older process as gone.`
-      : verdict === 'uncertain'
-        ? `A watcher for \`${label}\` just adopted an existing presence message (${ageText}). If this is your own restart, no action is needed. A local process count could not confirm whether another session may still be live under this name - check before treating the older process as gone, and rename only if you find one.`
-        : `A watcher for \`${label}\` just adopted an existing presence message (${ageText}). This is continuity: the roster row for this label spans a process that stopped and one that started, same as always - now visible on the wire instead of silent.`;
+    verdict === 'uncertain'
+      ? `A watcher for \`${label}\` just adopted an existing presence message (${ageText}). If this is your own restart, no action is needed. A local process count could not confirm whether another session may still be live under this name - check before treating the older process as gone, and rename only if you find one.`
+      : `A watcher for \`${label}\` just adopted an existing presence message (${ageText}). This is continuity: the roster row for this label spans a process that stopped and one that started, same as always - now visible on the wire instead of silent.`;
   return {
     text: `rearmed: ${label}`,
     blocks: [{ type: 'context', elements }, { type: 'section', text: { type: 'mrkdwn', text: bodyText } }],
@@ -1543,6 +1680,12 @@ async function beat(label, every) {
         presenceTs = p.ts;
         warnIfColliding(p, label);
         await announceRearm(label, p);
+        // A second, explicit count - collisionVerdict() above already took one internally,
+        // but its return value alone cannot distinguish "uncertain via a live count of 2+"
+        // (worth rechecking) from "uncertain via the age-fallback heuristic" (a null count;
+        // re-trying it on a timer would not help). One extra one-time enumeration at
+        // adoption is cheap; keeping each function's own contract simple is worth it. (#216)
+        if (stillCollided(localProcessesWithLabel(label))) scheduleCollisionRecheck(label);
         break;
       }
     }
