@@ -2491,6 +2491,20 @@ if (a.ping) {
     console.error("own to:-exclusion in a responder's --re check has nothing to compare against.");
     process.exit(1);
   }
+  /**
+   * ⛔⛔ #227 gave the ordinary poll path a WORKSPACE line; the five commands below it in
+   * the file - --ping, --audit, --member, --retire, --announce-install - did not get it in
+   * that sweep. All five resolve and use `token` the same way the poll path does, so all
+   * five can silently act against a resolved-but-wrong workspace with no diagnostic at all:
+   * a ping into a channel that exists in the wrong workspace waits forever for a pong that
+   * was never going to arrive from a peer who is not there; an audit or membership read
+   * against the wrong workspace reads as a real, if surprising, answer. Reachable by this
+   * command specifically because LOCAL_ONLY is false whenever --ping/--audit/--retire is
+   * set (by the boolean's own construction) and --member/--announce-install are only ever
+   * reached once --consistency's own unconditional early exit has already been ruled out -
+   * `token` is therefore always the real resolution here, never the LOCAL_ONLY null. (#234)
+   */
+  console.log(`WORKSPACE  ${workspaceLine(await checkWorkspace(token, { enforce: false }))}`);
   const target = a.ping;
   const waitSec = Math.max(5, Number(a.wait) || 45);
   const sent = await slackPost('chat.postMessage', {
@@ -2606,6 +2620,7 @@ if (a.audit) {
     console.error(`--audit "${a.audit}" is not a Slack timestamp. Quote it.`);
     process.exit(2);
   }
+  console.log(`WORKSPACE  ${workspaceLine(await checkWorkspace(token, { enforce: false }))}`); // see --ping above (#234)
   const repRes = await fetch(
     `https://slack.com/api/conversations.replies?channel=${a.channel}&ts=${a.audit}&limit=200`,
     { headers: { Authorization: `Bearer ${token}` } },
@@ -2703,6 +2718,7 @@ if (a.member) {
   // FIRST - a check here was DEAD CODE, silently replaced by the generic guard's own exit 1
   // and full USAGE dump instead of this block's intended exit 2 and specific message. Found
   // by review, not by reading: the guard had never actually been reached. (#173)
+  console.log(`WORKSPACE  ${workspaceLine(await checkWorkspace(token, { enforce: false }))}`); // see --ping above (#234)
   const memberIds = [];
   let cur = null;
   let pages = 0;
@@ -2755,6 +2771,7 @@ if (a.retire) {
     console.error('--retire needs a label: pass --session, or set CLAUDE_SESSION_NAME.');
     process.exit(1);
   }
+  console.log(`WORKSPACE  ${workspaceLine(await checkWorkspace(token, { enforce: false }))}`); // see --ping above (#234)
 
   // ★★ RETIREMENT IS POSITIVE EVIDENCE OF ABSENCE, AND IT IS THE ONLY SUCH SIGNAL ON THIS
   // BUS. Every other absence signal here is an inference from SILENCE, which is why §6 is
@@ -4237,6 +4254,7 @@ function xUpdateBlocks({ session, machine, cached, from, baselineSrc, restartReq
 
 if (a['announce-install']) {
   if (!a.session) die('--announce-install needs --session <label>: the notice says who moved.', 2);
+  console.log(`WORKSPACE  ${workspaceLine(await checkWorkspace(token, { enforce: false }))}`); // see --ping above (#234)
 
   /**
    * ⛔⛔ THE LABEL WAS CHECKED FOR EXISTENCE AND NEVER FOR REACHABILITY.
