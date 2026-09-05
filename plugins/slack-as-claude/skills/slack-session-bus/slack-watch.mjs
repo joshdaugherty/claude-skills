@@ -343,6 +343,12 @@ function looksLikeCollision(age, every) {
  * matching Dir|Path|Cwd|Work return only ExecutablePath (identical for every watcher) and
  * four WorkingSet* memory counters. A cwd-based test is not portable; the command line,
  * which carries --session, is - the same field on both supported platforms.
+ *
+ * ⚠ THE non-win32 BRANCH (`ps -eo command=`) IS UNVERIFIED. Everything above, including
+ * the token-boundary regex it shares with the Windows branch, was measured against real
+ * Windows processes only - no macOS or Linux machine was available to this change. Treat
+ * this branch as reasoned-from-the-`ps`-contract, not observed, until a session on one of
+ * those platforms runs it for real. (#213)
  */
 function localProcessesWithLabel(label) {
   try {
