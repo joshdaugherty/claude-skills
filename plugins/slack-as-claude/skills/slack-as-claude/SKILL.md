@@ -474,9 +474,9 @@ credential  : process.env[token_env || SLACK_BOT_TOKEN]  -> HKCU\Environment, sa
 verify      : auth.test on every send; a mismatch REFUSES with exit 2, naming BOTH
 ```
 
-⛔ **A mismatch refuses rather than warns**, *because a warning on a path that still succeeds is precisely how the original misdelivery happened.* ✔ **`--dry-run` and `slack-watch.mjs --doctor` both name the destination**, so *"where is this going"* is answerable without sending. ✔ **No declaration = today's behaviour exactly** — a single-workspace machine needs no configuration.
+⛔ **A mismatch refuses rather than warns**, *because a warning on a path that still succeeds is precisely how the original misdelivery happened.* ✔ **No declaration = today's behaviour exactly** — a single-workspace machine needs no configuration.
 
-# ⛔⛔ AND NAMING THE DESTINATION ONLY ON A DIAGNOSTIC SURFACE LEFT REAL OPERATIONS SILENT ABOUT WHERE THEY WENT.
+# ⛔⛔ AND FOR A LONG TIME, ONLY `--dry-run` AND `slack-watch.mjs --doctor` NAMED THE DESTINATION — EVERY REAL OPERATION WENT SILENT ABOUT WHERE IT WENT.
 
 ### **Three real failures and one real success, none of which named the working directory — which is the cause in every one.** *A `<TOKEN_VAR> is not set.` message that named the DEFAULT while a repo's own declared `token_env` sat unset and unmentioned. A Windows registry fallback resolving a DIFFERENT, real workspace's token, so a post landed against a channel that genuinely does not exist there — `channel_not_found`, confidently wrong. `slack-watch.mjs --presence` reading the wrong workspace's channel and printing a plausible, ordinary "no presence messages found" — an empty roster is a state that genuinely occurs, so it read as an answer rather than a failure. And the arm with no tell at all: two repositories declaring the SAME `team_id`/`token_env` — nothing missing, nothing mismatched, the message delivered correctly, and the only wrong thing was which repo it was attributed to.* (#222)
 
