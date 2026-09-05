@@ -865,6 +865,14 @@ async function channelHistory() {
  * incident it was filed from - a thread-only check ran correctly, found nothing, and the
  * confounding message was never in the thread to find. (#205)
  *
+ * ⛔⛔ EXCLUDES m.thread_ts === taskTs - found by review. --broadcast (documented, first-
+ * party, and #202's own named correct way for a THREAD reply to also get channel
+ * visibility) duplicates a threaded reply into the channel timeline. Without this
+ * exclusion, that message was BOTH surfaced by #202's unreadContributions() (correctly)
+ * AND by this function (incorrectly) - not a silent miss, but a printed FALSEHOOD: this
+ * function's own "outside this task's thread" caveat is untrue for a message that
+ * demonstrably was posted into this exact task's thread with --thread-ts.
+ *
  * Bounded by the CLAIM'S OWN ts, not the whole channel - the API's own oldest/latest range
  * filtering does the narrowing, mirroring --audit's oldest/latest-bounded pagination in
  * slack-watch.mjs, applied here to a moving upper bound (now) rather than a fixed thread
@@ -875,7 +883,7 @@ async function channelHistory() {
  * Returns {ok, messages, truncated} - same discipline as channelHistory(): a FAILED or
  * TRUNCATED read is not "nothing addressed to you" and must not collapse into it.
  */
-async function channelContributionsSince(oldestTs, label) {
+async function channelContributionsSince(oldestTs, label, taskTs) {
   const messages = [];
   let cur = null;
   let pages = 0;
@@ -885,6 +893,10 @@ async function channelContributionsSince(oldestTs, label) {
     const res = await api(HISTORY, params);
     if (!res.ok) return { ok: false, error: res.error, messages: [], truncated: false };
     for (const m of res.messages ?? []) {
+      // tsCmp, not === - same padding-tolerance reason every other ts comparison in this
+      // file uses it (#146); m.thread_ts is undefined for a channel-level message, and
+      // tsCmp treats that as never matching a real ts, so this is safe unguarded.
+      if (m.thread_ts && tsCmp(m.thread_ts, taskTs) === 0) continue; // covered by #202's thread-scoped check already
       const mm = meta(m);
       if (mm.to === label) messages.push({ ts: m.ts, text: m.text, ...mm });
     }
@@ -1038,7 +1050,7 @@ if (a.done || a.fail) {
   // thread immediately before discharging, correctly found nothing, and discharged anyway.
   // Bounded by the claim's OWN ts, not the whole channel - proportional to how long the
   // task took, not to the channel's total history. (#205)
-  const channelContribs = await channelContributionsSince(mine.ts, label);
+  const channelContribs = await channelContributionsSince(mine.ts, label, a.task);
   if (!channelContribs.ok) {
     console.log(`⚠ Could not check the channel for messages addressed to you: ${channelContribs.error}.`);
     console.log('  Proceeding anyway - a failed read is not a fact about whether anything is there.');
