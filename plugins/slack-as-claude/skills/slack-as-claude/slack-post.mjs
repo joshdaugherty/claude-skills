@@ -1022,16 +1022,30 @@ if (a['self-test']) selfTest();
  *
  * ⛔ PRINTS ONLY IDENTIFIERS. bot_id/user_id/team_id are safe to paste into a committed
  * slack-workspace.json exactly like team_id already is - NEVER the token itself.
+ *
+ * ⛔⛔ 2.23.11 GAVE THE FAILURE ARM resolutionTrace() AND LEFT THE SUCCESS ARM SILENT -
+ * WHICH IS THE ARM THAT NEEDED IT MOST. A missing token already announces itself by
+ * erroring; a token that resolves successfully and belongs to the WRONG workspace does
+ * not, and this command used to call whoAmI() directly rather than checkWorkspace(),
+ * which is the only path that ever compares the answer against this repo's own
+ * declaration. Measured: same command, same second, only cwd differing - one printed the
+ * bound repo's real workspace, the other printed a foreign one, three confident lines,
+ * exit 0, no qualification on either. `--dry-run` already got this right (workspaceLine()
+ * at :530); this command just never called it. #234 excluded this file from its own sweep
+ * on the reasoning that slack-post.mjs already prints a trace on every real invocation -
+ * true of an actual SEND, false of this command, which returns before that code ever
+ * runs. Corrected here rather than left standing. (#236)
  */
 if (a.whoami) {
   const varName = a['as-coordinator'] ? coordinatorTokenVar() : tokenVar();
   const wToken = a['as-coordinator'] ? botToken(coordinatorTokenVar()) : botToken();
   if (!wToken) die(`${resolutionTrace(varName)}\n\n${missingTokenMessage(varName, process.platform)}`);
-  const who = await whoAmI(wToken);
-  if (!who.ok) die(`auth.test failed: ${who.error}`, 1);
-  console.log(`team    : ${who.team} (${who.team_id})`);
-  console.log(`bot_id  : ${who.bot_id ?? '(none - is this really a bot token?)'}`);
-  console.log(`user_id : ${who.user_id ?? '(none)'}`);
+  const WS = await checkWorkspace(wToken, { enforce: false });
+  if (!WS.who.ok) die(`auth.test failed: ${WS.who.error}`, 1);
+  console.log(`workspace: ${workspaceLine(WS)}`);
+  console.log(`team    : ${WS.who.team} (${WS.who.team_id})`);
+  console.log(`bot_id  : ${WS.who.bot_id ?? '(none - is this really a bot token?)'}`);
+  console.log(`user_id : ${WS.who.user_id ?? '(none)'}`);
   process.exit(0);
 }
 
