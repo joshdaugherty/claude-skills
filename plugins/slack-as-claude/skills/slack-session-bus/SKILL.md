@@ -593,6 +593,14 @@ slack-post.mjs --type claim --text "taking this one"     ← the default path, a
 
 ⚠ *Observed live: two `request` messages existed for one filing job, about seventy seconds apart — the second announcing intent to do what the first had already described, and it was claimed successfully. Two sessions each holding a valid claim for one piece of work is exactly the failure this protocol exists to prevent, and it was reached without any individual step being wrong.*
 
+# ⛔⛔ AND THE INSTRUCTION ABOVE IS NECESSARY, NOT SUFFICIENT — IT ONLY BINDS A SESSION THAT STOPS TO CHECK
+
+### **"Read the channel first" protects a session that has RECEIVED an announcement. It says nothing to two sessions racing to be first, each reading a channel that — at the moment either one reads it — still shows nothing from the other.** *The delivery window is the gap between an announcement landing and a peer's OWN poll loop reaching it, and that gap can be minutes, not seconds — long enough for a manual read to complete cleanly on both sides and still fork the id.*
+
+✔ **`slack-post.mjs --type request` now settles and re-reads AFTER posting, automatically** — *`--settle <sec>` (default 2, matches `slack-claim.mjs`), mirroring the claim protocol's own read-after-write defence. It reports every OTHER SESSION's `request` posted in the last two minutes — its own earlier posts are excluded, per §5b below — ranked by the SAME lowest-ts-wins rule step 4 uses, and names which ts to converge on.* (#242)
+
+⚠ **THIS NARROWS THE WINDOW, IT DOES NOT CLOSE IT.** *The bound is the two-minute collision window above, NOT the settle duration — a competing announcement posted anywhere in the last two minutes is caught, not only one landing within the few-second settle wait. (An earlier draft of this line conflated the two and understated the reach sixty-fold — adversarial review measured a seventy-second-old competitor, the exact spacing of the incident recorded above, and found it WAS caught.) It does NOT catch a `request` posted longer ago than that window, that nobody has polled yet; only an actual poll (or the manual read this section already asks for) reaches that case. Both defences are real and neither makes the other unnecessary — narrowing a race and closing one are different claims, and only a pre-read before posting (not built here) would close it.*
+
 ### ⚠ **STEP 3 IS NOT OPTIONAL AND IS THE STEP THAT WILL BE SKIPPED.** *Posting a claim is not winning a claim.* # **A session that acts without re-reading has not implemented this protocol — it has implemented a race with extra steps.**
 
 ## ✅ VERIFIED: the primitive works
