@@ -1002,7 +1002,8 @@ async function selfTest() {
  * their own line has executed - `function` declarations (slackPost(), beat(),
  * recentMessages()) are hoisted whole and were already safe to call from here, but the STATE
  * those functions read and write (rateLimitedUntil, presenceTs, consecutiveBeatFailures,
- * MESSAGE_GONE_ERRORS) was not. #245's own new self-test cases call slackPost()/beat()/
+ * MESSAGE_GONE_ERRORS, MAX_HISTORY_PAGES) was not. #245's own new self-test cases call
+ * slackPost()/beat()/
  * recentMessages() directly to prove a rejected fetch cannot crash the watcher, and the first
  * version of that test threw `Cannot access 'presenceTs' before initialization` the moment it
  * ran - found by running the suite, not by reading the diff, exactly as #216 was. Values and
@@ -1028,6 +1029,7 @@ let rateLimitedUntil = 0;
 let presenceTs = null;
 let consecutiveBeatFailures = 0;
 const MESSAGE_GONE_ERRORS = ['message_not_found'];
+const MAX_HISTORY_PAGES = 25;
 
 if (a['self-test']) await selfTest();
 
@@ -1419,8 +1421,15 @@ async function slackPost(method, body, { fetchImpl = fetch, authToken = token } 
  * page to confirm what page one already answered. beat()'s own cold-start lookup, the
  * highest-frequency site this function has (once per process start, and again after any
  * message-is-gone recovery), uses exactly this.
+ *
+ * MAX_HISTORY_PAGES itself is declared earlier in the file now (#245 review) - see the
+ * relocated-declarations comment there. Latent, not yet triggered: recentMessages() is now
+ * callable from selfTest() (this function's own new self-test cases), and this constant is
+ * read inside the very `while (cur && pages < MAX_HISTORY_PAGES)` a rejecting-fetch fixture
+ * never reaches (the catch returns before the loop's first re-check) - so today's fixtures
+ * never actually evaluate it, but a future one that lets a call succeed and paginate would
+ * have hit the identical TDZ this fix already found and fixed five times over.
  */
-const MAX_HISTORY_PAGES = 25;
 
 async function recentMessages(limit = 200, { full = true, stopWhen = null, fetchImpl = fetch, authToken = token } = {}) {
   const url = new URL(HISTORY);
@@ -1469,8 +1478,11 @@ async function recentMessages(limit = 200, { full = true, stopWhen = null, fetch
      * announceRearm(), below) claimed was closed. Measured: a fixture forcing beat() through
      * this branch with a rejecting fetch still crashed after slackPost() alone was fixed.
      * Guarded the identical way, returning the SAME {ok:false, error, messages:[],
-     * truncated:false} shape line ~1382 below already uses for a non-JSON failure - a caller
-     * already has to handle ok:false here, it just could not yet see this cause of it.
+     * truncated:false} shape this function's own `if (!res.ok) return ...` a few lines below
+     * already uses for a non-JSON failure - a caller already has to handle ok:false here, it
+     * just could not yet see this cause of it. (A line number was here instead of that
+     * description in an earlier draft, and was already wrong by the time review read it -
+     * pointing into slackPost(), a different function entirely. Named instead of numbered.)
      */
     let r;
     try {
@@ -1498,7 +1510,10 @@ async function recentMessages(limit = 200, { full = true, stopWhen = null, fetch
     // while page 3 is unread. Returning the partial messages here would invite exactly
     // that wrong conclusion; failing the whole read keeps the "ok:false means learned
     // nothing" contract this function has always made. (#177)
-    if (!res.ok) return { ok: false, error: res.error, messages: [], truncated: false };
+    // status forwarded too, not just error - safeJson()'s own non_json_response carries it
+    // (#161), and discarding it here made diagSuffix()'s status branch (#245 review) unable to
+    // ever fire for a recentMessages() failure, even once a caller started calling it.
+    if (!res.ok) return { ok: false, error: res.error, status: res.status, messages: [], truncated: false };
     messages.push(...(res.messages ?? []));
     pages++;
     // ⚠ AN EARLY STOP ON A FOUND ANSWER IS NOT A TRUNCATION. `truncated` means "there was
@@ -2010,6 +2025,11 @@ function confirmedCollisionBlocks(label) {
  * documents combining the two) but worth stating rather than leaving a reader to discover it
  * by noticing an escalation that never arrives. (#216)
  */
+// ⚠ NOT GIVEN fetchImpl/authToken, UNLIKE announceRearm() (#245 review). Its own slackPost()
+// call below fires from a setTimeout COLLISION_RECHECK_GRACE_SEC (60s) in the future - a
+// self-test run always exits synchronously (process.exit()) long before that timer could ever
+// run, so there is no live-network/live-credential risk from --self-test to close here the way
+// there was for announceRearm(), which fires synchronously inside beat()'s own cold-start path.
 function scheduleCollisionRecheck(label, countLocalProcesses = localProcessesWithLabel) {
   setTimeout(async () => {
     if (!stillCollided(countLocalProcesses(label))) return;
@@ -2076,12 +2096,20 @@ function rearmBlocks(label, age, every, verdict) {
  * covered: a hard fetch() failure (DNS, connection refused) here or in the primary beat below
  * would still throw uncaught - this inherits that exposure from slackPost() itself, which no
  * caller in this file wraps in try/catch, rather than introducing it. (found by review, #196)"
- * That was accurate when written and stayed true for three releases, reproduced independently
- * on three platform/Node-version pairs before it was fixed. The exposure was never in this
- * function or in beat() below - both already only ever check `res.ok` - it was that
- * `slackPost()` let a hard network failure propagate as a throw instead of a result. Fixed
- * AT SLACKPOST() ITSELF (#245), which is why nothing here or in beat() needed to change to
- * inherit the fix, the same way both silently inherited the exposure.
+ * That was accurate when written, reproduced three times by three reporters across TWO
+ * platform/Node pairs (not "three pairs" - an earlier draft of this exact paragraph repeated
+ * the same overstatement `slackPost()`'s own docblock corrects, above) before it was fixed.
+ *
+ * ⛔⛔ AND THE ORIGINAL VERSION OF THIS BANNER WAS ITSELF WRONG ABOUT WHERE THE FIX LANDED.
+ * "The exposure was never in this function or in beat() below... Fixed AT SLACKPOST() ITSELF,
+ * which is why nothing here or in beat() needed to change" - true of THIS function
+ * (announceRearm() calls slackPost() and only ever checked res.ok, so it needed nothing), but
+ * FALSE of beat(): its cold-start branch calls recentMessages() BEFORE it ever reaches
+ * slackPost(), and recentMessages() had the IDENTICAL unguarded fetch(), on a path adversarial
+ * review found still crashing the watcher after slackPost() alone had already shipped as
+ * "closed" - the same "verified only on the path that reported the bug" shape this file's own
+ * recentMessages() docblock names two functions up. beat() DID need a change: fetchImpl and
+ * authToken threaded through to its recentMessages() call, so that fix could reach it too.
  *
  * ⚠ NOT DEDUPED ACROSS RESTARTS, and this repo's own rateLimitedUntil backoff does not cover
  * THIS call specifically - it is only set from the PRIMARY beat post's own 429 handling, a
@@ -2093,14 +2121,14 @@ function rearmBlocks(label, age, every, verdict) {
  * still caps how much of it actually lands, independent of whether this file's own backoff
  * bookkeeping covers the call. Disclosed here rather than left implicit. (found by review, #196)
  */
-async function announceRearm(label, p, count) {
+async function announceRearm(label, p, count, { fetchImpl = fetch, authToken = token } = {}) {
   const age = p.beat ? Math.max(0, Math.floor(Date.now() / 1000 - p.beat)) : null;
   const verdict = age != null ? collisionVerdict(count, age, p.every) : 'clean';
-  const res = await slackPost('chat.postMessage', {
-    channel: a.channel,
-    reply_broadcast: true,
-    ...rearmBlocks(label, age, p.every, verdict),
-  });
+  const res = await slackPost(
+    'chat.postMessage',
+    { channel: a.channel, reply_broadcast: true, ...rearmBlocks(label, age, p.every, verdict) },
+    { fetchImpl, authToken },
+  );
   if (!res.ok) console.error(`[watch] could not announce re-arm continuity: ${res.error}${diagSuffix(res)}`);
 }
 
@@ -2130,7 +2158,7 @@ async function beat(label, every, { fetchImpl = fetch, authToken = token } = {})
     // nothing left to contribute; draining all MAX_HISTORY_PAGES of them regardless would
     // make every watcher's startup pay the full cost of a busy channel for no benefit. (#177)
     const look = await recentMessages(200, { stopWhen: (msgs) => msgs.some((m) => presenceOf(m)?.session === label), fetchImpl, authToken });
-    if (!look.ok) console.error(`[watch] could not look up an existing presence message (${look.error}); posting a NEW one, which may leave an orphan.`);
+    if (!look.ok) console.error(`[watch] could not look up an existing presence message (${look.error}${diagSuffix(look)}); posting a NEW one, which may leave an orphan.`);
     for (const m of look.messages) {
       const p = presenceOf(m);
       if (p && p.session === label) {
@@ -2144,7 +2172,7 @@ async function beat(label, every, { fetchImpl = fetch, authToken = token } = {})
         // anything even when this same count had. (#216)
         const count = localProcessesWithLabel(label);
         warnIfColliding(p, label, count);
-        await announceRearm(label, p, count);
+        await announceRearm(label, p, count, { fetchImpl, authToken });
         if (stillCollided(count)) scheduleCollisionRecheck(label);
         break;
       }
@@ -2257,7 +2285,7 @@ async function roster() {
   const now = Math.floor(Date.now() / 1000);
   const read = await recentMessages();
   if (!read.ok) {
-    console.error(`could not read the channel: ${read.error}`);
+    console.error(`could not read the channel: ${read.error}${diagSuffix(read)}`);
     console.error('This is NOT "no session is publishing a heartbeat" - that is a claim about');
     console.error('your peers, and nothing was learned about them. Do not treat any session as');
     console.error('stale on the strength of this, and do not authorise a --takeover from it.');
@@ -2841,7 +2869,7 @@ if (a.ping) {
     // just sent (the loop below discards anything with ts <= sent.ts), so pagination back
     // through old history buys nothing and would cost a poll cycle every 5s. (#177)
     const look = await recentMessages(50, { full: false });
-    if (!look.ok) { console.error(`[ping] read failed (${look.error}) - still waiting; a missed read is not a missed pong.`); continue; }
+    if (!look.ok) { console.error(`[ping] read failed (${look.error}${diagSuffix(look)}) - still waiting; a missed read is not a missed pong.`); continue; }
     for (const m of look.messages) {
       if (tsCmp(m.ts, sent.ts) <= 0) continue;
       const mm = parseMessage(m).meta;
@@ -3104,13 +3132,13 @@ if (a.retire) {
       },
     ],
   });
-  if (!announced.ok) console.error(`  could not announce retirement: ${announced.error}`);
+  if (!announced.ok) console.error(`  could not announce retirement: ${announced.error}${diagSuffix(announced)}`);
 
   // Only NOW remove presence. The announcement is the durable record; presence is
   // ephemeral status and is what would otherwise linger as STALE.
   let removed = 0;
   const look = await recentMessages();
-  if (!look.ok) console.error(`[retire] could not read the channel (${look.error}); the ANNOUNCEMENT is posted and is the durable record, but presence messages could not be removed and may linger as STALE.`);
+  if (!look.ok) console.error(`[retire] could not read the channel (${look.error}${diagSuffix(look)}); the ANNOUNCEMENT is posted and is the durable record, but presence messages could not be removed and may linger as STALE.`);
   for (const m of look.messages) {
     const p = presenceOf(m);
     if (!p || p.session !== selfLabel) continue;
@@ -4916,7 +4944,7 @@ if (a.show) {
   // ⚠ STOPS THE INSTANT THE TS IS FOUND, EARLY-EXITING PAGINATION - "is there a message
   // with THIS exact ts" needs no further pages once answered. (#177)
   const read = await recentMessages(200, { stopWhen: (msgs) => msgs.some((m) => m.ts === a.show) });
-  if (!read.ok) die(`could not read the channel: ${read.error}`, 1);
+  if (!read.ok) die(`could not read the channel: ${read.error}${diagSuffix(read)}`, 1);
   // STRING comparison, never Number(). A ts has 16 significant digits and coercing it
   // rounds - the same defect that makes --thread-ts silently post to the channel instead.
   const hit = read.messages.find((m) => m.ts === a.show);
@@ -4965,7 +4993,7 @@ if (a.raw) {
   // from. (#118)
   const read = await recentMessages(200);
   if (!read.ok) {
-    console.error(`could not read the channel: ${read.error}`);
+    console.error(`could not read the channel: ${read.error}${diagSuffix(read)}`);
     console.error('⛔ This is NOT "0 messages". --raw is the INSPECTOR - it is reached for when');
     console.error('the rendering already looks wrong, so an empty channel is the single most');
     console.error('misleading answer it could give. Nothing was read.');
