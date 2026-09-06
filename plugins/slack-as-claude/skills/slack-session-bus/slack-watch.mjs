@@ -492,7 +492,7 @@ async function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 137; // raise when adding cases - a constant, reviewed on change (+4 rearmBlocks, +5 collisionVerdict, #213; -3 rearmBlocks, +1 collisionVerdict, +5 stillCollided, +6 confirmedCollisionBlocks, #216; +4 rearmBlocks, +1 collisionVerdict for the 'overlap' state, review fix, #216; +1 --exclude-type in the automatic flag-in-usage loop, #220; +7 resolutionTrace, #222; +7 isNodeProcessLine, #229; +6 --consistency gate (spawnSync, real CLI), #234/#237 review) - verified against the real --self-test count, not computed by eye
+  const CASE_FLOOR = 143; // raise when adding cases - a constant, reviewed on change (+4 rearmBlocks, +5 collisionVerdict, #213; -3 rearmBlocks, +1 collisionVerdict, +5 stillCollided, +6 confirmedCollisionBlocks, #216; +4 rearmBlocks, +1 collisionVerdict for the 'overlap' state, review fix, #216; +1 --exclude-type in the automatic flag-in-usage loop, #220; +7 resolutionTrace, #222; +7 isNodeProcessLine, #229; +6 --consistency gate (spawnSync, real CLI), #234/#237 review; +3 slackPost network-failure, +3 beat network-failure, #245) - verified against the real --self-test count, not computed by eye
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -854,6 +854,56 @@ async function selfTest() {
   for (const [name, got, want] of pvCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  pongVerdict: ${name}`);
   const pvBad = pvCases.filter(([, got, want]) => got !== want).length;
 
+  /**
+   * slackPost() (#245): fetch() itself throwing (DNS, connection refused, a read/connect
+   * timeout) used to propagate uncaught, killing beat()'s setInterval tick and the whole
+   * watcher with it. Fixture-tested via the injectable fetchImpl - a rejecting stub in place
+   * of a real network call - since the whole point of this fix is behaviour that must never
+   * reach the network to prove.
+   */
+  const rejectingFetch = async () => {
+    throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ETIMEDOUT' } });
+  };
+  const ntResult = await slackPost('chat.postMessage', {}, { fetchImpl: rejectingFetch });
+  const ntCases = [
+    ['a thrown fetch resolves to ok:false, not a rejection', ntResult.ok, false],
+    ['the synthetic error is network_error, distinguishable from a real Slack error', ntResult.error, 'network_error'],
+    ['the underlying cause code is preserved, for a log line that says WHICH failure', ntResult.detail, 'ETIMEDOUT'],
+  ];
+  for (const [name, got, want] of ntCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  slackPost (network failure): ${name}`);
+  const ntBad = ntCases.filter(([, got, want]) => got !== want).length;
+
+  /**
+   * beat() (#245): the acceptance criterion is specifically that the WATCHER SURVIVES - i.e.
+   * beat()'s own returned promise must resolve, never reject, when its post fails at the
+   * network level, since an uncaught rejection out of the setInterval tick at the bottom of
+   * this file (not exercised here - that is a live timer, not a fixture) is exactly what used
+   * to kill the process. presenceTs is set to a fake value first so this exercises the
+   * chat.update branch directly, without a real recentMessages() lookup network call.
+   */
+  const savedPresenceTs = presenceTs;
+  const savedConsecutiveBeatFailures = consecutiveBeatFailures;
+  const savedRateLimitedUntil = rateLimitedUntil;
+  presenceTs = 'FAKE.000000';
+  consecutiveBeatFailures = 0;
+  rateLimitedUntil = 0;
+  let beatThrew = false;
+  try {
+    await beat('self-test-label', 60, { fetchImpl: rejectingFetch });
+  } catch {
+    beatThrew = true;
+  }
+  const btCases = [
+    ['a failed beat does not throw - this is what keeps the setInterval tick, and the process, alive', beatThrew, false],
+    ['a failed beat is counted (visible in presenceBlocks() on the next tick)', consecutiveBeatFailures, 1],
+    ['a network failure does NOT trip the ratelimited backoff - it is a different failure class', rateLimitedUntil, 0],
+  ];
+  for (const [name, got, want] of btCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  beat (network failure): ${name}`);
+  const btBad = btCases.filter(([, got, want]) => got !== want).length;
+  presenceTs = savedPresenceTs;
+  consecutiveBeatFailures = savedConsecutiveBeatFailures;
+  rateLimitedUntil = savedRateLimitedUntil;
+
   // ⚠ EVERY counter must appear in BOTH the summary and the exit code. regBad was computed
   // and left out of both for one edit - seven cases that printed pass/FAIL and could not
   // fail the suite. A test that cannot fail is the defect this file documents two functions
@@ -870,13 +920,36 @@ async function selfTest() {
   const tooFew = ran < CASE_FLOOR;
   if (tooFew) console.log(`\n⛔ ONLY ${ran} CASES RAN, floor is ${CASE_FLOOR} - a block stopped running.`);
   console.log(
-    missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || cvBad || scBad || ccBad || rtBad || plBad || gcBad || tooFew
+    missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || cvBad || scBad || ccBad || rtBad || plBad || gcBad || ntBad || btBad || tooFew
       ? `\n${tooFew ? `ONLY ${ran} CASES RAN, FLOOR IS ${CASE_FLOOR} - A BLOCK STOPPED RUNNING. ` : ''}${missing.length} FLAG(S) MISSING FROM USAGE${missing.length ? `: ${missing.join(', ')}` : ''}` +
-        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}${xuBad ? `, ${xuBad} X-UPDATE CASE(S) WRONG` : ''}${sjBad ? `, ${sjBad} SAFEJSON CASE(S) WRONG` : ''}${vbBad ? `, ${vbBad} VERIFYBOTID CASE(S) WRONG` : ''}${msBad ? `, ${msBad} MEMBERSTATUS CASE(S) WRONG` : ''}${pbBad ? `, ${pbBad} PRESENCEBLOCKS CASE(S) WRONG` : ''}${rbBad ? `, ${rbBad} REARMBLOCKS CASE(S) WRONG` : ''}${pvBad ? `, ${pvBad} PONGVERDICT CASE(S) WRONG` : ''}${cvBad ? `, ${cvBad} COLLISIONVERDICT CASE(S) WRONG` : ''}${scBad ? `, ${scBad} STILLCOLLIDED CASE(S) WRONG` : ''}${ccBad ? `, ${ccBad} CONFIRMEDCOLLISIONBLOCKS CASE(S) WRONG` : ''}${rtBad ? `, ${rtBad} RESOLUTIONTRACE CASE(S) WRONG` : ''}${plBad ? `, ${plBad} ISNODEPROCESSLINE CASE(S) WRONG` : ''}${gcBad ? `, ${gcBad} CONSISTENCY-GATE CASE(S) WRONG` : ''}`
+        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}${xuBad ? `, ${xuBad} X-UPDATE CASE(S) WRONG` : ''}${sjBad ? `, ${sjBad} SAFEJSON CASE(S) WRONG` : ''}${vbBad ? `, ${vbBad} VERIFYBOTID CASE(S) WRONG` : ''}${msBad ? `, ${msBad} MEMBERSTATUS CASE(S) WRONG` : ''}${pbBad ? `, ${pbBad} PRESENCEBLOCKS CASE(S) WRONG` : ''}${rbBad ? `, ${rbBad} REARMBLOCKS CASE(S) WRONG` : ''}${pvBad ? `, ${pvBad} PONGVERDICT CASE(S) WRONG` : ''}${cvBad ? `, ${cvBad} COLLISIONVERDICT CASE(S) WRONG` : ''}${scBad ? `, ${scBad} STILLCOLLIDED CASE(S) WRONG` : ''}${ccBad ? `, ${ccBad} CONFIRMEDCOLLISIONBLOCKS CASE(S) WRONG` : ''}${rtBad ? `, ${rtBad} RESOLUTIONTRACE CASE(S) WRONG` : ''}${plBad ? `, ${plBad} ISNODEPROCESSLINE CASE(S) WRONG` : ''}${gcBad ? `, ${gcBad} CONSISTENCY-GATE CASE(S) WRONG` : ''}${ntBad ? `, ${ntBad} SLACKPOST NETWORK-FAILURE CASE(S) WRONG` : ''}${btBad ? `, ${btBad} BEAT NETWORK-FAILURE CASE(S) WRONG` : ''}`
       : `\n${ran} cases, all pass`,
   );
-  process.exit(missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || cvBad || scBad || ccBad || rtBad || plBad || gcBad || tooFew ? 1 : 0);
+  process.exit(missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || cvBad || scBad || ccBad || rtBad || plBad || gcBad || ntBad || btBad || tooFew ? 1 : 0);
 }
+
+/**
+ * ⛔⛔ DECLARED HERE, NOT NEAR THEIR OWN NATURAL NEIGHBOURHOOD - the same TDZ-in-a-hoisted-
+ * scope class #216 already named for COLLISION_RECHECK_GRACE_SEC (see that constant's own
+ * comment, above). selfTest() is CALLED just below, but `const`/`let` are only reachable once
+ * their own line has executed - `function` declarations (slackPost(), beat()) are hoisted
+ * whole and were already safe to call from here, but the STATE those two functions read and
+ * write (LOCAL_ONLY, token, rateLimitedUntil, presenceTs, consecutiveBeatFailures) was not.
+ * #245's own new self-test cases call slackPost() and beat() directly to prove a rejected
+ * fetch cannot crash the watcher, and the first version of that test threw
+ * `Cannot access 'presenceTs' before initialization` the moment it ran - found by running the
+ * suite, not by reading the diff, exactly as #216 was. Values and every validation gate that
+ * reads them are UNCHANGED and stayed at their original location; only the assignment's own
+ * execution point moved. MESSAGE_GONE_ERRORS joined them for the identical reason, caught by
+ * the identical method - the first version of this fix moved everything EXCEPT it, and
+ * beat()'s own test then threw `Cannot access 'MESSAGE_GONE_ERRORS' before initialization`.
+ */
+const LOCAL_ONLY = Boolean(a.consistency) && !a.presence && !a.ping && !a.audit && !a.retire && !a.member;
+const token = LOCAL_ONLY ? null : botToken();
+let rateLimitedUntil = 0;
+let presenceTs = null;
+let consecutiveBeatFailures = 0;
+const MESSAGE_GONE_ERRORS = ['message_not_found'];
 
 if (a['self-test']) await selfTest();
 
@@ -917,14 +990,15 @@ if (a['self-test']) await selfTest();
  * because they sit on opposite sides of --consistency's own block - the property this
  * comment is now explicit about, checked in gcCases below. (#234, #237 review)
  */
-const LOCAL_ONLY = Boolean(a.consistency) && !a.presence && !a.ping && !a.audit && !a.retire && !a.member;
-
+// LOCAL_ONLY and token themselves are declared earlier in the file now (#245, next to
+// rateLimitedUntil/presenceTs/consecutiveBeatFailures) - see the comment there for why.
+// Nothing about their VALUES or this validation gate changed; only when the assignment
+// itself executes.
 if (a.help || (!a.channel && !LOCAL_ONLY)) {
   console.error(USAGE);
   process.exit(a.help ? 0 : 1);
 }
 
-const token = LOCAL_ONLY ? null : botToken();
 if (!token && !LOCAL_ONLY) {
   console.error(`${resolutionTrace()}\n\n${tokenVar()} is not set.`);
   process.exit(1);
@@ -958,11 +1032,7 @@ let rateLimitWaitMs = 0;
 // `|| 60` default below makes rateLimitWaitMs truthy even with no header, so that alone
 // cannot tell the message which case it is in. (#117)
 let rateLimitHadHeader = false;
-// Absolute time (ms since epoch) before which beat() must not issue its own requests -
-// a 429 on the poll bucket is a property of the CHANNEL and the heartbeat shares it, so
-// letting the heartbeat's own setInterval keep ticking through a stand-off deepens the
-// same limit the poll loop just backed off from. (#143)
-let rateLimitedUntil = 0;
+// rateLimitedUntil itself is declared earlier in the file now (#245) - see the comment there.
 // Set by poll() on a 429 so --once can exit 1 (nothing was read) rather than 0 (a clean,
 // quiet channel) - the two are otherwise indistinguishable to a script gating on $?. (#133)
 let wasRateLimited = false;
@@ -1171,12 +1241,45 @@ async function safeJson(r) {
   }
 }
 
-async function slackPost(method, body) {
-  const r = await fetch(`https://slack.com/api/${method}`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json; charset=utf-8' },
-    body: JSON.stringify(body),
-  });
+/**
+ * ⛔⛔ #245: fetch() ITSELF USED TO BE UNGUARDED HERE. safeJson() (above, #161) only ever
+ * guards `r.json()` parsing a response that already arrived - a HARD failure before any
+ * response exists (DNS, connection refused, a TLS read timing out, a connect timeout) throws
+ * out of `fetch()` itself, before safeJson() is ever reached. Every caller in this file checks
+ * `res.ok` and none of them wraps this call, so the throw propagated straight out of an async
+ * setInterval tick (beat(), scheduled at the bottom of this file) as an UNHANDLED REJECTION,
+ * which crashes the whole process - killing a long-running watcher on a single transient
+ * network blip. Independently reproduced on three platform/Node-version pairs, one `read
+ * ETIMEDOUT`, two distinct connect-timeout error codes. (#245)
+ *
+ * `error: 'network_error'` is a synthetic label this function invents, matching safeJson()'s
+ * existing `non_json_response` convention exactly - same shape, same reason: every real Slack
+ * error already arrives as a normal `{ok:false, error:<code>}` body, so a code that can only
+ * ever originate HERE is unambiguous evidence of which failure occurred, the same way
+ * `non_json_response` is unambiguous evidence a body could not be parsed. `detail` carries
+ * whatever diagnostic Node attached - `err.cause.code` for undici's own errors (`ETIMEDOUT`,
+ * `UND_ERR_CONNECT_TIMEOUT`, both seen in the wild) - so a caller's log line says WHICH
+ * network failure this was, not just that one occurred.
+ *
+ * ⚠ NOT COVERING A 429 OR ANY OTHER RESPONSE-LEVEL FAILURE - those already arrive as a normal,
+ * parseable body and are unaffected by this catch; `r.status === 429` below still runs exactly
+ * as before, unreachable only in the genuinely new failure mode this guards.
+ *
+ * `fetchImpl` is injectable, defaulting to the real global `fetch`, so this exact behaviour is
+ * fixture-testable (a rejecting stub) without touching the network - see the ntCases self-test
+ * group below.
+ */
+async function slackPost(method, body, { fetchImpl = fetch } = {}) {
+  let r;
+  try {
+    r = await fetchImpl(`https://slack.com/api/${method}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json; charset=utf-8' },
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    return { ok: false, error: 'network_error', detail: err.cause?.code || err.cause?.message || err.message };
+  }
   const j = await safeJson(r);
   // Kept so a 429 caller (beat(), --retire) can see what Slack asked for. (#119)
   if (r.status === 429) j.retryAfter = Number(r.headers.get('retry-after')) || null;
@@ -1645,12 +1748,9 @@ function presenceBlocks(label, every, recentFailures = 0) {
   };
 }
 
-let presenceTs = null;
-// How many beats in a row have failed to land - decayed by one on any success (never reset
-// to 0 outright: chat.update overwrites the whole body, so a hard reset made a "recovered"
-// marker visible for exactly one beat, measured live), incremented on any failure regardless
-// of cause. Read by presenceBlocks() so a lane that struggled and then landed says so. (#179)
-let consecutiveBeatFailures = 0;
+// presenceTs and consecutiveBeatFailures are declared earlier in the file now (#245) - see
+// the comment there for why (the same TDZ-in-a-hoisted-scope class as #216's
+// COLLISION_RECHECK_GRACE_SEC, this time hit by selfTest() calling beat() itself).
 
 /**
  * ⛔⛔ TWO SESSIONS SHARING A LABEL COLLAPSE INTO ONE, AND NOTHING USED TO SAY SO.
@@ -1837,10 +1937,18 @@ function rearmBlocks(label, age, every, verdict) {
 
 /**
  * Posts rearmBlocks()'s announcement. A graceful ok:false is logged, not fatal - the
- * presence beat itself (beat()'s caller) still lands. Not covered: a hard fetch() failure
- * (DNS, connection refused) here or in the primary beat below would still throw uncaught -
- * this inherits that exposure from slackPost() itself, which no caller in this file wraps
- * in try/catch, rather than introducing it. (found by review, #196)
+ * presence beat itself (beat()'s caller) still lands.
+ *
+ * ✔ CLOSED (#245), BANNERED RATHER THAN SILENTLY REMOVED - this comment used to read: "Not
+ * covered: a hard fetch() failure (DNS, connection refused) here or in the primary beat below
+ * would still throw uncaught - this inherits that exposure from slackPost() itself, which no
+ * caller in this file wraps in try/catch, rather than introducing it. (found by review, #196)"
+ * That was accurate when written and stayed true for three releases, reproduced independently
+ * on three platform/Node-version pairs before it was fixed. The exposure was never in this
+ * function or in beat() below - both already only ever check `res.ok` - it was that
+ * `slackPost()` let a hard network failure propagate as a throw instead of a result. Fixed
+ * AT SLACKPOST() ITSELF (#245), which is why nothing here or in beat() needed to change to
+ * inherit the fix, the same way both silently inherited the exposure.
  *
  * ⚠ NOT DEDUPED ACROSS RESTARTS, and this repo's own rateLimitedUntil backoff does not cover
  * THIS call specifically - it is only set from the PRIMARY beat post's own 429 handling, a
@@ -1863,14 +1971,13 @@ async function announceRearm(label, p, count) {
   if (!res.ok) console.error(`[watch] could not announce re-arm continuity: ${res.error}`);
 }
 
-/**
- * Slack chat.update errors CONFIRMED, by direct measurement, to mean the target message no
- * longer exists to be updated - not merely errors that COULD plausibly mean that. Extend only
- * after measuring a new one; see the comment at this constant's one use, in beat() below. (#177)
- */
-const MESSAGE_GONE_ERRORS = ['message_not_found'];
+// MESSAGE_GONE_ERRORS itself is declared earlier in the file now (#245) - see the comment
+// there. Slack chat.update errors CONFIRMED, by direct measurement, to mean the target
+// message no longer exists to be updated - not merely errors that COULD plausibly mean that.
+// Extend only after measuring a new one; see the comment at this constant's one use, in
+// beat() below. (#177)
 
-async function beat(label, every) {
+async function beat(label, every, { fetchImpl = fetch } = {}) {
   // ⛔ SHARES THE POLL BUCKET'S BACKOFF. This runs on its own setInterval, independent of
   // the poll loop's wait - without this check it keeps issuing chat.update/chat.postMessage
   // through a stand-off poll() just announced, deepening the exact limit that message
@@ -1912,8 +2019,8 @@ async function beat(label, every) {
   }
   const body = presenceBlocks(label, every, consecutiveBeatFailures);
   const res = presenceTs
-    ? await slackPost('chat.update', { channel: a.channel, ts: presenceTs, ...body })
-    : await slackPost('chat.postMessage', { channel: a.channel, ...body });
+    ? await slackPost('chat.update', { channel: a.channel, ts: presenceTs, ...body }, { fetchImpl })
+    : await slackPost('chat.postMessage', { channel: a.channel, ...body }, { fetchImpl });
   if (res.ok) {
     presenceTs = res.ts;
     // ⚠⚠ DECAYS BY ONE PER SUCCESS - DOES NOT SNAP TO ZERO. Measured live: a hard reset
@@ -1927,7 +2034,11 @@ async function beat(label, every) {
     consecutiveBeatFailures = Math.max(0, consecutiveBeatFailures - 1);
   } else {
     consecutiveBeatFailures++;
-    console.error(`[watch] heartbeat failed: ${res.error}`);
+    // ⚠ res.detail ONLY EVER COMES FROM network_error (#245) - every other res.error here is
+    // itself the whole diagnostic Slack or safeJson() gave, so this stays silent for them
+    // rather than printing "undefined". A caught-and-continued failure is worth nothing if the
+    // log line does not say WHICH network failure it was.
+    console.error(`[watch] heartbeat failed: ${res.error}${res.detail ? ` (${res.detail})` : ''}`);
     if (res.error === 'ratelimited') {
       const waitMs = (res.retryAfter || 60) * 1000;
       rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + waitMs);
