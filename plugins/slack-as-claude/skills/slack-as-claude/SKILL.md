@@ -486,7 +486,7 @@ verify      : auth.test on every send; a mismatch REFUSES with exit 2, naming BO
 
 | **Windows** | `setx <TOKEN_VAR> "xoxb-..."` — *where `<TOKEN_VAR>` is the repo's `token_env`, else `SLACK_BOT_TOKEN`* |
 | :-- | --- |
-| **macOS / Linux** | `export <TOKEN_VAR>="xoxb-..."` *in the shell profile* |
+| **macOS / Linux** | `export <TOKEN_VAR>="xoxb-..."` — *WHICH file depends on shell and interactivity, not platform: see STEP 5 above.* (#241) |
 
 # ⚠⚠ SETTING IT DOES NOT MAKE IT VISIBLE TO THE RUNNING SESSION.
 
@@ -586,7 +586,7 @@ node slack-post.mjs --channel C01234ABCDE --text "..." \
 | `CLAUDE_SLACK_MACHINE` | **machine** — friendlier than a Windows default | `my-laptop` |
 | `CLAUDE_SLACK_USER_EMAIL` | **user** — include the address (`1`/`true`/`yes`) | `1` |
 
-*Windows* `setx NAME "value"` · *macOS/Linux* `export NAME="value"` *in the shell profile.*
+*Windows* `setx NAME "value"` · *macOS/Linux* `export NAME="value"` — *WHICH file depends on shell and interactivity, not platform: see STEP 5 above.* (#241)
 
 # ⛔⛔ **`CLAUDE_SESSION_NAME` IS MACHINE-WIDE. IF YOU RUN CONCURRENT SESSIONS, PASS `--session <label>` INSTEAD.**
 
