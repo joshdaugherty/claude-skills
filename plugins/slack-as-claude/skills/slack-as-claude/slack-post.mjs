@@ -25,6 +25,9 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
 const API = 'https://slack.com/api/chat.postMessage';
+// Read side, added for #242's settle-then-reread collision check on --type request. Before
+// this, the file called ONLY chat.postMessage and auth.test - no read path existed at all.
+const HISTORY = 'https://slack.com/api/conversations.history';
 
 /**
  * Which PLUGIN, at which version, produced this message - read from the plugin manifest
@@ -569,6 +572,7 @@ const OPTIONS = {
     re: { type: 'string' },
     released: { type: 'string' },
     'cut-at': { type: 'string' },
+    settle: { type: 'string' },
     project: { type: 'string' },
     worktree: { type: 'string' },
     'raw-markdown': { type: 'boolean', default: false },
@@ -763,9 +767,16 @@ const USAGE =
       '       [--text-file <path>] [--to X] [--type X] [--project X] [--session X]\n' +
       '       [--worktree X] [--raw-markdown]\n' +
       '       [--user X] [--machine X] [--closes <ts>] [--re <ts>] [--broadcast] [--no-broadcast]\n' +
-      '       [--user-email] [--username X] [--icon-emoji :x:] [--unsafe-claim]\n' +
+      '       [--user-email] [--username X] [--icon-emoji :x:] [--unsafe-claim] [--settle N]\n' +
       '       [--no-context] [--as-app] [--as-coordinator] [--whoami] [--dry-run] [--self-test]\n' +
       '\n' +
+      '  --settle <sec>  --type request ONLY: seconds to wait after posting before re-reading\n' +
+      '                  the channel for a competing announcement of the same work, and\n' +
+      '                  reporting it by ts so the claim protocol\'s lowest-ts-wins rule can\n' +
+      '                  settle which one is the task id (default 2, matches slack-claim.mjs).\n' +
+      '                  NARROWS the race, does not close it: a competing request posted long\n' +
+      '                  before this one, simply not yet polled by anyone, is not caught by\n' +
+      '                  this check. Refused (exit 2) on any other --type. (#242)\n' +
       '  --as-coordinator  post using the COORDINATOR token (coordinator_token_env in\n' +
       '                  slack-workspace.json, default SLACK_COORDINATOR_BOT_TOKEN) instead\n' +
       '                  of the ordinary one. A separate credential for a separate role -\n' +
@@ -878,6 +889,124 @@ const USAGE =
  * Same class as the guards whose OUTPUT was never read: an artefact reviewed and shipped
  * without being EXECUTED once. Manifests are files now, so this is checkable.
  */
+// --- collision check (--type request only, #242) ----------------------------
+//
+// This script had NO read path before this - only chat.postMessage and auth.test. Two
+// sessions racing the DELIVERY WINDOW (the time between an announcement landing and a peer's
+// own poll loop reaching it) could each post their own `request` for the same job, and
+// neither would see the other's until its own poll loop caught up, which could be minutes
+// away. slack-session-bus/SKILL.md's own step-1 fork warning ("read the channel for an
+// existing request before posting your own") only binds a session that stops to check; it
+// says nothing to two sessions racing to be first.
+//
+// slack-claim.mjs, slack-watch.mjs and this file share no code by design (see SKILL.md), so
+// meta()/tsCmp() are ported here rather than imported - keep any future fix to either in sync
+// across all three copies.
+//
+// ⛔⛔ DEFINED HERE, BEFORE selfTest() - NOT NEXT TO WHERE THEY ARE USED (near the real send,
+// far below). selfTest() is a hoisted function declaration but its own CALL SITE
+// (`if (a['self-test']) selfTest()`) runs early, and meta() below reaches for `decode`, a
+// const - so if this block sat below that call site (as first written), selfTest() would
+// invoke meta() before `decode`'s declaration had executed: a TDZ ReferenceError, found by
+// RUNNING --self-test, not by reading the diff. Every const/function a self-test can reach
+// must be defined before the earliest point that can call it.
+
+/** Slack escapes &, < and > on the way in. Decode & LAST or "&amp;lt;" decodes twice. */
+const decode = (s) =>
+  (s ?? '')
+    .replace(/<(https?:\/\/[^>|]+)(?:\|[^>]*)?>/g, '$1')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+
+/** Read the identity off the CONTEXT BLOCK ELEMENTS, never by scanning the body text - a body
+ *  parse cannot tell routing metadata from an English sentence about routing. Ported from
+ *  slack-claim.mjs's meta() (#95's backtick-stripping fix included). */
+function meta(msg) {
+  const out = {};
+  const ctx = (msg.blocks ?? []).find((b) => b.type === 'context');
+  for (const el of ctx?.elements ?? []) {
+    const m = (el.text ?? '').match(/^([a-z][a-z0-9_-]*):\s*(.*)$/i);
+    if (m) out[m[1].toLowerCase()] = decode(m[2]).replace(/^`([\s\S]*)`$/, '$1').trim();
+  }
+  return out;
+}
+
+/**
+ * Compare two Slack timestamps EXACTLY, as strings - a ts is an identifier that looks like a
+ * number, and Number() loses the low digits that make it unique once the epoch grows far
+ * enough (see slack-claim.mjs's tsCmp for the full ULP-vs-granularity measurement behind this;
+ * not reproduced here to avoid three copies of one essay). Do not "fix" this to Number().
+ */
+function tsCmp(x, y) {
+  const xs = String(x ?? ''); const ys = String(y ?? '');
+  const [xi, xf = ''] = xs.split('.');
+  const [yi, yf = ''] = ys.split('.');
+  if (xi.length !== yi.length) return xi.length < yi.length ? -1 : 1;
+  if (xi !== yi) return xi < yi ? -1 : 1;
+  const xfPad = xf.padEnd(6, '0').slice(0, 6);
+  const yfPad = yf.padEnd(6, '0').slice(0, 6);
+  return xfPad < yfPad ? -1 : xfPad > yfPad ? 1 : 0;
+}
+
+// Matches slack-watch.mjs's / slack-claim.mjs's own MAX_HISTORY_PAGES - this repo's
+// established convention for a bounded (not exhaustive) full-channel scan. ~5000 messages;
+// unbounded pagination against a channel with years of history would be its own
+// denial-of-service.
+const MAX_HISTORY_PAGES = 25;
+
+/** Paginated conversations.history read, bounded by MAX_HISTORY_PAGES. Returns {ok, messages,
+ *  truncated} - a FAILED read is a different fact from an EMPTY channel and must not collapse
+ *  into it, same discipline as the sibling scripts' own channelHistory(). */
+async function channelHistory(historyToken) {
+  const messages = [];
+  let cur = null;
+  let pages = 0;
+  do {
+    const u = new URL(HISTORY);
+    u.searchParams.set('channel', a.channel);
+    u.searchParams.set('limit', '200');
+    if (cur) u.searchParams.set('cursor', cur);
+    let j;
+    try {
+      const r = await fetch(u, { headers: { Authorization: `Bearer ${historyToken}` } });
+      j = await r.json();
+    } catch (err) {
+      return { ok: false, error: err.message, messages: [], truncated: false };
+    }
+    if (!j.ok) return { ok: false, error: j.error, messages: [], truncated: false };
+    messages.push(...(j.messages ?? []));
+    pages++;
+    cur = j.has_more ? j.response_metadata?.next_cursor || null : null;
+  } while (cur && pages < MAX_HISTORY_PAGES);
+  return { ok: true, messages, truncated: Boolean(cur) };
+}
+
+/**
+ * Widest a competing `request` is considered "the delivery window" for - other candidates
+ * further back than this are not reported, because ANY channel-level read this file might do
+ * cannot tell "still open" from "claimed and finished long ago" without a per-candidate thread
+ * fetch (unbounded API cost, one call per historical request ever left open) or a text-
+ * similarity judgement this tool has no business making. So every OTHER `request` posted in
+ * the window is reported, by ts and text, and the reader - a session, not a script - judges
+ * whether it is the same job. What IS automated is the part that does not need judgement: the
+ * lowest-ts-wins rule the claim protocol already uses to say which one is the task id.
+ */
+const COLLISION_WINDOW_SECONDS = 120;
+
+/**
+ * Pure decision core for the collision check - given this post's own ts and the OTHER
+ * request-typed messages found within the collision window, rank them by the SAME
+ * lowest-ts-wins rule the claim protocol already uses (slack-claim.mjs's rankClaims()) and say
+ * whether this post is the one to keep. Pure so a fixture can drive it without a real Slack
+ * read - equal ts is unreachable through Slack (a distinct ts per channel message is the
+ * entire reason this protocol is a sort and not a lock), so no tiebreak is needed here.
+ */
+function collisionVerdict(myTs, others) {
+  const all = [...others.map((o) => o.ts), myTs].sort((x, y) => tsCmp(x, y));
+  return { earliest: all[0], amEarliest: all[0] === myTs };
+}
+
 function checkManifests() {
   const here = dirname(fileURLToPath(import.meta.url));
   const out = [];
@@ -920,7 +1049,7 @@ function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 57; // raise when adding cases - a constant, reviewed on change (+1 for --re, #201; +7 resolutionTrace, #222)
+  const CASE_FLOOR = 75; // raise when adding cases - a constant, reviewed on change (+1 for --re, #201; +7 resolutionTrace, #222; +1 settle flag, +6 tsCmp, +6 meta, +5 collisionVerdict, #242)
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -988,6 +1117,52 @@ function selfTest() {
   for (const [name, got, want] of rt) console.log(`  ${got === want ? 'pass' : 'FAIL'}  resolutionTrace: ${name}`);
   const rtFailed = rt.filter(([, got, want]) => got !== want).length;
 
+  /**
+   * #242's ported tsCmp() - the invariants that matter here are the ones a naive Number()
+   * comparison gets wrong: a longer integer part must win regardless of the fractional part,
+   * and two timestamps differing only in trailing-zero padding must compare equal.
+   */
+  const tc = [
+    ['equal timestamps compare equal', tsCmp('100.000000', '100.000000'), 0],
+    ['lower integer part sorts first', tsCmp('100.000000', '200.000000'), -1],
+    ['higher integer part sorts last', tsCmp('200.000000', '100.000000'), 1],
+    ['a longer integer part always wins, regardless of the fraction', tsCmp('9999999999.000000', '100.999999'), 1],
+    ['trailing-zero padding does not break equality', tsCmp('100.33', '100.330000'), 0],
+    ['fractional part breaks a tie on equal integer parts', tsCmp('100.000001', '100.000002'), -1],
+  ];
+  for (const [name, got, want] of tc) console.log(`  ${got === want ? 'pass' : 'FAIL'}  tsCmp: ${name}`);
+  const tcFailed = tc.filter(([, got, want]) => got !== want).length;
+
+  /**
+   * #242's ported meta() - a message shaped exactly like the ones this same file posts
+   * (context block, mrkdwn elements, backtick-wrapped values), so the fixture is the writer's
+   * own output format, not an invented one.
+   */
+  const mt = [
+    ['reads type: from a context element', meta({ blocks: [{ type: 'context', elements: [{ type: 'mrkdwn', text: 'type: `request`' }] }] }).type, 'request'],
+    ['reads session: alongside type:', meta({ blocks: [{ type: 'context', elements: [{ type: 'mrkdwn', text: 'type: `request`' }, { type: 'mrkdwn', text: 'session: `abc123`' }] }] }).session, 'abc123'],
+    ['a key is case-insensitive', meta({ blocks: [{ type: 'context', elements: [{ type: 'mrkdwn', text: 'TYPE: `request`' }] }] }).type, 'request'],
+    ['no context block -> empty object, not a throw', Object.keys(meta({ blocks: [{ type: 'section', text: { type: 'mrkdwn', text: 'x' } } ] })).length, 0],
+    ['no blocks at all -> empty object, not a throw', Object.keys(meta({})).length, 0],
+    ['decodes an entity Slack escaped on the way in', meta({ blocks: [{ type: 'context', elements: [{ type: 'mrkdwn', text: 'note: A &amp; B' }] }] }).note, 'A & B'],
+  ];
+  for (const [name, got, want] of mt) console.log(`  ${got === want ? 'pass' : 'FAIL'}  meta: ${name}`);
+  const mtFailed = mt.filter(([, got, want]) => got !== want).length;
+
+  /**
+   * collisionVerdict() - the pure decision core of #242's settle-then-reread. Fixtures stand
+   * in for what channelHistory() would otherwise have to fetch for real.
+   */
+  const cv = [
+    ['no competitors -> trivially earliest', collisionVerdict('100.000000', []).amEarliest, true],
+    ['a later competitor does not outrank this post', collisionVerdict('100.000000', [{ ts: '200.000000' }]).amEarliest, true],
+    ['an earlier competitor outranks this post', collisionVerdict('200.000000', [{ ts: '100.000000' }]).amEarliest, false],
+    ['the earliest ts is reported, not just a boolean', collisionVerdict('200.000000', [{ ts: '100.000000' }]).earliest, '100.000000'],
+    ['multiple competitors -> the lowest of all of them wins', collisionVerdict('300.000000', [{ ts: '200.000000' }, { ts: '100.000000' }]).earliest, '100.000000'],
+  ];
+  for (const [name, got, want] of cv) console.log(`  ${got === want ? 'pass' : 'FAIL'}  collisionVerdict: ${name}`);
+  const cvFailed = cv.filter(([, got, want]) => got !== want).length;
+
   const mdFailed = md.filter(([, got, want]) => got !== want).length;
   const tbl = toSlackMrkdwn('| a | b |\n| - | - |').changes.tableRows;
   console.log(`  ${tbl === 2 ? 'pass' : 'FAIL'}  mrkdwn: table rows counted (${tbl}), warned not converted`);
@@ -1003,7 +1178,7 @@ function selfTest() {
   // it guards, which would move with them and assert nothing. Raise it when adding cases.
   const tooFew = ran < CASE_FLOOR;
   if (tooFew) console.log(`\n⛔ ONLY ${ran} CASES RAN, floor is ${CASE_FLOOR} - a block stopped running.`);
-  const bad = missing.length + manFailed + mdFailed + platFailed + rtFailed + (tbl === 2 ? 0 : 1) + (tooFew ? 1 : 0);
+  const bad = missing.length + manFailed + mdFailed + platFailed + rtFailed + tcFailed + mtFailed + cvFailed + (tbl === 2 ? 0 : 1) + (tooFew ? 1 : 0);
   console.log(
     bad
       ? `\n${bad} FAILURE(S)${missing.length ? ` - flags missing from usage: ${missing.join(', ')}` : ''}`
@@ -1260,6 +1435,21 @@ if (a.released && a.type !== 'release') {
     `--released was given with --type ${a.type ?? '(none)'}.\n` +
       '  The version element is only read on a release announcement; anywhere else it is\n' +
       '  a field no reader looks at.',
+    2,
+  );
+}
+/**
+ * ⚠ THE SAME "A FIELD NOBODY READS" CLASS AS THE TWO GUARDS ABOVE. --settle only tunes the
+ * post-announce collision check added for #242 (below, near the real send), which only runs
+ * for --type request - passing it anywhere else would silently do nothing rather than
+ * erroring, which is exactly the "posts successfully, counted by nobody" shape this file
+ * refuses elsewhere.
+ */
+if (a.settle !== undefined && a.type !== 'request') {
+  die(
+    `--settle was given with --type ${a.type ?? '(none)'}.\n` +
+      '  It only applies to --type request, where it controls the settle-then-reread that\n' +
+      '  checks for a competing announcement of the same work (#242).',
     2,
   );
 }
@@ -1626,3 +1816,64 @@ if (!res.ok) {
 
 const as = payload.username ? `as '${payload.username}'` : 'as the app';
 console.log(`Posted to ${res.channel} ${as}${payload.blocks ? ` [${contextLine}]` : ''} - ts ${res.ts}`);
+
+/**
+ * #242: settle, then re-read, then report - mirroring slack-claim.mjs's own settle-then-reread
+ * exactly, applied to the one write path that never had a read at all. Only for --type
+ * request (guarded above); every other type is unaffected.
+ *
+ * ⚠⚠ THIS NARROWS THE RACE. IT DOES NOT CLOSE IT. Settling and re-reading catches a competing
+ * `request` that lands within roughly the settle window of this one - the SAME read-after-
+ * write lag the claim protocol's own settle exists to cover. It does NOT catch a competing
+ * `request` posted long before this one that nobody has polled yet; only a poll loop (or the
+ * manual read slack-session-bus/SKILL.md's step-1 fork warning already asks for) reaches that
+ * case. Both are true at once and neither makes the other unnecessary.
+ *
+ * ⚠ "COMPETING" IS BOUNDED BY RECENCY (COLLISION_WINDOW_SECONDS), NOT BY "STILL UNCLAIMED" OR
+ * "THE SAME WORK". Neither is checkable from a channel-level read without a per-candidate
+ * thread fetch (unbounded API cost, one call per historical request ever left open) or a text-
+ * similarity judgement this tool has no business making. So every OTHER `request` posted in
+ * the window is reported, by ts and text, and the reader - a session, not a script - judges
+ * whether it is the same job. What IS automated is the part that does not need judgement: the
+ * lowest-ts-wins rule the claim protocol already uses to say which one is the task id.
+ */
+if (a.type === 'request') {
+  const settle = Math.max(0, Number(a.settle) || 2);
+  if (settle) {
+    console.error(`[post] settling ${settle}s before re-reading for a competing request...`);
+    await new Promise((r) => setTimeout(r, settle * 1000));
+  }
+  const hist = await channelHistory(token);
+  if (!hist.ok) {
+    console.error(`[post] ⚠ could not re-read the channel to check for a competing request: ${hist.error}`);
+    console.error('       THE POST ALREADY SUCCEEDED - this is only the collision check failing.');
+    console.error('       Do not re-post; check the channel directly (--raw) if this matters.');
+  } else {
+    // Number(ts) here is a DURATION (age in seconds), never an ORDER or IDENTITY comparison -
+    // exactly the arithmetic tsCmp's own doc comment (in slack-claim.mjs) carves out as safe.
+    // Ordering itself still goes through collisionVerdict()'s tsCmp, never this subtraction.
+    const nowSecs = Number(res.ts);
+    const candidates = hist.messages
+      .filter((m) => m.ts !== res.ts)
+      .map((m) => ({ ts: m.ts, text: m.text, ...meta(m) }))
+      .filter((m) => m.type === 'request' && nowSecs - Number(m.ts) <= COLLISION_WINDOW_SECONDS);
+    if (candidates.length) {
+      const { earliest, amEarliest } = collisionVerdict(res.ts, candidates);
+      console.error(
+        `[post] ⚠ ${candidates.length} other request(s) posted in the last ${COLLISION_WINDOW_SECONDS}s:`,
+      );
+      for (const c of candidates) {
+        console.error(`       ${c.ts}${c.session ? `  ${c.session}` : ''}  "${(c.text ?? '').slice(0, 80)}"`);
+      }
+      console.error(
+        amEarliest
+          ? `[post] This announcement (${res.ts}) is the EARLIEST of the group - if any of the above`
+          : `[post] ⛔ ${earliest} is EARLIER than this announcement (${res.ts}) - if any of the above`,
+      );
+      console.error('       describes the SAME work, the claim protocol\'s own rule applies: the earliest');
+      console.error(
+        `       ts is the task id to converge on. ${amEarliest ? 'Nothing above outranks this one.' : `STAND DOWN from ${res.ts} and claim ${earliest} instead if it is a duplicate.`}`,
+      );
+    }
+  }
+}
