@@ -771,12 +771,15 @@ const USAGE =
       '       [--no-context] [--as-app] [--as-coordinator] [--whoami] [--dry-run] [--self-test]\n' +
       '\n' +
       '  --settle <sec>  --type request ONLY: seconds to wait after posting before re-reading\n' +
-      '                  the channel for a competing announcement of the same work, and\n' +
+      '                  the channel for a competing request posted in the last 120s, and\n' +
       '                  reporting it by ts so the claim protocol\'s lowest-ts-wins rule can\n' +
       '                  settle which one is the task id (default 2, matches slack-claim.mjs).\n' +
-      '                  NARROWS the race, does not close it: a competing request posted long\n' +
-      '                  before this one, simply not yet polled by anyone, is not caught by\n' +
-      '                  this check. Refused (exit 2) on any other --type. (#242)\n' +
+      '                  NARROWS the race, does not close it: a competing request older than\n' +
+      '                  120s, simply not yet polled by anyone, is not caught. Refused (exit 2)\n' +
+      '                  with --thread-ts (a request\'s own ts must be a channel-level message)\n' +
+      '                  and on any other --type. Skipped, with a warning, under --as-app or\n' +
+      '                  --no-context - either strips the type: element this check depends on.\n' +
+      '                  (#242)\n' +
       '  --as-coordinator  post using the COORDINATOR token (coordinator_token_env in\n' +
       '                  slack-workspace.json, default SLACK_COORDINATOR_BOT_TOKEN) instead\n' +
       '                  of the ordinary one. A separate credential for a separate role -\n' +
@@ -1048,6 +1051,35 @@ function collisionVerdict(myTs, others) {
 }
 
 /**
+ * Pure candidate-selection core of the collision check - given the raw messages from
+ * channelHistory() and this post's own identity, returns the OTHER open `request`s within the
+ * collision window, ranked lowest-ts-first.
+ *
+ * ⛔⛔ ADVERSARIAL REVIEW: PULLED OUT SPECIFICALLY BECAUSE THE THREE THINGS THAT MATTER MOST HERE
+ * PREVIOUSLY LIVED INLINE IN THE REAL-SEND BLOCK, REACHABLE ONLY BY A LIVE SLACK READ - so
+ * --self-test exercised NONE of them: excluding this post's own ts, excluding this SESSION's
+ * own earlier posts (the most severe bug found in this file's first review round - a session
+ * was told to STAND DOWN from itself, contradicting slack-session-bus/SKILL.md §5b), and
+ * sorting for display rather than leaving Slack's raw history order. A refactor that dropped
+ * the session filter, for instance, would have gone undetected by the suite entirely; it is
+ * live-verified against #bus but that evidence does not survive into a suite anyone else runs.
+ *
+ * ⚠ ts/text are placed AFTER the meta() spread, deliberately - meta() only ever parses the
+ * CONTEXT BLOCK, and this guarantees a context element named "ts:" or "text:" can never
+ * silently substitute for the value Slack itself assigned. slack-claim.mjs's own equivalent
+ * (line ~1046) protects only `text` this way, not `ts` - protecting both here rather than
+ * reproducing that same partial guard.
+ */
+function collisionCandidates(messages, { myTs, myLabel, nowSecs, windowSeconds }) {
+  return messages
+    .filter((m) => m.ts !== myTs)
+    .map((m) => ({ ...meta(m), ts: m.ts, text: m.text }))
+    .filter((m) => m.type === 'request' && nowSecs - Number(m.ts) <= windowSeconds)
+    .filter((m) => m.session !== myLabel)
+    .sort((x, y) => tsCmp(x.ts, y.ts));
+}
+
+/**
  * Pure parse of `--settle`'s raw string into seconds. Pulled out specifically so the bug it
  * fixes is fixture-testable: `Math.max(0, Number(rawSettle) || 2)` treated `--settle 0` and
  * `--settle 2` identically, because `0 || 2` is `2` in JS - `||` cannot distinguish "zero" from
@@ -1102,7 +1134,7 @@ function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 80; // raise when adding cases - a constant, reviewed on change (+1 for --re, #201; +7 resolutionTrace, #222; +1 settle flag, +6 tsCmp, +6 meta, +5 collisionVerdict, +5 resolveSettleSeconds, #242)
+  const CASE_FLOOR = 87; // raise when adding cases - a constant, reviewed on change (+1 for --re, #201; +7 resolutionTrace, #222; +1 settle flag, +6 tsCmp, +6 meta, +5 collisionVerdict, +5 resolveSettleSeconds, +7 collisionCandidates, #242)
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -1217,6 +1249,48 @@ function selfTest() {
   const cvFailed = cv.filter(([, got, want]) => got !== want).length;
 
   /**
+   * collisionCandidates() - the negative control for the MOST SEVERE bug adversarial review
+   * found in this file: own-session exclusion previously lived only inline in the real-send
+   * block, reachable exclusively by a live Slack read, so a refactor that dropped it would have
+   * gone undetected by --self-test entirely. Fixtures are shaped exactly like this file's own
+   * `--type request` output (a context block of mrkdwn elements), the writer's own format.
+   */
+  const ccMsg = (ts, type, session, text) => ({
+    ts,
+    text,
+    blocks: [{ type: 'context', elements: [{ type: 'mrkdwn', text: `type: \`${type}\`` }, { type: 'mrkdwn', text: `session: \`${session}\`` }] }],
+  });
+  const ccBase = { myTs: '1000.000000', myLabel: 'me', nowSecs: 1000, windowSeconds: 120 };
+  const cc = [
+    ['excludes this post\'s own ts, even from a different-looking session', collisionCandidates([ccMsg('1000.000000', 'request', 'someone-else', 'x')], ccBase).length, 0],
+    ['excludes this SESSION\'s own earlier request - the bug that once told a session to stand down from itself', collisionCandidates([ccMsg('950.000000', 'request', 'me', 'my earlier post')], ccBase).length, 0],
+    ['a DIFFERENT session\'s request in the window is NOT excluded', collisionCandidates([ccMsg('950.000000', 'request', 'someone-else', 'x')], ccBase).length, 1],
+    ['outside the window is excluded', collisionCandidates([ccMsg('800.000000', 'request', 'someone-else', 'x')], ccBase).length, 0],
+    ['a non-request type is excluded even if recent and from another session', collisionCandidates([ccMsg('950.000000', 'done', 'someone-else', 'x')], ccBase).length, 0],
+    ['results are sorted lowest-ts-first, not left in input order', collisionCandidates([ccMsg('990.000000', 'request', 'b', 'later'), ccMsg('960.000000', 'request', 'a', 'earlier')], ccBase).map((m) => m.ts).join(','), '960.000000,990.000000'],
+    [
+      'a context element forged as "ts:"/"text:" cannot clobber the real Slack-assigned values',
+      (() => {
+        const forged = {
+          ts: '950.000000',
+          text: 'THE REAL BODY',
+          blocks: [{ type: 'context', elements: [
+            { type: 'mrkdwn', text: 'type: `request`' },
+            { type: 'mrkdwn', text: 'session: `someone-else`' },
+            { type: 'mrkdwn', text: 'ts: `9999999999.000000`' },
+            { type: 'mrkdwn', text: 'text: `FORGED BODY`' },
+          ] }],
+        };
+        const got = collisionCandidates([forged], ccBase)[0];
+        return `${got.ts}|${got.text}`;
+      })(),
+      '950.000000|THE REAL BODY',
+    ],
+  ];
+  for (const [name, got, want] of cc) console.log(`  ${got === want ? 'pass' : 'FAIL'}  collisionCandidates: ${name}`);
+  const ccFailed = cc.filter(([, got, want]) => got !== want).length;
+
+  /**
    * resolveSettleSeconds() - the negative control for the exact bug adversarial review found:
    * `Math.max(0, Number(a.settle) || 2)` could never produce 0 from an explicit `--settle 0`,
    * because `0 || 2` is `2`. The second case here is the one that would have failed against
@@ -1248,7 +1322,7 @@ function selfTest() {
   // it guards, which would move with them and assert nothing. Raise it when adding cases.
   const tooFew = ran < CASE_FLOOR;
   if (tooFew) console.log(`\n⛔ ONLY ${ran} CASES RAN, floor is ${CASE_FLOOR} - a block stopped running.`);
-  const bad = missing.length + manFailed + mdFailed + platFailed + rtFailed + tcFailed + mtFailed + cvFailed + rsFailed + (tbl === 2 ? 0 : 1) + (tooFew ? 1 : 0);
+  const bad = missing.length + manFailed + mdFailed + platFailed + rtFailed + tcFailed + mtFailed + cvFailed + ccFailed + rsFailed + (tbl === 2 ? 0 : 1) + (tooFew ? 1 : 0);
   console.log(
     bad
       ? `\n${bad} FAILURE(S)${missing.length ? ` - flags missing from usage: ${missing.join(', ')}` : ''}`
@@ -1873,10 +1947,10 @@ if (a['dry-run']) {
   // the real command pauses and makes a second network call. (#242 review)
   if (a.type === 'request') {
     console.log(
-      a['as-app']
-        ? '  collision : SKIPPED - --as-app strips the type: element, so no other session could'
-        + '\n              ever see this as a request to collide with.'
-        : `  collision : a real send would settle ${REQUEST_SETTLE_SECONDS}s, then re-read the channel`
+      a['as-app'] || a['no-context']
+        ? `  collision: SKIPPED - ${a['as-app'] ? '--as-app' : '--no-context'} strips the type: element,`
+        + '\n              so no other session could ever see this as a request to collide with.'
+        : `  collision: a real send would settle ${REQUEST_SETTLE_SECONDS}s, then re-read the channel`
         + ` for another request in the last ${COLLISION_WINDOW_SECONDS}s (see --settle).`,
     );
   }
@@ -1963,12 +2037,22 @@ console.log(`Posted to ${res.channel} ${as}${payload.blocks ? ` [${contextLine}]
  * there is no "you lost" outcome for an announcement the way there is for a claim.
  */
 if (a.type === 'request') {
-  if (a['as-app']) {
+  /**
+   * ⛔⛔ ADVERSARIAL REVIEW: THE FIRST VERSION OF THIS GUARD CHECKED ONLY --as-app. --no-context
+   * produces the IDENTICAL wire state - line ~1777 builds `payload.blocks` only `if
+   * (!a['no-context'] && elements.length)`, inside the SAME `if (!a['as-app'])` section that
+   * builds the elements in the first place - so a post with `--no-context` (no `--as-app` at
+   * all) also carries no `type: request` element, and the un-guarded check gave it the exact
+   * false assurance this guard exists to prevent. Found by generating the actual wire state
+   * for both flags and comparing, not by reading the code.
+   */
+  if (a['as-app'] || a['no-context']) {
     console.error(
-      "[post] ⚠ --as-app strips the type: element, so this announcement carries no `type:\n" +
-        '       request` on the wire - no other session\'s poll loop, manual read, or own\n' +
-        '       collision check could ever find it as a request to collide with. Skipping the\n' +
-        '       check: any verdict it gave would only be true among posts nothing else can see.',
+      `[post] ⚠ ${a['as-app'] ? '--as-app' : '--no-context'} strips the type: element, so this\n` +
+        "       announcement carries no `type: request` on the wire - no other session's poll\n" +
+        '       loop, manual read, or own collision check could ever find it as a request to\n' +
+        '       collide with. Skipping the check: any verdict it gave would only be true among\n' +
+        '       posts nothing else can see.',
     );
   } else {
     if (REQUEST_SETTLE_SECONDS) {
@@ -2006,19 +2090,30 @@ if (a.type === 'request') {
       // Number(ts) here is a DURATION (age in seconds), never an ORDER or IDENTITY comparison -
       // exactly the arithmetic tsCmp's own doc comment (in slack-claim.mjs) carves out as safe.
       // Ordering itself still goes through tsCmp, never this subtraction.
-      const nowSecs = Number(res.ts);
-      const candidates = hist.messages
-        .filter((m) => m.ts !== res.ts)
-        // ts/text placed AFTER the meta() spread, deliberately - meta() only ever parses the
-        // CONTEXT BLOCK, and this guarantees a context element that happened to be named "ts:"
-        // or "text:" can never silently substitute for the value Slack itself assigned.
-        // slack-claim.mjs's own equivalent (line ~1046) protects only `text` this way, not
-        // `ts` - protecting both here rather than reproducing that same partial guard.
-        .map((m) => ({ ...meta(m), ts: m.ts, text: m.text }))
-        .filter((m) => m.type === 'request' && nowSecs - Number(m.ts) <= COLLISION_WINDOW_SECONDS)
-        .filter((m) => m.session !== myLabel)
-        .sort((x, y) => tsCmp(x.ts, y.ts));
+      const candidates = collisionCandidates(hist.messages, {
+        myTs: res.ts,
+        myLabel,
+        nowSecs: Number(res.ts),
+        windowSeconds: COLLISION_WINDOW_SECONDS,
+      });
       if (candidates.length) {
+        /**
+         * ⚠ myLabel IS null WHEN NONE OF --session, CLAUDE_SESSION_NAME OR
+         * CLAUDE_CODE_SESSION_ID ARE SET (sessionLabel()'s own documented fallback). Own-session
+         * exclusion above is then a silent no-op - an unlabelled post's own earlier requests
+         * carry no session: element either, so `m.session !== myLabel` (undefined !== null) never
+         * excludes them, and this session would see itself as a competitor with no way to tell.
+         * Genuinely unfixable from here (nothing distinguishes the posts), so the honest move is
+         * to say so rather than silently give stand-down advice that might be about this
+         * session's own prior post. (#242 review)
+         */
+        if (!myLabel) {
+          console.error(
+            '[post] ⚠ this post has no session: label (no --session, CLAUDE_SESSION_NAME or\n' +
+              '       CLAUDE_CODE_SESSION_ID) - its own earlier requests cannot be told apart from a\n' +
+              '       real competitor below, and may be included by mistake.',
+          );
+        }
         const { earliest, amEarliest } = collisionVerdict(res.ts, candidates);
         console.error(
           `[post] ⚠ ${candidates.length} other request(s) posted in the last ${COLLISION_WINDOW_SECONDS}s:`,
