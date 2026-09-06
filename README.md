@@ -76,12 +76,12 @@ the file that will **not** be sourced — which is the exact bug this check exis
 ⚠ **From Git Bash on Windows this fails — `ps: unknown option -- o`.** That's MSYS's `ps` lacking
 `-o`, **not** the probe being wrong; don't "fix" a correct command on the strength of it.
 
-⚠ **Neither file is guaranteed to be read unwrapped.** `~/.zshenv` works for any zsh invocation, but
-`~/.bash_profile` is **login-only** — the exact harness measured below is non-login, so an unwrapped
-bash call there reads no profile of its own either. `~/.bashrc` is not the fallback: it's
-interactive-only too, and often absent entirely on macOS. **Write the export to both `~/.zshenv` and
-`~/.bash_profile`** — harmless insurance, and the only way a reader succeeds whichever path (the
-unwrapped call, or the wrapper below) they try first.
+⚠ **On bash, the unwrapped call has no guaranteed file.** `~/.bash_profile` is **login-only** — the
+bash harness measured below is non-login, so an unwrapped bash call there reads no profile of its own
+either. `~/.bashrc` is not the fallback: it's interactive-only too, and often absent entirely on
+macOS. (zsh has no such gap — `~/.zshenv` is read on any invocation, wrapped or not.) **Write the
+export to both `~/.zshenv` and `~/.bash_profile`** — harmless insurance either way: a zsh reader
+succeeds unwrapped, and a bash reader succeeds via the wrapper below.
 
 ### ⛔ And do not "restart the session" — on macOS that is not a weaker fix, it is not a fix
 
@@ -121,7 +121,7 @@ this; the machine measured had no such guard.
 of the reader's own login shell, and reads `~/.bash_profile`, then `~/.bash_login`, then `~/.profile`
 — whichever it finds first. **Never a zsh file.** It resolves the export only if one of those three
 carries it; on a zsh-only machine with none of them, it resolves **nothing**. And the inverse is more
-dangerous: a downstream report ([`UAMS-Web/wordpress-importer#930`](https://github.com/UAMS-Web/wordpress-importer/issues/930))
+dangerous: a downstream report (`UAMS-Web/wordpress-importer#930`)
 found a zsh machine where the export *did* live in `~/.bash_profile` — there this wrapper **succeeds**,
 confirming a mechanism stated as "works on macOS" when the real mechanism is "reads a bash profile,"
 which a working command does nothing to correct. So: it helps a reader whose export is in a bash

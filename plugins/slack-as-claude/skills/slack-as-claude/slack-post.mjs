@@ -221,6 +221,10 @@ function missingTokenMessage(varName, platform) {
         '                  ~/.profile ONLY, never a zsh file, regardless of your own\n' +
         '                  shell. Helps only if the export is already in one of those\n' +
         '                  three; resolves nothing on a zsh-only machine with none of them.\n' +
+        '    or run this same command from an ACTUAL terminal app (Terminal.app, iTerm...),\n' +
+        '                  not this automated call - a real zsh shell there reads ~/.zshenv\n' +
+        '                  itself, no wrapper needed. Works on a zsh-only machine where the\n' +
+        '                  wrapper above cannot.\n' +
         '    or restart the session -- ONLY if your editor was launched FROM A TERMINAL.\n' +
         '  A GUI-launched editor inherits from launchd, not from any shell, so no restart\n' +
         '  reaches it and you will see this exact message again.\n' +
@@ -1004,17 +1008,19 @@ function selfTest() {
     ['non-win32 names zsh\'s every-invocation file', missingTokenMessage('X', 'darwin').includes('.zshenv'), true],
     /**
      * ⛔⛔ ADVERSARIAL REVIEW: THE FIRST VERSION OF THIS CASE CHECKED /bash -lc/ AND /bash_profile/
-     * ANYWHERE IN THE WHOLE MESSAGE - and `bash_profile` appears in three OTHER places (the zsh/
-     * bash file mapping, the "write to both" insurance line), so a mutant with the wrapper's own
-     * precondition text deleted entirely still passed. Proved by mutation: stripping the
-     * precondition sentence from the wrapper block left this case green. Fixed by scoping the
-     * check to the wrapper's OWN block (from "bash -lc" to the next paragraph) and requiring the
-     * word "only", which appears in the precondition sentence and nowhere else in that span.
+     * ANYWHERE IN THE WHOLE MESSAGE - and `bash_profile` appears in two OTHER places (the zsh/
+     * bash file mapping line, the "write to both" insurance line), so a mutant with the
+     * wrapper's own precondition text deleted entirely still passed. Proved by mutation:
+     * stripping the precondition sentence from the wrapper block left this case green. Fixed by
+     * scoping the check to the wrapper's OWN block and requiring a phrase from the precondition
+     * sentence ITSELF, not a bare word like "only" - a second mutation attempt found even that
+     * was too weak, since an unrelated "ONLY" survives elsewhere in the same block (in the
+     * terminal-app remedy) and a case-sensitive match alone would not have distinguished them.
      */
     ['non-win32 states the precondition INSIDE the wrapper block, not merely somewhere in the message', (() => {
       const dm = missingTokenMessage('X', 'darwin');
       const wrapperBlock = dm.slice(dm.indexOf('bash -lc'), dm.indexOf('or restart the session'));
-      return /bash_profile/.test(wrapperBlock) && /\bonly\b/.test(wrapperBlock);
+      return /bash_profile/.test(wrapperBlock) && /Helps only if the export/.test(wrapperBlock);
     })(), true],
   ];
   for (const [name, got, want] of plat) console.log(`  ${got === want ? 'pass' : 'FAIL'}  token msg: ${name}`);
