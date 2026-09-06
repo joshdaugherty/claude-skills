@@ -208,18 +208,19 @@ function missingTokenMessage(varName, platform) {
     `${varName} is not set.\n` +
     (platform === 'win32'
       ? `  setx ${varName} "xoxb-..."   (then restart, or it is read from the registry)`
-      : `  Which file depends on your SHELL and on interactive vs. non-interactive, not on\n` +
-        '  the platform: zsh reads ~/.zshenv on EVERY invocation; ~/.zshrc only if\n' +
-        '  interactive (which this is not). bash reads ~/.bash_profile (or ~/.bash_login\n' +
-        '  or ~/.profile) only for a LOGIN shell.\n' +
-        `    export ${varName}="xoxb-..."\n` +
-        '  Written to BOTH ~/.zshenv and ~/.bash_profile is harmless insurance either way.\n' +
+      : `  Add   export ${varName}="xoxb-..."   to a file your shell reads without being\n` +
+        '  interactive - which file depends on your SHELL, not the platform:\n' +
+        '    zsh   -> ~/.zshenv        (read on EVERY invocation, interactive or not)\n' +
+        '    bash  -> ~/.bash_profile  (read only for a LOGIN shell)\n' +
+        '  ~/.zshrc and ~/.bashrc need an INTERACTIVE shell, which an automated call like\n' +
+        '  this one often is not - that is why neither is listed above.\n' +
+        '  Writing to BOTH ~/.zshenv and ~/.bash_profile is harmless insurance either way.\n' +
         '  Then EITHER:\n' +
         "    wrap the call:   bash -lc 'node <this script> ...'\n" +
         '                  Starts a LOGIN BASH - reads ~/.bash_profile/~/.bash_login/\n' +
-        '                  ~/.profile, NEVER a zsh file, regardless of your own shell. Helps\n' +
-        '                  only if the export is in one of those three; resolves nothing on\n' +
-        '                  a zsh-only machine with none of them.\n' +
+        '                  ~/.profile ONLY, never a zsh file, regardless of your own\n' +
+        '                  shell. Helps only if the export is already in one of those\n' +
+        '                  three; resolves nothing on a zsh-only machine with none of them.\n' +
         '    or restart the session -- ONLY if your editor was launched FROM A TERMINAL.\n' +
         '  A GUI-launched editor inherits from launchd, not from any shell, so no restart\n' +
         '  reaches it and you will see this exact message again.\n' +
@@ -1001,7 +1002,20 @@ function selfTest() {
      */
     ['non-win32 no longer says the unqualified "your shell profile"', missingTokenMessage('X', 'darwin').includes('your shell profile'), false],
     ['non-win32 names zsh\'s every-invocation file', missingTokenMessage('X', 'darwin').includes('.zshenv'), true],
-    ['non-win32 states the wrapper\'s bash-profile precondition, not just that it exists', /bash -lc/.test(missingTokenMessage('X', 'darwin')) && /bash_profile/.test(missingTokenMessage('X', 'darwin')), true],
+    /**
+     * ⛔⛔ ADVERSARIAL REVIEW: THE FIRST VERSION OF THIS CASE CHECKED /bash -lc/ AND /bash_profile/
+     * ANYWHERE IN THE WHOLE MESSAGE - and `bash_profile` appears in three OTHER places (the zsh/
+     * bash file mapping, the "write to both" insurance line), so a mutant with the wrapper's own
+     * precondition text deleted entirely still passed. Proved by mutation: stripping the
+     * precondition sentence from the wrapper block left this case green. Fixed by scoping the
+     * check to the wrapper's OWN block (from "bash -lc" to the next paragraph) and requiring the
+     * word "only", which appears in the precondition sentence and nowhere else in that span.
+     */
+    ['non-win32 states the precondition INSIDE the wrapper block, not merely somewhere in the message', (() => {
+      const dm = missingTokenMessage('X', 'darwin');
+      const wrapperBlock = dm.slice(dm.indexOf('bash -lc'), dm.indexOf('or restart the session'));
+      return /bash_profile/.test(wrapperBlock) && /\bonly\b/.test(wrapperBlock);
+    })(), true],
   ];
   for (const [name, got, want] of plat) console.log(`  ${got === want ? 'pass' : 'FAIL'}  token msg: ${name}`);
   const platFailed = plat.filter(([, got, want]) => got !== want).length;

@@ -54,8 +54,14 @@ installation has to be answerable from here, or the reader cannot reach the answ
 **Find out which shell is actually running — don't guess, and don't pick from a list:**
 
 ```
-basename "$(ps -p $$ -o comm=)"      # zsh -> ~/.zshrc ; bash -> ~/.bash_profile
+basename "$(ps -p $$ -o comm=)"      # zsh -> ~/.zshenv ; bash -> ~/.bash_profile
 ```
+
+⛔ **Not `~/.zshrc`.** That file is sourced for **interactive shells only** — a harness-spawned shell
+is not one, so it never reads it, the same trap this section already names for `~/.bashrc` below.
+`~/.zshenv` is sourced on **every** zsh invocation, interactive or not, login or not — the one
+property a harness-spawned shell is guaranteed to satisfy. (`~/.zprofile` and `~/.zlogin` need a
+**login** shell; only `~/.zshenv` needs neither.) *([#241](https://github.com/joshdaugherty/claude-skills/issues/241))*
 
 ⚠ **The `basename` is not optional.** Measured on macOS, `ps -p $$ -o comm=` prints `/bin/bash` — an
 absolute path — so `case "$(ps …)" in zsh) … bash) … esac` matches **neither arm** and falls silently
@@ -70,14 +76,23 @@ the file that will **not** be sourced — which is the exact bug this check exis
 ⚠ **From Git Bash on Windows this fails — `ps: unknown option -- o`.** That's MSYS's `ps` lacking
 `-o`, **not** the probe being wrong; don't "fix" a correct command on the strength of it.
 
-⚠ `~/.bashrc` is the wrong file on macOS even when you *are* on bash — an interactive login shell
-reads `~/.bash_profile`, and `~/.bashrc` is often absent entirely. Writing to both is harmless.
+⚠ **Neither file is guaranteed to be read unwrapped.** `~/.zshenv` works for any zsh invocation, but
+`~/.bash_profile` is **login-only** — the exact harness measured below is non-login, so an unwrapped
+bash call there reads no profile of its own either. `~/.bashrc` is not the fallback: it's
+interactive-only too, and often absent entirely on macOS. **Write the export to both `~/.zshenv` and
+`~/.bash_profile`** — harmless insurance, and the only way a reader succeeds whichever path (the
+unwrapped call, or the wrapper below) they try first.
 
 ### ⛔ And do not "restart the session" — on macOS that is not a weaker fix, it is not a fix
 
-Measured on macOS 26.6.2 in Cursor: the harness shell is **non-login** (`shopt -q login_shell` → 1)
-and **non-interactive** (`$-` → `hBc`), so it sources no profile at all. And restarting doesn't reach
-it either:
+Measured on macOS 26.6.2 in Cursor: the harness shell was **non-login** (`shopt -q login_shell` → 1)
+and **non-interactive** (`$-` → `hBc`), so it sourced no profile at all. A second, zsh machine
+measured **login** and still non-interactive (`$-` → `569Xl`, `l`=login, no `i`) with the identical
+failure — so **non-interactivity is the property that has held across both machines; login status has
+not.** Calling this "non-login" predicts `~/.zprofile` would also be skipped, which is the opposite of
+what a login shell's own flags mean. *([#241](https://github.com/joshdaugherty/claude-skills/issues/241))*
+
+And restarting doesn't reach it either, on the first (bash) machine:
 
 ```
 ~/.bash_profile  modified  Sep 2 08:52:50
@@ -97,10 +112,21 @@ afterwards, and nothing beneath it can.
 four-level chain, reported as the whole chain, and it reads identically to a correct result. **Walk
 the chain to PID 1, or you're naming whichever process you looked at first.**
 
-✔ **The one remedy measured working end to end:** `bash -lc 'node …/slack-post.mjs …'` — token and
-`CLAUDE_SLACK_MACHINE` both resolved, live post succeeded, nothing restarted. ⚠ A profile that guards
-on `[[ $- == *i* ]]` would be skipped by a login-but-non-interactive shell and defeat this; the
-machine measured had no such guard.
+✔ **A remedy measured working end to end on one machine:** `bash -lc 'node …/slack-post.mjs …'` —
+token and `CLAUDE_SLACK_MACHINE` both resolved, live post succeeded, nothing restarted. ⚠ A profile
+that guards on `[[ $- == *i* ]]` would be skipped by a login-but-non-interactive shell and defeat
+this; the machine measured had no such guard.
+
+⛔ **State the mechanism, not just the result.** `bash -lc` starts a **login bash** shell regardless
+of the reader's own login shell, and reads `~/.bash_profile`, then `~/.bash_login`, then `~/.profile`
+— whichever it finds first. **Never a zsh file.** It resolves the export only if one of those three
+carries it; on a zsh-only machine with none of them, it resolves **nothing**. And the inverse is more
+dangerous: a downstream report ([`UAMS-Web/wordpress-importer#930`](https://github.com/UAMS-Web/wordpress-importer/issues/930))
+found a zsh machine where the export *did* live in `~/.bash_profile` — there this wrapper **succeeds**,
+confirming a mechanism stated as "works on macOS" when the real mechanism is "reads a bash profile,"
+which a working command does nothing to correct. So: it helps a reader whose export is in a bash
+profile file, on any platform, whichever shell they normally run — not "on macOS," and not
+unconditionally. *([#241](https://github.com/joshdaugherty/claude-skills/issues/241))*
 
 ✔ **`launchctl setenv` propagates — measured.** It sets the `launchd` environment, is correctly
 invisible to an already-running app, and an app launched *afterwards* does inherit it. ⛔ It still
@@ -119,9 +145,10 @@ propagates the *calling shell's* environment, so an `open`-launched process isn'
 Dock-launched one — the result holds only because `launchctl setenv` provably doesn't touch the
 calling shell.
 
-★ **Bounded:** one macOS machine, one editor, one day. It establishes the mechanism; it does not
-establish that every macOS harness is non-login — an editor launched *from a terminal* would inherit
-that terminal's environment and behave completely differently.
+★ **Bounded:** two macOS machines now (one bash/non-login, one zsh/login), one editor each, both
+non-interactive. It establishes the mechanism on both; it does not establish that every macOS harness
+is non-interactive — an editor launched *from a terminal* would inherit that terminal's environment
+and behave completely differently.
 
 ★ **Windows hides this entirely**, which is why it went unnoticed for so long: there the token falls
 back to `HKCU\Environment` when the environment is empty, so it is found no matter what shell
