@@ -190,16 +190,40 @@ function envFromRegistry(name) {
  * several workspaces' tokens - so anyone who sees this message is, by construction, someone
  * for whom the default is wrong.
  */
+/**
+ * ⛔⛔ #241: "IN YOUR SHELL PROFILE" AND AN UNQUALIFIED `bash -lc` WERE THIS SAME DEAD END,
+ * SHIPPED A SECOND TIME - IN THIS STRING, NOT ONLY IN SKILL.md §A. This surface is reached
+ * FIRST, at the moment of failure, before a reader has been sent to §A at all - so it cannot
+ * lean on that section to say what file to use or what the wrapper actually reads.
+ *
+ * ⚠⚠ AND THE WORSE FAILURE MODE IS SUCCESS FOR THE WRONG REASON, NOT JUST FAILURE
+ * (`UAMS-Web/wordpress-importer#930`). `bash -lc` starts a LOGIN BASH regardless of the
+ * reader's own shell, and reads ~/.bash_profile / ~/.bash_login / ~/.profile - never a zsh
+ * file. On a zsh machine whose export happens to live in one of those three, the wrapper
+ * SUCCEEDS - confirming "this is how you fix it on macOS" when the real mechanism is "this
+ * reads a bash profile", which is invisible until the reader's next machine has no such file.
+ */
 function missingTokenMessage(varName, platform) {
   return (
     `${varName} is not set.\n` +
     (platform === 'win32'
       ? `  setx ${varName} "xoxb-..."   (then restart, or it is read from the registry)`
-      : `  export ${varName}="xoxb-..."   in your shell profile, then EITHER:\n` +
-        `    wrap the call:   bash -lc 'node <this script> ...'      <- measured working on macOS\n` +
+      : `  Which file depends on your SHELL and on interactive vs. non-interactive, not on\n` +
+        '  the platform: zsh reads ~/.zshenv on EVERY invocation; ~/.zshrc only if\n' +
+        '  interactive (which this is not). bash reads ~/.bash_profile (or ~/.bash_login\n' +
+        '  or ~/.profile) only for a LOGIN shell.\n' +
+        `    export ${varName}="xoxb-..."\n` +
+        '  Written to BOTH ~/.zshenv and ~/.bash_profile is harmless insurance either way.\n' +
+        '  Then EITHER:\n' +
+        "    wrap the call:   bash -lc 'node <this script> ...'\n" +
+        '                  Starts a LOGIN BASH - reads ~/.bash_profile/~/.bash_login/\n' +
+        '                  ~/.profile, NEVER a zsh file, regardless of your own shell. Helps\n' +
+        '                  only if the export is in one of those three; resolves nothing on\n' +
+        '                  a zsh-only machine with none of them.\n' +
         '    or restart the session -- ONLY if your editor was launched FROM A TERMINAL.\n' +
         '  A GUI-launched editor inherits from launchd, not from any shell, so no restart\n' +
-        '  reaches it and you will see this exact message again.')
+        '  reaches it and you will see this exact message again.\n' +
+        '  Full detail: slack-as-claude/SKILL.md §A step 5.')
   );
 }
 
@@ -920,7 +944,7 @@ function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 57; // raise when adding cases - a constant, reviewed on change (+1 for --re, #201; +7 resolutionTrace, #222)
+  const CASE_FLOOR = 60; // raise when adding cases - a constant, reviewed on change (+1 for --re, #201; +7 resolutionTrace, #222; +3 missingTokenMessage zsh/bash-profile wording, #241)
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -964,9 +988,20 @@ function selfTest() {
     // session` and PASSED, because the message said exactly that - the advice §A had
     // deleted in the same release. A test can pin a bug in place as firmly as it pins a
     // fix, and a green suite is what stops anyone looking.
-    ['non-win32 leads with the MEASURED remedy', /bash -lc/.test(missingTokenMessage('X', 'darwin')), true],
+    ['non-win32 offers the bash -lc wrapper', /bash -lc/.test(missingTokenMessage('X', 'darwin')), true],
     ['non-win32 conditions any restart on a terminal launch', /ONLY if your editor was launched FROM A TERMINAL/.test(missingTokenMessage('X', 'darwin')), true],
     ['non-win32 says a GUI launch cannot be fixed by restarting', /no restart\n  reaches it/.test(missingTokenMessage('X', 'darwin')), true],
+    /**
+     * #241: "in your shell profile" was the unqualified phrase the issue itself measured as
+     * a dead end (zsh writes there, `bash -lc` cannot read it, and the message never said
+     * which file either half actually meant). The three expectations below come from the
+     * issue's own proposed fix, not from this message's new wording - a real fix must satisfy
+     * them regardless of the exact sentence chosen; only a fix that copied its own output back
+     * into the assertion would be indifferent to which sentence appeared.
+     */
+    ['non-win32 no longer says the unqualified "your shell profile"', missingTokenMessage('X', 'darwin').includes('your shell profile'), false],
+    ['non-win32 names zsh\'s every-invocation file', missingTokenMessage('X', 'darwin').includes('.zshenv'), true],
+    ['non-win32 states the wrapper\'s bash-profile precondition, not just that it exists', /bash -lc/.test(missingTokenMessage('X', 'darwin')) && /bash_profile/.test(missingTokenMessage('X', 'darwin')), true],
   ];
   for (const [name, got, want] of plat) console.log(`  ${got === want ? 'pass' : 'FAIL'}  token msg: ${name}`);
   const platFailed = plat.filter(([, got, want]) => got !== want).length;
