@@ -899,9 +899,11 @@ const USAGE =
 // existing request before posting your own") only binds a session that stops to check; it
 // says nothing to two sessions racing to be first.
 //
-// slack-claim.mjs, slack-watch.mjs and this file share no code by design (see SKILL.md), so
-// meta()/tsCmp() are ported here rather than imported - keep any future fix to either in sync
-// across all three copies.
+// slack-claim.mjs, slack-watch.mjs and this file share no code - not a stated design principle,
+// but the recorded CAUSE of two prior defects when one copy got a fix and its siblings did not
+// (slack-claim.mjs:376, #95's backtick-stripping fix; slack-claim.mjs:873, #177's stale-message
+// fix). meta()/tsCmp() are ported here rather than imported for the same reason those exist as
+// separate copies - keep any future fix to either applied to all three.
 //
 // ⛔⛔ DEFINED HERE, BEFORE selfTest() - NOT NEXT TO WHERE THEY ARE USED (near the real send,
 // far below). selfTest() is a hoisted function declaration but its own CALL SITE
@@ -955,10 +957,24 @@ function tsCmp(x, y) {
 // denial-of-service.
 const MAX_HISTORY_PAGES = 25;
 
-/** Paginated conversations.history read, bounded by MAX_HISTORY_PAGES. Returns {ok, messages,
- *  truncated} - a FAILED read is a different fact from an EMPTY channel and must not collapse
- *  into it, same discipline as the sibling scripts' own channelHistory(). */
-async function channelHistory(historyToken) {
+/**
+ * Paginated conversations.history read. Pass `oldest` (a Slack ts string) to bound the read to
+ * messages at or after it - mirrors slack-claim.mjs's channelContributionsSince(), whose own
+ * comment names the reason: "the API's own oldest/latest range filtering does the narrowing...
+ * this reads a handful of messages, not the whole channel." Still bounded by MAX_HISTORY_PAGES
+ * as a backstop, not the primary bound.
+ *
+ * ⛔⛔ ADVERSARIAL REVIEW: THE FIRST VERSION OF THIS FUNCTION TOOK NO `oldest` AT ALL AND RELIED
+ * ON THE PAGE-COUNT BACKSTOP ALONE. Measured against a stub reporting has_more indefinitely: 25
+ * sequential API calls to answer "did anyone else post a request in the last 120 seconds" - on
+ * the bus's highest-volume write path, on every single `--type request`. Slack's own range
+ * filtering answers the same question in one call.
+ *
+ * Returns {ok, messages, truncated, retryAfter} - a FAILED read is a different fact from an
+ * EMPTY channel and must not collapse into it, same discipline as the sibling scripts' own
+ * channelHistory(); retryAfter is only meaningful when error is 'ratelimited'.
+ */
+async function channelHistory(historyToken, { oldest } = {}) {
   const messages = [];
   let cur = null;
   let pages = 0;
@@ -966,13 +982,31 @@ async function channelHistory(historyToken) {
     const u = new URL(HISTORY);
     u.searchParams.set('channel', a.channel);
     u.searchParams.set('limit', '200');
+    if (oldest) {
+      u.searchParams.set('oldest', oldest);
+      u.searchParams.set('inclusive', 'true');
+    }
     if (cur) u.searchParams.set('cursor', cur);
+    let r;
     let j;
     try {
-      const r = await fetch(u, { headers: { Authorization: `Bearer ${historyToken}` } });
+      r = await fetch(u, { headers: { Authorization: `Bearer ${historyToken}` } });
       j = await r.json();
     } catch (err) {
       return { ok: false, error: err.message, messages: [], truncated: false };
+    }
+    // Kept so the caller can report what Slack asked for - the post path already does this
+    // (line ~1782); the new read path had no equivalent at all until adversarial review named
+    // the gap.
+    if (r.status === 429) {
+      const headerSecs = Number(r.headers.get('retry-after'));
+      return {
+        ok: false,
+        error: 'ratelimited',
+        retryAfter: Number.isFinite(headerSecs) && headerSecs > 0 ? headerSecs : null,
+        messages: [],
+        truncated: false,
+      };
     }
     if (!j.ok) return { ok: false, error: j.error, messages: [], truncated: false };
     messages.push(...(j.messages ?? []));
@@ -996,15 +1030,34 @@ const COLLISION_WINDOW_SECONDS = 120;
 
 /**
  * Pure decision core for the collision check - given this post's own ts and the OTHER
- * request-typed messages found within the collision window, rank them by the SAME
- * lowest-ts-wins rule the claim protocol already uses (slack-claim.mjs's rankClaims()) and say
+ * request-typed messages found within the collision window, rank them by the SAME lowest-ts-
+ * wins RULE step 4 of the claim protocol already uses (slack-session-bus/SKILL.md) and say
  * whether this post is the one to keep. Pure so a fixture can drive it without a real Slack
  * read - equal ts is unreachable through Slack (a distinct ts per channel message is the
  * entire reason this protocol is a sort and not a lock), so no tiebreak is needed here.
+ *
+ * ⚠ THE RULE, NOT slack-claim.mjs's rankClaims() SPECIFICALLY - that function sorts on raw
+ * `x.ts < y.ts` rather than through tsCmp(), so the two are not one shared implementation
+ * (adversarial review: harmless today, since Slack always sends a 6-digit fraction and the raw
+ * string comparison agrees with tsCmp() at that width, but worth naming precisely rather than
+ * implying an equivalence the code does not have).
  */
 function collisionVerdict(myTs, others) {
   const all = [...others.map((o) => o.ts), myTs].sort((x, y) => tsCmp(x, y));
   return { earliest: all[0], amEarliest: all[0] === myTs };
+}
+
+/**
+ * Pure parse of `--settle`'s raw string into seconds. Pulled out specifically so the bug it
+ * fixes is fixture-testable: `Math.max(0, Number(rawSettle) || 2)` treated `--settle 0` and
+ * `--settle 2` identically, because `0 || 2` is `2` in JS - `||` cannot distinguish "zero" from
+ * "absent". Measured live before this existed: `--settle 0` still slept the full 2s, with no
+ * flag at all to skip the wait. `undefined` (the flag omitted) still means the default; any
+ * other unparseable value is surfaced as `NaN` for the caller to die() on, rather than silently
+ * substituting the default the way the retracted `||` form did.
+ */
+function resolveSettleSeconds(rawSettle) {
+  return rawSettle === undefined ? 2 : Number(rawSettle);
 }
 
 function checkManifests() {
@@ -1049,7 +1102,7 @@ function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 75; // raise when adding cases - a constant, reviewed on change (+1 for --re, #201; +7 resolutionTrace, #222; +1 settle flag, +6 tsCmp, +6 meta, +5 collisionVerdict, #242)
+  const CASE_FLOOR = 80; // raise when adding cases - a constant, reviewed on change (+1 for --re, #201; +7 resolutionTrace, #222; +1 settle flag, +6 tsCmp, +6 meta, +5 collisionVerdict, +5 resolveSettleSeconds, #242)
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -1163,6 +1216,23 @@ function selfTest() {
   for (const [name, got, want] of cv) console.log(`  ${got === want ? 'pass' : 'FAIL'}  collisionVerdict: ${name}`);
   const cvFailed = cv.filter(([, got, want]) => got !== want).length;
 
+  /**
+   * resolveSettleSeconds() - the negative control for the exact bug adversarial review found:
+   * `Math.max(0, Number(a.settle) || 2)` could never produce 0 from an explicit `--settle 0`,
+   * because `0 || 2` is `2`. The second case here is the one that would have failed against
+   * the retracted formula (it would have returned 2, not 0) - kept as a real regression test,
+   * not merely a demonstration of the current behaviour.
+   */
+  const rs = [
+    ['omitted -> the default, 2', resolveSettleSeconds(undefined), 2],
+    ['"0" -> 0, NOT swallowed back into the default', resolveSettleSeconds('0'), 0],
+    ['"1" -> 1', resolveSettleSeconds('1'), 1],
+    ['garbage -> NaN, for the caller to reject rather than silently default', Number.isNaN(resolveSettleSeconds('abc')), true],
+    ['negative -> passed through, for the caller to reject rather than clamp silently', resolveSettleSeconds('-1'), -1],
+  ];
+  for (const [name, got, want] of rs) console.log(`  ${got === want ? 'pass' : 'FAIL'}  resolveSettleSeconds: ${name}`);
+  const rsFailed = rs.filter(([, got, want]) => got !== want).length;
+
   const mdFailed = md.filter(([, got, want]) => got !== want).length;
   const tbl = toSlackMrkdwn('| a | b |\n| - | - |').changes.tableRows;
   console.log(`  ${tbl === 2 ? 'pass' : 'FAIL'}  mrkdwn: table rows counted (${tbl}), warned not converted`);
@@ -1178,7 +1248,7 @@ function selfTest() {
   // it guards, which would move with them and assert nothing. Raise it when adding cases.
   const tooFew = ran < CASE_FLOOR;
   if (tooFew) console.log(`\n⛔ ONLY ${ran} CASES RAN, floor is ${CASE_FLOOR} - a block stopped running.`);
-  const bad = missing.length + manFailed + mdFailed + platFailed + rtFailed + tcFailed + mtFailed + cvFailed + (tbl === 2 ? 0 : 1) + (tooFew ? 1 : 0);
+  const bad = missing.length + manFailed + mdFailed + platFailed + rtFailed + tcFailed + mtFailed + cvFailed + rsFailed + (tbl === 2 ? 0 : 1) + (tooFew ? 1 : 0);
   console.log(
     bad
       ? `\n${bad} FAILURE(S)${missing.length ? ` - flags missing from usage: ${missing.join(', ')}` : ''}`
@@ -1450,6 +1520,39 @@ if (a.settle !== undefined && a.type !== 'request') {
     `--settle was given with --type ${a.type ?? '(none)'}.\n` +
       '  It only applies to --type request, where it controls the settle-then-reread that\n' +
       '  checks for a competing announcement of the same work (#242).',
+    2,
+  );
+}
+/**
+ * ⛔⛔ ADVERSARIAL REVIEW: `Math.max(0, Number(a.settle) || 2)` SWALLOWED `--settle 0` BACK INTO
+ * 2, because `0 || 2` is `2` in JS - `||` cannot distinguish "zero" from "absent". Measured live:
+ * `--settle 0` still slept 2 full seconds, with no flag at all to skip the wait. Resolved here,
+ * once, rather than at the read site below, so --dry-run can preview the SAME validated value a
+ * real send would use instead of recomputing it (and re-swallowing the same bug) separately.
+ * Garbage (`--settle abc`, `--settle -1`) now dies loudly instead of silently defaulting - this
+ * flag is new enough that there is no prior silent-acceptance behaviour to stay compatible with.
+ */
+const REQUEST_SETTLE_SECONDS = a.type === 'request' ? resolveSettleSeconds(a.settle) : null;
+if (a.type === 'request' && (!Number.isFinite(REQUEST_SETTLE_SECONDS) || REQUEST_SETTLE_SECONDS < 0)) {
+  die(`--settle "${a.settle}" must be a non-negative number of seconds.`, 2);
+}
+/**
+ * ⚠ A `request` announces NEW work - its OWN ts becomes the task id (slack-session-bus/
+ * SKILL.md step 1). Posted into a thread instead, two things break at once: conversations.
+ * history never returns a threaded reply (slack-claim.mjs's own note on exactly this, near its
+ * `reply_broadcast` comment), so #242's collision check below could not see it even with
+ * --broadcast; and there is no coherent task id for a reader to converge on, since the "id" would
+ * be a reply's ts nothing else can address the way a channel-level message can. Refused rather
+ * than left to produce output that LOOKS like a working collision check on a message the
+ * protocol cannot actually use as one.
+ */
+if (a.type === 'request' && a['thread-ts']) {
+  die(
+    '--type request inside a thread (--thread-ts) does not fit this protocol: a request\'s OWN\n' +
+      '  ts is meant to become the task id, but conversations.history never returns a threaded\n' +
+      '  reply, so neither a peer\'s poll loop nor this file\'s own collision check could ever see\n' +
+      '  it there. Post it as a channel-level message (no --thread-ts), or use a different --type\n' +
+      '  if this is really a reply within an existing task\'s thread.',
     2,
   );
 }
@@ -1764,6 +1867,19 @@ if (a['dry-run']) {
     console.log(`  broadcast: ${why}`);
   }
   console.log(`  text     : ${TEXT}`);
+  // ⚠ A real --type request send does real, non-trivial extra work after posting (a settle
+  // wait plus a channel read) that no other --type does - --dry-run previewed everything ELSE
+  // about the send but was silent about this, so a reader could not tell from the preview that
+  // the real command pauses and makes a second network call. (#242 review)
+  if (a.type === 'request') {
+    console.log(
+      a['as-app']
+        ? '  collision : SKIPPED - --as-app strips the type: element, so no other session could'
+        + '\n              ever see this as a request to collide with.'
+        : `  collision : a real send would settle ${REQUEST_SETTLE_SECONDS}s, then re-read the channel`
+        + ` for another request in the last ${COLLISION_WINDOW_SECONDS}s (see --settle).`,
+    );
+  }
   process.exit(0);
 }
 
@@ -1818,62 +1934,113 @@ const as = payload.username ? `as '${payload.username}'` : 'as the app';
 console.log(`Posted to ${res.channel} ${as}${payload.blocks ? ` [${contextLine}]` : ''} - ts ${res.ts}`);
 
 /**
- * #242: settle, then re-read, then report - mirroring slack-claim.mjs's own settle-then-reread
- * exactly, applied to the one write path that never had a read at all. Only for --type
- * request (guarded above); every other type is unaffected.
+ * #242: settle, then re-read, then report - mirroring slack-claim.mjs's own settle-then-reread,
+ * applied to the one write path that never had a read at all. Only for --type request (guarded
+ * above, --settle validated into REQUEST_SETTLE_SECONDS above); every other type is unaffected.
  *
- * ⚠⚠ THIS NARROWS THE RACE. IT DOES NOT CLOSE IT. Settling and re-reading catches a competing
- * `request` that lands within roughly the settle window of this one - the SAME read-after-
- * write lag the claim protocol's own settle exists to cover. It does NOT catch a competing
- * `request` posted long before this one that nobody has polled yet; only a poll loop (or the
- * manual read slack-session-bus/SKILL.md's step-1 fork warning already asks for) reaches that
- * case. Both are true at once and neither makes the other unnecessary.
+ * ⚠⚠ THIS NARROWS THE RACE. IT DOES NOT CLOSE IT. The bound is COLLISION_WINDOW_SECONDS (120s),
+ * NOT the settle duration - a competing `request` posted anywhere in the last two minutes is
+ * caught, not only one landing within the few-second settle wait. (Adversarial review measured
+ * a 70-second-old competitor - the exact spacing of the incident slack-session-bus/SKILL.md
+ * documents - and found it WAS caught, contradicting an earlier draft of this comment that
+ * conflated the settle wait with the collision window and understated the reach by 60x.) This
+ * still does NOT catch a competing `request` older than the window that nobody has polled yet;
+ * only a poll loop (or the manual read the SKILL.md step-1 fork warning already asks for)
+ * reaches that case.
  *
- * ⚠ "COMPETING" IS BOUNDED BY RECENCY (COLLISION_WINDOW_SECONDS), NOT BY "STILL UNCLAIMED" OR
- * "THE SAME WORK". Neither is checkable from a channel-level read without a per-candidate
- * thread fetch (unbounded API cost, one call per historical request ever left open) or a text-
- * similarity judgement this tool has no business making. So every OTHER `request` posted in
- * the window is reported, by ts and text, and the reader - a session, not a script - judges
- * whether it is the same job. What IS automated is the part that does not need judgement: the
- * lowest-ts-wins rule the claim protocol already uses to say which one is the task id.
+ * ⚠ "COMPETING" IS BOUNDED BY RECENCY (COLLISION_WINDOW_SECONDS) AND EXCLUDES THIS SESSION'S OWN
+ * EARLIER POSTS - NOT "STILL UNCLAIMED" OR "THE SAME WORK". Neither of those is checkable from a
+ * channel-level read without a per-candidate thread fetch (unbounded API cost) or a text-
+ * similarity judgement this tool has no business making. The own-session exclusion is not
+ * optional, though: slack-session-bus/SKILL.md §5b already documents a session that restarts
+ * and re-reads seeing its OWN earlier request as new, with the explicit instruction "ignore
+ * messages whose session: is your own" - a collision check that skipped this would tell a
+ * session to stand down from itself (adversarial review; a real bug in the first version of
+ * this block, confirmed live).
+ *
+ * ⛔ ADVISORY ONLY, UNLIKE slack-claim.mjs's claim verdict: this always exits 0 and prints to
+ * stderr, because the POST already succeeded regardless of what the collision check finds -
+ * there is no "you lost" outcome for an announcement the way there is for a claim.
  */
 if (a.type === 'request') {
-  const settle = Math.max(0, Number(a.settle) || 2);
-  if (settle) {
-    console.error(`[post] settling ${settle}s before re-reading for a competing request...`);
-    await new Promise((r) => setTimeout(r, settle * 1000));
-  }
-  const hist = await channelHistory(token);
-  if (!hist.ok) {
-    console.error(`[post] ⚠ could not re-read the channel to check for a competing request: ${hist.error}`);
-    console.error('       THE POST ALREADY SUCCEEDED - this is only the collision check failing.');
-    console.error('       Do not re-post; check the channel directly (--raw) if this matters.');
+  if (a['as-app']) {
+    console.error(
+      "[post] ⚠ --as-app strips the type: element, so this announcement carries no `type:\n" +
+        '       request` on the wire - no other session\'s poll loop, manual read, or own\n' +
+        '       collision check could ever find it as a request to collide with. Skipping the\n' +
+        '       check: any verdict it gave would only be true among posts nothing else can see.',
+    );
   } else {
-    // Number(ts) here is a DURATION (age in seconds), never an ORDER or IDENTITY comparison -
-    // exactly the arithmetic tsCmp's own doc comment (in slack-claim.mjs) carves out as safe.
-    // Ordering itself still goes through collisionVerdict()'s tsCmp, never this subtraction.
-    const nowSecs = Number(res.ts);
-    const candidates = hist.messages
-      .filter((m) => m.ts !== res.ts)
-      .map((m) => ({ ts: m.ts, text: m.text, ...meta(m) }))
-      .filter((m) => m.type === 'request' && nowSecs - Number(m.ts) <= COLLISION_WINDOW_SECONDS);
-    if (candidates.length) {
-      const { earliest, amEarliest } = collisionVerdict(res.ts, candidates);
-      console.error(
-        `[post] ⚠ ${candidates.length} other request(s) posted in the last ${COLLISION_WINDOW_SECONDS}s:`,
-      );
-      for (const c of candidates) {
-        console.error(`       ${c.ts}${c.session ? `  ${c.session}` : ''}  "${(c.text ?? '').slice(0, 80)}"`);
+    if (REQUEST_SETTLE_SECONDS) {
+      console.error(`[post] settling ${REQUEST_SETTLE_SECONDS}s before re-reading for a competing request...`);
+      await new Promise((r) => setTimeout(r, REQUEST_SETTLE_SECONDS * 1000));
+    }
+    // Bounded to the collision window, not the whole channel - see channelHistory()'s own doc
+    // comment on why an earlier version of this paginated up to 25 times to answer this.
+    const oldestBound = String(Math.max(0, Number(res.ts) - COLLISION_WINDOW_SECONDS));
+    const hist = await channelHistory(token, { oldest: oldestBound });
+    if (!hist.ok) {
+      console.error(`[post] ⚠ could not re-read the channel to check for a competing request: ${hist.error}`);
+      if (hist.error === 'ratelimited') {
+        console.error(
+          hist.retryAfter
+            ? `       Slack asks for ${hist.retryAfter}s before the next request.`
+            : '       Slack sent no Retry-After header.',
+        );
+      } else if (hist.error === 'missing_scope') {
+        console.error('       The bot token lacks channels:history/groups:history - a scope the original');
+        console.error('       post did not need.');
       }
-      console.error(
-        amEarliest
-          ? `[post] This announcement (${res.ts}) is the EARLIEST of the group - if any of the above`
-          : `[post] ⛔ ${earliest} is EARLIER than this announcement (${res.ts}) - if any of the above`,
-      );
-      console.error('       describes the SAME work, the claim protocol\'s own rule applies: the earliest');
-      console.error(
-        `       ts is the task id to converge on. ${amEarliest ? 'Nothing above outranks this one.' : `STAND DOWN from ${res.ts} and claim ${earliest} instead if it is a duplicate.`}`,
-      );
+      console.error('       THE POST ALREADY SUCCEEDED - this is only the collision check failing.');
+      console.error('       Do not re-post; check the channel directly with');
+      console.error('       slack-session-bus/slack-watch.mjs --channel <id> --raw, if this matters.');
+    } else {
+      if (hist.truncated) {
+        console.error(
+          `[post] ⚠ the collision check's own read hit its ${MAX_HISTORY_PAGES}-page bound - more\n` +
+            `       than 5000 messages landed inside the last ${COLLISION_WINDOW_SECONDS}s. The\n` +
+            '       report below may be incomplete.',
+        );
+      }
+      const myLabel = a.session ?? sessionLabel().label;
+      // Number(ts) here is a DURATION (age in seconds), never an ORDER or IDENTITY comparison -
+      // exactly the arithmetic tsCmp's own doc comment (in slack-claim.mjs) carves out as safe.
+      // Ordering itself still goes through tsCmp, never this subtraction.
+      const nowSecs = Number(res.ts);
+      const candidates = hist.messages
+        .filter((m) => m.ts !== res.ts)
+        // ts/text placed AFTER the meta() spread, deliberately - meta() only ever parses the
+        // CONTEXT BLOCK, and this guarantees a context element that happened to be named "ts:"
+        // or "text:" can never silently substitute for the value Slack itself assigned.
+        // slack-claim.mjs's own equivalent (line ~1046) protects only `text` this way, not
+        // `ts` - protecting both here rather than reproducing that same partial guard.
+        .map((m) => ({ ...meta(m), ts: m.ts, text: m.text }))
+        .filter((m) => m.type === 'request' && nowSecs - Number(m.ts) <= COLLISION_WINDOW_SECONDS)
+        .filter((m) => m.session !== myLabel)
+        .sort((x, y) => tsCmp(x.ts, y.ts));
+      if (candidates.length) {
+        const { earliest, amEarliest } = collisionVerdict(res.ts, candidates);
+        console.error(
+          `[post] ⚠ ${candidates.length} other request(s) posted in the last ${COLLISION_WINDOW_SECONDS}s:`,
+        );
+        for (const c of candidates) {
+          // Flattened before truncating - an untouched multi-line body pastes its own line
+          // breaks into the middle of this report, with continuation lines unprefixed and
+          // indistinguishable from the next candidate. slack-watch.mjs's own render does the
+          // identical flattening for the identical reason.
+          const flat = (c.text ?? '').replace(/\s+/g, ' ').trim();
+          console.error(`       ${c.ts}${c.session ? `  ${c.session}` : ''}  "${flat.slice(0, 80)}"`);
+        }
+        console.error(
+          amEarliest
+            ? `[post] This announcement (${res.ts}) is the EARLIEST of the group - if any of the above`
+            : `[post] ⛔ ${earliest} is EARLIER than this announcement (${res.ts}) - if any of the above`,
+        );
+        console.error('       describes the SAME work, the claim protocol\'s own rule applies: the earliest');
+        console.error(
+          `       ts is the task id to converge on. ${amEarliest ? 'Nothing above outranks this one.' : `STAND DOWN from ${res.ts} and claim ${earliest} instead if it is a duplicate.`}`,
+        );
+      }
     }
   }
 }
