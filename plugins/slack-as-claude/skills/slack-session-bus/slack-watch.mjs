@@ -91,11 +91,21 @@ const OWN_PLUGIN = ownPlugin();
 /**
  * ⛔⛔ #247: `--doctor`'S ANNOUNCEMENT SCAN USED TO TREAT ANY `type: release` MESSAGE AS A
  * CLAIM ABOUT THIS PLUGIN, WITH NO CHECK ON WHICH PROJECT ANNOUNCED IT. A repository sharing
- * this bus channel to announce its OWN releases (a legitimate, already-observed use of
- * `--type release`, per SKILL.md's own "the plugin author's channel" framing not being an
- * enforced restriction) poisoned every reader's `--doctor`: a real `uams-statamic v0.29.0`
- * announcement produced `ACTION SUGGESTED: claude plugin update slack-as-claude@claude-skills`
- * toward a version of THIS plugin that does not exist and never will.
+ * this bus channel to announce its OWN releases (already observed live, unprevented by
+ * anything this project enforces) poisoned every reader's `--doctor`: a real
+ * `uams-statamic v0.29.0` announcement produced
+ * `ACTION SUGGESTED: claude plugin update slack-as-claude@claude-skills` toward a version of
+ * THIS plugin that does not exist and never will.
+ *
+ * ⛔⛔ AN EARLIER DRAFT OF THIS COMMENT CITED SKILL.md AS SAYING "THE PLUGIN AUTHOR'S CHANNEL" -
+ * NO SUCH PHRASE EXISTS THERE (`grep -rn "author's channel"` over both SKILL.md files: zero
+ * matches). What `slack-session-bus/SKILL.md` actually says about this field is the correct
+ * and more useful citation: **"`project:` shares `session:`/`machine:`'s conclusion, not their
+ * mechanism: self-asserted and never checked... Citing... a `project:` label, as if... it were
+ * confirmed rather than self-reported, in a durable record, is the same mistake this whole
+ * section is about."** It supports the fix (the field is the right one to scope on) AND bounds
+ * it honestly (unauthenticated, so this is a filter, never a trust decision) - which is exactly
+ * what this whole function already does: it FILTERS on `project:`, it does not VERIFY it.
  *
  * `project:` is exactly the field that answers "which project is this a release OF" -
  * `slack-post.mjs`'s own `projectLabel()` sets it to the announcing repo's directory name at
@@ -118,21 +128,52 @@ const RELEASE_SOURCE_PROJECT = 'claude-skills';
 /**
  * The newest `type: release` any peer announced FOR THIS PLUGIN'S OWN PROJECT (#247) - scoped
  * by `releaseProject` so a fixture can drive it without depending on RELEASE_SOURCE_PROJECT's
- * real value. A message whose `project:` does not match is ignored entirely, same as one with
- * no `type: release` at all; an announcement with no `project:` field (e.g. posted with
- * `--as-app`, which suppresses it) is also ignored - failing closed, not open, since nothing
- * here can then tell what it was a release OF.
+ * real value. Matched CASE-INSENSITIVELY (adversarial review: a differently-cased clone
+ * directory - `Claude-Skills` vs `claude-skills` - would otherwise vanish from every reader's
+ * ANNOUNCED line with no diagnostic, the exact silent-failure shape this fix exists to close).
+ * A message whose `project:` does not match is ignored, same as one with no `type: release` at
+ * all; a message with no `project:` field at all (e.g. `--project ""`) is also ignored -
+ * failing closed, not open, since nothing here can then tell what it was a release OF. (An
+ * earlier version of this comment named `--as-app` as an example of a missing `project:` -
+ * wrong: `--as-app` suppresses the WHOLE context block, `type:` included, so that message is
+ * already excluded by the type check above and never reaches this one. Corrected by
+ * adversarial review.) `ignoredForeign` counts messages dropped for a project mismatch, so a
+ * caller can say something was there rather than let a foreign-only channel render identically
+ * to an empty one - `slack-session-bus/SKILL.md`'s own standing order, a few functions up in
+ * this file's own history: "the failure mode of an announcement channel is silence, and
+ * silence rendered as a stale positive."
+ *
+ * ⛔⛔ ADVERSARIAL REVIEW, SECOND PASS: A VERSION THIS FILE CANNOT PARSE IS NOT A CANDIDATE AT
+ * ALL, NOT MERELY ONE THAT LOSES EVERY COMPARISON. The first version of this fix let an
+ * unparseable `released:` seat itself via the `!announced ||` branch below and then become
+ * UNBEATABLE: `cmpVer()` against it always returns `null` (never `> 0`), so no later, valid,
+ * genuinely newer announcement could ever displace it. Messages arrive NEWEST-FIRST, so the
+ * newest same-project announcement seats first - if THAT one is unparseable (a typo like
+ * "2.25", a prerelease suffix like "2.25.0-rc.1", both things a human can type at release time
+ * and `slack-post.mjs --released` accepts without complaint), every older, valid, genuinely
+ * newer announcement behind it was silently dropped - and this function DID return the
+ * unparseable one, which `--doctor` then displayed as `ANNOUNCED`. That is #247's own
+ * acceptance criterion 3 ("treated as incomparable... so no branch fires on it") failing on
+ * the exact case it names, found by adversarial review building the two-message fixture the
+ * first self-test pass never tried.
  */
 function newestAnnouncedRelease(msgs, releaseProject) {
   let announced = null;
+  let ignoredForeign = 0;
+  const wantProject = String(releaseProject).toLowerCase();
   for (const m of msgs) {
     const mm = parseMessage(m).meta;
-    if (mm.type !== 'release' || !mm.released || mm.project !== releaseProject) continue;
+    if (mm.type !== 'release' || !mm.released) continue;
+    if (!mm.project || String(mm.project).toLowerCase() !== wantProject) {
+      if (mm.project) ignoredForeign++;
+      continue;
+    }
+    if (!parseVer(mm.released)) continue; // unparseable - never a candidate, not just never a winner
     if (!announced || cmpVer(mm.released, announced.version) > 0) {
       announced = { version: mm.released, by: mm.session ?? '?', ts: m.ts, cut: mm.cut ?? null };
     }
   }
-  return announced;
+  return { announced, ignoredForeign };
 }
 
 // ⚠ MOVED UP FROM THE "presence / liveness" SECTION BELOW, DELIBERATELY (#179). selfTest()
@@ -539,7 +580,7 @@ async function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 168; // raise when adding cases - a constant, reviewed on change (+4 rearmBlocks, +5 collisionVerdict, #213; -3 rearmBlocks, +1 collisionVerdict, +5 stillCollided, +6 confirmedCollisionBlocks, #216; +4 rearmBlocks, +1 collisionVerdict for the 'overlap' state, review fix, #216; +1 --exclude-type in the automatic flag-in-usage loop, #220; +7 resolutionTrace, #222; +7 isNodeProcessLine, #229; +6 --consistency gate (spawnSync, real CLI), #234/#237 review; +3 slackPost, +3 recentMessages, +4 beat WARM, +3 beat COLD network-failure, +4 diagSuffix, #245 + review; +9 cmpVer, +5 newestAnnouncedRelease, #247) - verified against the real --self-test count, not computed by eye
+  const CASE_FLOOR = 178; // raise when adding cases - a constant, reviewed on change (+4 rearmBlocks, +5 collisionVerdict, #213; -3 rearmBlocks, +1 collisionVerdict, +5 stillCollided, +6 confirmedCollisionBlocks, #216; +4 rearmBlocks, +1 collisionVerdict for the 'overlap' state, review fix, #216; +1 --exclude-type in the automatic flag-in-usage loop, #220; +7 resolutionTrace, #222; +7 isNodeProcessLine, #229; +6 --consistency gate (spawnSync, real CLI), #234/#237 review; +3 slackPost, +3 recentMessages, +4 beat WARM, +3 beat COLD network-failure, +4 diagSuffix, #245 + review; +9 cmpVer, +5 newestAnnouncedRelease, #247; +5 cmpVer lenient-parse, +1 source-grep invariant, +4 newestAnnouncedRelease latch/case-insensitivity, #247 review) - verified against the real --self-test count, not computed by eye
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -904,8 +945,12 @@ async function selfTest() {
   /**
    * cmpVer() (#247): the negative control for the exact bug that shipped - a `v`-prefixed
    * component silently comparing the WRONG (next) field instead of the right one, in both
-   * directions, plus the new null-for-unparseable contract every `< 0`/`> 0` call site already
-   * relies on (verified here directly against JS's own coercion rule, not just asserted).
+   * directions - plus, from adversarial review's second pass, the cases a bare
+   * `Number()`/`Number.isFinite()` parse accepted that were never valid SemVer: hex, exponent
+   * notation, and an empty component. `cmpVer('1e3.0.0', '2.24.1')` used to return a real,
+   * RANKED number under the first version of this fix - reproducing the issue's own headline
+   * symptom (`ACTION SUGGESTED` naming a version that cannot exist) through a different string
+   * than the one #247 was filed for.
    */
   const cvVerCases = [
     ['a v-prefixed NEWER major version ranks newer, not older', cmpVer('v3.0.0', '2.24.1') > 0, true],
@@ -916,14 +961,32 @@ async function selfTest() {
     ['fewer than three components -> null', cmpVer('1.2', '2.24.1'), null],
     ['more than three components -> null', cmpVer('1.2.3.4', '2.24.1'), null],
     ['null on EITHER side -> null overall, never a one-sided guess', cmpVer('2.24.1', 'garbage'), null],
+    ['exponent notation is not a valid component, however Number()-finite it is', cmpVer('1e3.0.0', '2.24.1'), null],
+    ['hex is not a valid component either', cmpVer('0x10.0.0', '2.24.1'), null],
+    ['an empty component ("Number(\'\') === 0") is not a valid component', cmpVer('1..3', '2.24.1'), null],
+    ['a trailing empty component is not valid', cmpVer('1.2.', '2.24.1'), null],
+    ['whitespace around a component is not valid', cmpVer(' 1 . 2 . 3 ', '2.24.1'), null],
   ];
   for (const [name, got, want] of cvVerCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  cmpVer: ${name}`);
   const cvVerBad = cvVerCases.filter(([, got, want]) => got !== want).length;
-  // The claim every `< 0`/`> 0` cmpVer() call site in this file relies on, checked directly
-  // against the language rather than trusted from the comment that states it.
-  const nullCoercionOk = (null < 0) === false && (null > 0) === false;
-  console.log(`  ${nullCoercionOk ? 'pass' : 'FAIL'}  cmpVer: null < 0 and null > 0 both evaluate false in JS, so no branch fires on it`);
-  const cvVerBadTotal = cvVerBad + (nullCoercionOk ? 0 : 1);
+  /**
+   * ⛔⛔ #247 REVIEW: THE PREVIOUS VERSION OF THIS CHECK - `(null < 0) === false && (null > 0)
+   * === false` - IS A CONSTANT EXPRESSION. It cannot go red on any conforming JS engine, so it
+   * has no negative control and can have none; it is a tautology wearing a test's clothes. The
+   * property that actually needs guarding is a LEXICAL one about THIS FILE: every comparison
+   * against a cmpVer() result must be a bare `< 0`/`> 0` (which coerce `null` to `0` safely) and
+   * never `<= 0`/`>= 0` (which would coerce `null` to `0` and then treat an INCOMPARABLE pair as
+   * "ranked" - `null <= 0` and `null >= 0` are both `true`, the opposite of what every existing
+   * call site depends on). A source-grep, in the same spirit as this file's own flag-in-USAGE
+   * invariant: a real guarantee about the file as it stands, not a fact about the language that
+   * was true before this fix existed and will be true regardless of what this file does with it.
+   */
+  const ownSource = readFileSync(fileURLToPath(import.meta.url), 'utf8');
+  const cmpVerLenientComparisons = ownSource.match(/cmpVer\([^)]*\)\s*[<>]=/g) ?? [];
+  console.log(
+    `  ${cmpVerLenientComparisons.length === 0 ? 'pass' : 'FAIL'}  cmpVer: no call site compares a result with <= or >= (${cmpVerLenientComparisons.length} found)`,
+  );
+  const cvVerBadTotal = cvVerBad + (cmpVerLenientComparisons.length === 0 ? 0 : 1);
 
   /**
    * newestAnnouncedRelease() (#247): the negative control for the reported false positive - a
@@ -940,10 +1003,13 @@ async function selfTest() {
     ] }],
   });
   const narCases = [
-    ['a same-project release is picked up', newestAnnouncedRelease([narMsg('100', 'release', 'claude-skills', '2.24.1', 'a')], 'claude-skills')?.version, '2.24.1'],
-    ['a foreign-project release is ignored entirely - the reported false positive', newestAnnouncedRelease([narMsg('100', 'release', 'uams-statamic', 'v0.29.0', 'a')], 'claude-skills'), null],
-    ['a release with no project: at all is ignored (fails closed, not open)', newestAnnouncedRelease([narMsg('100', 'release', null, '2.24.1', 'a')], 'claude-skills'), null],
-    ['a non-release message with the right project is ignored', newestAnnouncedRelease([narMsg('100', 'x-update', 'claude-skills', '2.24.1', 'a')], 'claude-skills'), null],
+    ['a same-project release is picked up', newestAnnouncedRelease([narMsg('100', 'release', 'claude-skills', '2.24.1', 'a')], 'claude-skills').announced?.version, '2.24.1'],
+    ['a foreign-project release is ignored entirely - the reported false positive', newestAnnouncedRelease([narMsg('100', 'release', 'uams-statamic', 'v0.29.0', 'a')], 'claude-skills').announced, null],
+    ['a foreign-project release is COUNTED, not just silently dropped', newestAnnouncedRelease([narMsg('100', 'release', 'uams-statamic', 'v0.29.0', 'a')], 'claude-skills').ignoredForeign, 1],
+    ['a release with no project: at all is ignored (fails closed, not open)', newestAnnouncedRelease([narMsg('100', 'release', null, '2.24.1', 'a')], 'claude-skills').announced, null],
+    ['a release with no project: is NOT counted as foreign - there is nothing to name', newestAnnouncedRelease([narMsg('100', 'release', null, '2.24.1', 'a')], 'claude-skills').ignoredForeign, 0],
+    ['a non-release message with the right project is ignored', newestAnnouncedRelease([narMsg('100', 'x-update', 'claude-skills', '2.24.1', 'a')], 'claude-skills').announced, null],
+    ['project: matches case-insensitively - a differently-cased clone must not vanish silently', newestAnnouncedRelease([narMsg('100', 'release', 'Claude-Skills', '2.24.1', 'a')], 'claude-skills').announced?.version, '2.24.1'],
     [
       'among several same-project announcements, the highest version wins - a foreign one mixed in does not confuse it',
       newestAnnouncedRelease(
@@ -953,9 +1019,32 @@ async function selfTest() {
           narMsg('102', 'release', 'claude-skills', '2.24.1', 'b'),
         ],
         'claude-skills',
-      )?.version,
+      ).announced?.version,
       '2.24.1',
     ],
+    /**
+     * ⛔⛔ #247 REVIEW, MAJOR 1: THE NEGATIVE CONTROL FOR THE LATCH BUG. Messages arrive
+     * NEWEST-FIRST (msgs.js's own convention, relied on throughout this file). The first
+     * version of this fix let an unparseable `released:` seat itself via `!announced ||` and
+     * then become UNBEATABLE, because cmpVer() against it always returns `null` (never `> 0`).
+     * Fed newest-first with the newest entry unparseable (a prerelease suffix, a real thing a
+     * human types at release time), the OLD code returned the unparseable one and suppressed
+     * the valid, older, genuinely-real release behind it - reproducing #247's OWN acceptance
+     * criterion 3 failing on exactly the case it names. Verified failing against the pre-fix
+     * shape before being fixed, not merely asserted against the current one.
+     */
+    [
+      'an unparseable same-project release (newest, so seated first) does not latch and block a valid older one behind it',
+      newestAnnouncedRelease(
+        [
+          narMsg('102', 'release', 'claude-skills', '2.25.0-rc.1', 'newer-but-unparseable'),
+          narMsg('101', 'release', 'claude-skills', '2.25.0', 'older-and-valid'),
+        ],
+        'claude-skills',
+      ).announced?.version,
+      '2.25.0',
+    ],
+    ['an unparseable release with no other candidate leaves announced null, not seated', newestAnnouncedRelease([narMsg('100', 'release', 'claude-skills', '2.25', 'a')], 'claude-skills').announced, null],
   ];
   for (const [name, got, want] of narCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  newestAnnouncedRelease: ${name}`);
   const narBad = narCases.filter(([, got, want]) => got !== want).length;
@@ -3592,21 +3681,32 @@ function behindRegistrations(regs, cachedVersion, cwd) {
  *   - A single leading "v"/"V" is stripped before parsing, so a v-prefixed SemVer string (the
  *     shape `git describe`/git tags use, and what the reported cross-project announcement
  *     carried) compares correctly instead of triggering either failure above.
- *   - Anything STILL unparseable after that - a non-numeric component, not exactly three
- *     dot-separated parts - returns `null`, never a number. `null` cannot be misread as
- *     "equal" the way `0` or a NaN-corrupted result can: every `< 0`/`> 0` comparison this
- *     file makes against a cmpVer() result already evaluates `null` as `false` (JS coerces
- *     `null` to `0` for a relational comparison, and `0 < 0`/`0 > 0` are both false) - so an
- *     incomparable pair now safely fires NO branch anywhere, verified by self-test rather than
- *     assumed from the coercion rule alone.
+ *   - Anything STILL unparseable after that returns `null`, never a number. `null` cannot be
+ *     misread as "equal" the way `0` or a NaN-corrupted result can: every `< 0`/`> 0`
+ *     comparison this file makes against a cmpVer() result already evaluates `null` as `false`
+ *     (JS coerces `null` to `0` for a relational comparison, and `0 < 0`/`0 > 0` are both
+ *     false) - so an incomparable pair now safely fires NO branch anywhere, verified by
+ *     self-test AND by a source-grep invariant (below, near `cvGrepCases`) that no call site
+ *     ever compares a cmpVer() result with `<=`/`>=`, the ONE relational form that would
+ *     coerce `null` the wrong way.
+ *
+ * ⛔⛔ ADVERSARIAL REVIEW, SECOND PASS: "NOT EXACTLY THREE DOT-SEPARATED PARTS, ALL
+ * Number.isFinite" WAS ITSELF TOO LENIENT A DEFINITION OF "PARSEABLE". `Number` accepts hex
+ * (`Number('0x10')` = 16), exponent notation (`Number('1e3')` = 1000), signs, whitespace and
+ * the EMPTY STRING (`Number('')` = 0) - all of which `Number.isFinite` happily confirms.
+ * Measured: `cmpVer('1e3.0.0', '2.24.1')` returned a real number and RANKED, reproducing the
+ * issue's own headline symptom (`ACTION SUGGESTED` naming a version that cannot exist) through
+ * a different string than the one this fix was filed for. A version must now match
+ * `/^[vV]?\d+\.\d+\.\d+$/` EXACTLY - digits only, in three groups, nothing implicit.
  */
+function parseVer(v) {
+  const m = /^[vV]?(\d+)\.(\d+)\.(\d+)$/.exec(String(v));
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
 function cmpVer(x, y) {
-  const p = (v) => {
-    const parts = String(v).replace(/^[vV]/, '').split('.').map(Number);
-    return parts.length === 3 && parts.every(Number.isFinite) ? parts : null;
-  };
-  const px = p(x);
-  const py = p(y);
+  const px = parseVer(x);
+  const py = parseVer(y);
   if (!px || !py) return null;
   const [a1, b1, c1] = px;
   const [a2, b2, c2] = py;
@@ -3903,7 +4003,10 @@ if (a.doctor) {
   );
 
   /**
-   * ★ ANNOUNCED - THE NEWEST VERSION ANY PEER SAYS IT CUT.
+   * ★ ANNOUNCED - THE NEWEST VERSION ANY PEER SAYS IT CUT, OF claude-skills SPECIFICALLY.
+   * (#247 review: the bound belongs in the headline, not only three screens down where
+   * newestAnnouncedRelease() is defined - `slack-session-bus/SKILL.md`'s own standing order
+   * is "PUT THE BOUND IN THE HEADLINE, OR DO NOT PUT THE CLAIM THERE.")
    *
    * ⛔⛔ THIS IS A CLAIM ON A BUS, NOT A READING OF A DISK, AND IT MUST NEVER RENDER AS AN
    * INSTALL TARGET. It says only "someone said they cut this" - never "this exists here",
@@ -3938,10 +4041,10 @@ if (a.doctor) {
   const msgs = read.messages;
   const now = Math.floor(Date.now() / 1000);
 
-  // The newest version any peer SAYS it cut - SCOPED TO THIS PLUGIN'S OWN PROJECT (#247, see
+  // The newest version any peer SAYS it cut, OF claude-skills SPECIFICALLY (#247, see
   // newestAnnouncedRelease()'s own doc comment, near OWN_PLUGIN, for why a project scan is
   // needed at all and why `project:` rather than `plugin:` is the field that answers it).
-  const announced = newestAnnouncedRelease(msgs, RELEASE_SOURCE_PROJECT);
+  const { announced, ignoredForeign } = newestAnnouncedRelease(msgs, RELEASE_SOURCE_PROJECT);
   if (announced) {
     const age = Math.max(0, Math.round(now - Number(announced.ts)));
     // Lateness, when the announcement carried a cut time. Without it a late announcement
@@ -3955,6 +4058,13 @@ if (a.doctor) {
       }
     }
     console.log(`ANNOUNCED  ${announced.version}   (${announced.by} said so, ${age}s ago${late} - a CLAIM, not a reading)`);
+  } else if (ignoredForeign > 0) {
+    // ⚠ #247 review: SILENCE HERE WOULD RENDER IDENTICALLY TO "NOBODY HAS ANNOUNCED
+    // ANYTHING" - and this file already names that failure shape a few hundred lines up
+    // ("the failure mode of an announcement channel is silence, and silence rendered as a
+    // stale positive"). A channel carrying ONLY foreign-project releases is not the same
+    // fact as an empty channel; say which is true rather than let the reader guess.
+    console.log(`ANNOUNCED  none for ${RELEASE_SOURCE_PROJECT}   (${ignoredForeign} release announcement(s) for another project ignored)`);
   }
 
   const live = new Map();
