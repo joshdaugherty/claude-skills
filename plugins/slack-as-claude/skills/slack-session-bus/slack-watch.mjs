@@ -88,6 +88,53 @@ function ownPlugin() {
 }
 const OWN_PLUGIN = ownPlugin();
 
+/**
+ * ⛔⛔ #247: `--doctor`'S ANNOUNCEMENT SCAN USED TO TREAT ANY `type: release` MESSAGE AS A
+ * CLAIM ABOUT THIS PLUGIN, WITH NO CHECK ON WHICH PROJECT ANNOUNCED IT. A repository sharing
+ * this bus channel to announce its OWN releases (a legitimate, already-observed use of
+ * `--type release`, per SKILL.md's own "the plugin author's channel" framing not being an
+ * enforced restriction) poisoned every reader's `--doctor`: a real `uams-statamic v0.29.0`
+ * announcement produced `ACTION SUGGESTED: claude plugin update slack-as-claude@claude-skills`
+ * toward a version of THIS plugin that does not exist and never will.
+ *
+ * `project:` is exactly the field that answers "which project is this a release OF" -
+ * `slack-post.mjs`'s own `projectLabel()` sets it to the announcing repo's directory name at
+ * post time, present on the wire and unused here until now. `plugin:` (OWN_PLUGIN's own wire
+ * counterpart) does NOT answer this question - it names which PLUGIN posted the message
+ * (always "slack-as-claude", since that is the script doing the posting), not which project
+ * the announcement is ABOUT, so a foreign-project release announced through this same tool
+ * would still carry `plugin: slack-as-claude` on the envelope. Confirmed by reading
+ * `pluginVersion()` in slack-post.mjs before relying on this distinction, not assumed from
+ * the field's name.
+ *
+ * A literal constant, not derived from plugin.json (which carries this plugin's PACKAGE name,
+ * "slack-as-claude" - a different string from its REPO name, "claude-skills", and the two
+ * cannot be derived from one another). This is a fact about THIS specific artifact - which
+ * repo it ships from - safe to store rather than re-derive, the same category `OWN_PLUGIN`
+ * itself already is.
+ */
+const RELEASE_SOURCE_PROJECT = 'claude-skills';
+
+/**
+ * The newest `type: release` any peer announced FOR THIS PLUGIN'S OWN PROJECT (#247) - scoped
+ * by `releaseProject` so a fixture can drive it without depending on RELEASE_SOURCE_PROJECT's
+ * real value. A message whose `project:` does not match is ignored entirely, same as one with
+ * no `type: release` at all; an announcement with no `project:` field (e.g. posted with
+ * `--as-app`, which suppresses it) is also ignored - failing closed, not open, since nothing
+ * here can then tell what it was a release OF.
+ */
+function newestAnnouncedRelease(msgs, releaseProject) {
+  let announced = null;
+  for (const m of msgs) {
+    const mm = parseMessage(m).meta;
+    if (mm.type !== 'release' || !mm.released || mm.project !== releaseProject) continue;
+    if (!announced || cmpVer(mm.released, announced.version) > 0) {
+      announced = { version: mm.released, by: mm.session ?? '?', ts: m.ts, cut: mm.cut ?? null };
+    }
+  }
+  return announced;
+}
+
 // ⚠ MOVED UP FROM THE "presence / liveness" SECTION BELOW, DELIBERATELY (#179). selfTest()
 // is INVOKED (not just defined) before that section's own declarations are reached during
 // module evaluation, and its fixtures now call presenceBlocks(), which reads this constant -
@@ -492,7 +539,7 @@ async function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 154; // raise when adding cases - a constant, reviewed on change (+4 rearmBlocks, +5 collisionVerdict, #213; -3 rearmBlocks, +1 collisionVerdict, +5 stillCollided, +6 confirmedCollisionBlocks, #216; +4 rearmBlocks, +1 collisionVerdict for the 'overlap' state, review fix, #216; +1 --exclude-type in the automatic flag-in-usage loop, #220; +7 resolutionTrace, #222; +7 isNodeProcessLine, #229; +6 --consistency gate (spawnSync, real CLI), #234/#237 review; +3 slackPost, +3 recentMessages, +4 beat WARM, +3 beat COLD network-failure, +4 diagSuffix, #245 + review) - verified against the real --self-test count, not computed by eye
+  const CASE_FLOOR = 168; // raise when adding cases - a constant, reviewed on change (+4 rearmBlocks, +5 collisionVerdict, #213; -3 rearmBlocks, +1 collisionVerdict, +5 stillCollided, +6 confirmedCollisionBlocks, #216; +4 rearmBlocks, +1 collisionVerdict for the 'overlap' state, review fix, #216; +1 --exclude-type in the automatic flag-in-usage loop, #220; +7 resolutionTrace, #222; +7 isNodeProcessLine, #229; +6 --consistency gate (spawnSync, real CLI), #234/#237 review; +3 slackPost, +3 recentMessages, +4 beat WARM, +3 beat COLD network-failure, +4 diagSuffix, #245 + review; +9 cmpVer, +5 newestAnnouncedRelease, #247) - verified against the real --self-test count, not computed by eye
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -855,6 +902,65 @@ async function selfTest() {
   const pvBad = pvCases.filter(([, got, want]) => got !== want).length;
 
   /**
+   * cmpVer() (#247): the negative control for the exact bug that shipped - a `v`-prefixed
+   * component silently comparing the WRONG (next) field instead of the right one, in both
+   * directions, plus the new null-for-unparseable contract every `< 0`/`> 0` call site already
+   * relies on (verified here directly against JS's own coercion rule, not just asserted).
+   */
+  const cvVerCases = [
+    ['a v-prefixed NEWER major version ranks newer, not older', cmpVer('v3.0.0', '2.24.1') > 0, true],
+    ['a v-prefixed OLDER major version ranks older, not newer via the minor field', cmpVer('v0.29.0', '2.24.1') < 0, true],
+    ['stripping "v" does not affect an already-bare version', cmpVer('v2.24.1', '2.24.1'), 0],
+    ['uppercase "V" is stripped too', cmpVer('V2.24.1', '2.24.1'), 0],
+    ['a non-numeric component that is not just a "v" prefix -> null, not a number', cmpVer('abc.2.1', '2.24.1'), null],
+    ['fewer than three components -> null', cmpVer('1.2', '2.24.1'), null],
+    ['more than three components -> null', cmpVer('1.2.3.4', '2.24.1'), null],
+    ['null on EITHER side -> null overall, never a one-sided guess', cmpVer('2.24.1', 'garbage'), null],
+  ];
+  for (const [name, got, want] of cvVerCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  cmpVer: ${name}`);
+  const cvVerBad = cvVerCases.filter(([, got, want]) => got !== want).length;
+  // The claim every `< 0`/`> 0` cmpVer() call site in this file relies on, checked directly
+  // against the language rather than trusted from the comment that states it.
+  const nullCoercionOk = (null < 0) === false && (null > 0) === false;
+  console.log(`  ${nullCoercionOk ? 'pass' : 'FAIL'}  cmpVer: null < 0 and null > 0 both evaluate false in JS, so no branch fires on it`);
+  const cvVerBadTotal = cvVerBad + (nullCoercionOk ? 0 : 1);
+
+  /**
+   * newestAnnouncedRelease() (#247): the negative control for the reported false positive - a
+   * foreign project's release announcement (here, "uams-statamic") must never become the
+   * plugin's own "announced" candidate, however new or plausible its version looks.
+   */
+  const narMsg = (ts, type, project, released, session) => ({
+    ts,
+    blocks: [{ type: 'context', elements: [
+      { type: 'mrkdwn', text: `type: \`${type}\`` },
+      ...(project ? [{ type: 'mrkdwn', text: `project: \`${project}\`` }] : []),
+      ...(released ? [{ type: 'mrkdwn', text: `released: \`${released}\`` }] : []),
+      { type: 'mrkdwn', text: `session: \`${session}\`` },
+    ] }],
+  });
+  const narCases = [
+    ['a same-project release is picked up', newestAnnouncedRelease([narMsg('100', 'release', 'claude-skills', '2.24.1', 'a')], 'claude-skills')?.version, '2.24.1'],
+    ['a foreign-project release is ignored entirely - the reported false positive', newestAnnouncedRelease([narMsg('100', 'release', 'uams-statamic', 'v0.29.0', 'a')], 'claude-skills'), null],
+    ['a release with no project: at all is ignored (fails closed, not open)', newestAnnouncedRelease([narMsg('100', 'release', null, '2.24.1', 'a')], 'claude-skills'), null],
+    ['a non-release message with the right project is ignored', newestAnnouncedRelease([narMsg('100', 'x-update', 'claude-skills', '2.24.1', 'a')], 'claude-skills'), null],
+    [
+      'among several same-project announcements, the highest version wins - a foreign one mixed in does not confuse it',
+      newestAnnouncedRelease(
+        [
+          narMsg('100', 'release', 'uams-statamic', 'v9.9.9', 'foreign'),
+          narMsg('101', 'release', 'claude-skills', '2.20.0', 'a'),
+          narMsg('102', 'release', 'claude-skills', '2.24.1', 'b'),
+        ],
+        'claude-skills',
+      )?.version,
+      '2.24.1',
+    ],
+  ];
+  for (const [name, got, want] of narCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  newestAnnouncedRelease: ${name}`);
+  const narBad = narCases.filter(([, got, want]) => got !== want).length;
+
+  /**
    * diagSuffix() (#245 review): the one place that renders whichever extra diagnostic field a
    * failed result carries - `detail` (network_error) or `status` (non_json_response) - so all
    * eight call sites print the same shape instead of some silently dropping it, which is
@@ -987,12 +1093,12 @@ async function selfTest() {
   const tooFew = ran < CASE_FLOOR;
   if (tooFew) console.log(`\n⛔ ONLY ${ran} CASES RAN, floor is ${CASE_FLOOR} - a block stopped running.`);
   console.log(
-    missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || cvBad || scBad || ccBad || rtBad || plBad || gcBad || dsBad || ntBad || rmBad || btWarmBad || btColdBad || tooFew
+    missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || cvBad || scBad || ccBad || rtBad || plBad || gcBad || cvVerBadTotal || narBad || dsBad || ntBad || rmBad || btWarmBad || btColdBad || tooFew
       ? `\n${tooFew ? `ONLY ${ran} CASES RAN, FLOOR IS ${CASE_FLOOR} - A BLOCK STOPPED RUNNING. ` : ''}${missing.length} FLAG(S) MISSING FROM USAGE${missing.length ? `: ${missing.join(', ')}` : ''}` +
-        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}${xuBad ? `, ${xuBad} X-UPDATE CASE(S) WRONG` : ''}${sjBad ? `, ${sjBad} SAFEJSON CASE(S) WRONG` : ''}${vbBad ? `, ${vbBad} VERIFYBOTID CASE(S) WRONG` : ''}${msBad ? `, ${msBad} MEMBERSTATUS CASE(S) WRONG` : ''}${pbBad ? `, ${pbBad} PRESENCEBLOCKS CASE(S) WRONG` : ''}${rbBad ? `, ${rbBad} REARMBLOCKS CASE(S) WRONG` : ''}${pvBad ? `, ${pvBad} PONGVERDICT CASE(S) WRONG` : ''}${cvBad ? `, ${cvBad} COLLISIONVERDICT CASE(S) WRONG` : ''}${scBad ? `, ${scBad} STILLCOLLIDED CASE(S) WRONG` : ''}${ccBad ? `, ${ccBad} CONFIRMEDCOLLISIONBLOCKS CASE(S) WRONG` : ''}${rtBad ? `, ${rtBad} RESOLUTIONTRACE CASE(S) WRONG` : ''}${plBad ? `, ${plBad} ISNODEPROCESSLINE CASE(S) WRONG` : ''}${gcBad ? `, ${gcBad} CONSISTENCY-GATE CASE(S) WRONG` : ''}${dsBad ? `, ${dsBad} DIAGSUFFIX CASE(S) WRONG` : ''}${ntBad ? `, ${ntBad} SLACKPOST NETWORK-FAILURE CASE(S) WRONG` : ''}${rmBad ? `, ${rmBad} RECENTMESSAGES NETWORK-FAILURE CASE(S) WRONG` : ''}${btWarmBad ? `, ${btWarmBad} BEAT (WARM) NETWORK-FAILURE CASE(S) WRONG` : ''}${btColdBad ? `, ${btColdBad} BEAT (COLD) NETWORK-FAILURE CASE(S) WRONG` : ''}`
+        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}${xuBad ? `, ${xuBad} X-UPDATE CASE(S) WRONG` : ''}${sjBad ? `, ${sjBad} SAFEJSON CASE(S) WRONG` : ''}${vbBad ? `, ${vbBad} VERIFYBOTID CASE(S) WRONG` : ''}${msBad ? `, ${msBad} MEMBERSTATUS CASE(S) WRONG` : ''}${pbBad ? `, ${pbBad} PRESENCEBLOCKS CASE(S) WRONG` : ''}${rbBad ? `, ${rbBad} REARMBLOCKS CASE(S) WRONG` : ''}${pvBad ? `, ${pvBad} PONGVERDICT CASE(S) WRONG` : ''}${cvBad ? `, ${cvBad} COLLISIONVERDICT CASE(S) WRONG` : ''}${scBad ? `, ${scBad} STILLCOLLIDED CASE(S) WRONG` : ''}${ccBad ? `, ${ccBad} CONFIRMEDCOLLISIONBLOCKS CASE(S) WRONG` : ''}${rtBad ? `, ${rtBad} RESOLUTIONTRACE CASE(S) WRONG` : ''}${plBad ? `, ${plBad} ISNODEPROCESSLINE CASE(S) WRONG` : ''}${gcBad ? `, ${gcBad} CONSISTENCY-GATE CASE(S) WRONG` : ''}${cvVerBadTotal ? `, ${cvVerBadTotal} CMPVER CASE(S) WRONG` : ''}${narBad ? `, ${narBad} NEWESTANNOUNCEDRELEASE CASE(S) WRONG` : ''}${dsBad ? `, ${dsBad} DIAGSUFFIX CASE(S) WRONG` : ''}${ntBad ? `, ${ntBad} SLACKPOST NETWORK-FAILURE CASE(S) WRONG` : ''}${rmBad ? `, ${rmBad} RECENTMESSAGES NETWORK-FAILURE CASE(S) WRONG` : ''}${btWarmBad ? `, ${btWarmBad} BEAT (WARM) NETWORK-FAILURE CASE(S) WRONG` : ''}${btColdBad ? `, ${btColdBad} BEAT (COLD) NETWORK-FAILURE CASE(S) WRONG` : ''}`
       : `\n${ran} cases, all pass`,
   );
-  process.exit(missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || cvBad || scBad || ccBad || rtBad || plBad || gcBad || dsBad || ntBad || rmBad || btWarmBad || btColdBad || tooFew ? 1 : 0);
+  process.exit(missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || cvBad || scBad || ccBad || rtBad || plBad || gcBad || cvVerBadTotal || narBad || dsBad || ntBad || rmBad || btWarmBad || btColdBad || tooFew ? 1 : 0);
 }
 
 /**
@@ -3471,10 +3577,39 @@ function behindRegistrations(regs, cachedVersion, cwd) {
     .filter((r) => cmpVer(r.version, cachedVersion) < 0);
 }
 
+/**
+ * ⛔⛔ #247: A LEADING NON-NUMERIC COMPONENT USED TO SILENTLY SKIP THE COMPARISON ENTIRELY,
+ * NOT JUST MISREAD IT. `Number('v0')` is `NaN`, and `NaN` is FALSY - so the old
+ * `a1 - a2 || b1 - b2 || c1 - c2` read a NaN major-version difference as "no difference, check
+ * the next component" and compared MINORS as the primary factor instead. Measured:
+ * `cmpVer('v0.29.0', '2.24.1')` returned POSITIVE (reported NEWER) purely because `29 > 24` -
+ * the major versions (0 vs 2) never actually compared. Worse, in the direction that hides a
+ * real problem: `cmpVer('v3.0.0', '2.24.1')` returned NEGATIVE (reported OLDER) for the
+ * identical reason - a genuinely newer v-prefixed release comparing as older, silently, with
+ * nothing printed to notice by.
+ *
+ * Fixed in two parts:
+ *   - A single leading "v"/"V" is stripped before parsing, so a v-prefixed SemVer string (the
+ *     shape `git describe`/git tags use, and what the reported cross-project announcement
+ *     carried) compares correctly instead of triggering either failure above.
+ *   - Anything STILL unparseable after that - a non-numeric component, not exactly three
+ *     dot-separated parts - returns `null`, never a number. `null` cannot be misread as
+ *     "equal" the way `0` or a NaN-corrupted result can: every `< 0`/`> 0` comparison this
+ *     file makes against a cmpVer() result already evaluates `null` as `false` (JS coerces
+ *     `null` to `0` for a relational comparison, and `0 < 0`/`0 > 0` are both false) - so an
+ *     incomparable pair now safely fires NO branch anywhere, verified by self-test rather than
+ *     assumed from the coercion rule alone.
+ */
 function cmpVer(x, y) {
-  const p = (v) => String(v).split('.').map(Number);
-  const [a1, b1, c1] = p(x);
-  const [a2, b2, c2] = p(y);
+  const p = (v) => {
+    const parts = String(v).replace(/^[vV]/, '').split('.').map(Number);
+    return parts.length === 3 && parts.every(Number.isFinite) ? parts : null;
+  };
+  const px = p(x);
+  const py = p(y);
+  if (!px || !py) return null;
+  const [a1, b1, c1] = px;
+  const [a2, b2, c2] = py;
   return a1 - a2 || b1 - b2 || c1 - c2;
 }
 
@@ -3803,17 +3938,10 @@ if (a.doctor) {
   const msgs = read.messages;
   const now = Math.floor(Date.now() / 1000);
 
-  // The newest version any peer SAYS it cut. Placed here, below `msgs` and `now`, because
-  // it was first written above them - where it read an undefined binding, printed nothing,
-  // and threw nothing. A silent no-output is exactly what this whole file is about.
-  let announced = null;
-  for (const m of msgs) {
-    const mm = parseMessage(m).meta;
-    if (mm.type !== 'release' || !mm.released) continue;
-    if (!announced || cmpVer(mm.released, announced.version) > 0) {
-      announced = { version: mm.released, by: mm.session ?? '?', ts: m.ts, cut: mm.cut ?? null };
-    }
-  }
+  // The newest version any peer SAYS it cut - SCOPED TO THIS PLUGIN'S OWN PROJECT (#247, see
+  // newestAnnouncedRelease()'s own doc comment, near OWN_PLUGIN, for why a project scan is
+  // needed at all and why `project:` rather than `plugin:` is the field that answers it).
+  const announced = newestAnnouncedRelease(msgs, RELEASE_SOURCE_PROJECT);
   if (announced) {
     const age = Math.max(0, Math.round(now - Number(announced.ts)));
     // Lateness, when the announcement carried a cut time. Without it a late announcement
