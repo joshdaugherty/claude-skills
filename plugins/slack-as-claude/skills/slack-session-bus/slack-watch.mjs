@@ -137,11 +137,15 @@ const RELEASE_SOURCE_PROJECT = 'claude-skills';
  * earlier version of this comment named `--as-app` as an example of a missing `project:` -
  * wrong: `--as-app` suppresses the WHOLE context block, `type:` included, so that message is
  * already excluded by the type check above and never reaches this one. Corrected by
- * adversarial review.) `ignoredForeign` counts messages dropped for a project mismatch, so a
- * caller can say something was there rather than let a foreign-only channel render identically
- * to an empty one - `slack-session-bus/SKILL.md`'s own standing order, a few functions up in
- * this file's own history: "the failure mode of an announcement channel is silence, and
- * silence rendered as a stale positive."
+ * adversarial review.) `ignoredForeign` counts messages dropped for a project mismatch and
+ * `ignoredUnparseable` counts same-project messages dropped for an unparseable `released:`, so
+ * a caller can say something was there rather than let either case render identically to an
+ * empty channel - this FILE'S OWN standing order, further down (near `--doctor`'s AVAILABLE
+ * block): "the failure mode of an announcement channel is silence, and silence rendered as a
+ * stale positive." (Corrected by a second adversarial-review pass: an earlier draft of this
+ * citation attributed the quote to SKILL.md, and got its own direction backwards too - the
+ * line is below this one, not above it. Neither half of a citation is safe to write from
+ * memory; both need to be looked up.)
  *
  * ⛔⛔ ADVERSARIAL REVIEW, SECOND PASS: A VERSION THIS FILE CANNOT PARSE IS NOT A CANDIDATE AT
  * ALL, NOT MERELY ONE THAT LOSES EVERY COMPARISON. The first version of this fix let an
@@ -160,6 +164,7 @@ const RELEASE_SOURCE_PROJECT = 'claude-skills';
 function newestAnnouncedRelease(msgs, releaseProject) {
   let announced = null;
   let ignoredForeign = 0;
+  let ignoredUnparseable = 0;
   const wantProject = String(releaseProject).toLowerCase();
   for (const m of msgs) {
     const mm = parseMessage(m).meta;
@@ -168,12 +173,19 @@ function newestAnnouncedRelease(msgs, releaseProject) {
       if (mm.project) ignoredForeign++;
       continue;
     }
-    if (!parseVer(mm.released)) continue; // unparseable - never a candidate, not just never a winner
+    // unparseable - never a candidate, not just never a winner. Counted, not just skipped: a
+    // second adversarial-review pass found the ORIGINAL version of this block dropped these
+    // with no trace at all, so a channel whose only same-project release carried a typo'd
+    // version rendered identically to a genuinely empty one. (#247 review)
+    if (!parseVer(mm.released)) {
+      ignoredUnparseable++;
+      continue;
+    }
     if (!announced || cmpVer(mm.released, announced.version) > 0) {
       announced = { version: mm.released, by: mm.session ?? '?', ts: m.ts, cut: mm.cut ?? null };
     }
   }
-  return { announced, ignoredForeign };
+  return { announced, ignoredForeign, ignoredUnparseable };
 }
 
 // ⚠ MOVED UP FROM THE "presence / liveness" SECTION BELOW, DELIBERATELY (#179). selfTest()
@@ -580,7 +592,7 @@ async function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 178; // raise when adding cases - a constant, reviewed on change (+4 rearmBlocks, +5 collisionVerdict, #213; -3 rearmBlocks, +1 collisionVerdict, +5 stillCollided, +6 confirmedCollisionBlocks, #216; +4 rearmBlocks, +1 collisionVerdict for the 'overlap' state, review fix, #216; +1 --exclude-type in the automatic flag-in-usage loop, #220; +7 resolutionTrace, #222; +7 isNodeProcessLine, #229; +6 --consistency gate (spawnSync, real CLI), #234/#237 review; +3 slackPost, +3 recentMessages, +4 beat WARM, +3 beat COLD network-failure, +4 diagSuffix, #245 + review; +9 cmpVer, +5 newestAnnouncedRelease, #247; +5 cmpVer lenient-parse, +1 source-grep invariant, +4 newestAnnouncedRelease latch/case-insensitivity, #247 review) - verified against the real --self-test count, not computed by eye
+  const CASE_FLOOR = 181; // raise when adding cases - a constant, reviewed on change (+4 rearmBlocks, +5 collisionVerdict, #213; -3 rearmBlocks, +1 collisionVerdict, +5 stillCollided, +6 confirmedCollisionBlocks, #216; +4 rearmBlocks, +1 collisionVerdict for the 'overlap' state, review fix, #216; +1 --exclude-type in the automatic flag-in-usage loop, #220; +7 resolutionTrace, #222; +7 isNodeProcessLine, #229; +6 --consistency gate (spawnSync, real CLI), #234/#237 review; +3 slackPost, +3 recentMessages, +4 beat WARM, +3 beat COLD network-failure, +4 diagSuffix, #245 + review; +9 cmpVer, +5 newestAnnouncedRelease, #247; +5 cmpVer lenient-parse, +1 source-grep invariant, +4 newestAnnouncedRelease latch/case-insensitivity, #247 review; +3 ignoredUnparseable counter, #247 review third pass) - verified against the real --self-test count, not computed by eye
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -1045,6 +1057,16 @@ async function selfTest() {
       '2.25.0',
     ],
     ['an unparseable release with no other candidate leaves announced null, not seated', newestAnnouncedRelease([narMsg('100', 'release', 'claude-skills', '2.25', 'a')], 'claude-skills').announced, null],
+    /**
+     * ⛔⛔ #247 REVIEW, THIRD PASS: A SAME-PROJECT UNPARSEABLE RELEASE WAS DROPPED WITH NO
+     * COUNTER AT ALL - only ignoredForeign was tracked, so a channel whose only claude-skills
+     * announcement carried a typo'd version rendered identically to a genuinely EMPTY channel.
+     * A regression relative to the PRE-#247 code, which at least (wrongly) displayed
+     * something. Fixed with a second counter, mirroring ignoredForeign exactly.
+     */
+    ['a same-project unparseable release is COUNTED, not silently dropped to zero-evidence', newestAnnouncedRelease([narMsg('100', 'release', 'claude-skills', '2.25', 'a')], 'claude-skills').ignoredUnparseable, 1],
+    ['a foreign-project release does NOT also count as unparseable - the two counters are independent', newestAnnouncedRelease([narMsg('100', 'release', 'uams-statamic', 'v0.29.0', 'a')], 'claude-skills').ignoredUnparseable, 0],
+    ['a valid same-project release does not increment either counter', newestAnnouncedRelease([narMsg('100', 'release', 'claude-skills', '2.24.1', 'a')], 'claude-skills').ignoredUnparseable, 0],
   ];
   for (const [name, got, want] of narCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  newestAnnouncedRelease: ${name}`);
   const narBad = narCases.filter(([, got, want]) => got !== want).length;
@@ -4044,7 +4066,7 @@ if (a.doctor) {
   // The newest version any peer SAYS it cut, OF claude-skills SPECIFICALLY (#247, see
   // newestAnnouncedRelease()'s own doc comment, near OWN_PLUGIN, for why a project scan is
   // needed at all and why `project:` rather than `plugin:` is the field that answers it).
-  const { announced, ignoredForeign } = newestAnnouncedRelease(msgs, RELEASE_SOURCE_PROJECT);
+  const { announced, ignoredForeign, ignoredUnparseable } = newestAnnouncedRelease(msgs, RELEASE_SOURCE_PROJECT);
   if (announced) {
     const age = Math.max(0, Math.round(now - Number(announced.ts)));
     // Lateness, when the announcement carried a cut time. Without it a late announcement
@@ -4058,13 +4080,24 @@ if (a.doctor) {
       }
     }
     console.log(`ANNOUNCED  ${announced.version}   (${announced.by} said so, ${age}s ago${late} - a CLAIM, not a reading)`);
-  } else if (ignoredForeign > 0) {
+  } else if (ignoredForeign > 0 || ignoredUnparseable > 0) {
     // ⚠ #247 review: SILENCE HERE WOULD RENDER IDENTICALLY TO "NOBODY HAS ANNOUNCED
-    // ANYTHING" - and this file already names that failure shape a few hundred lines up
-    // ("the failure mode of an announcement channel is silence, and silence rendered as a
-    // stale positive"). A channel carrying ONLY foreign-project releases is not the same
-    // fact as an empty channel; say which is true rather than let the reader guess.
-    console.log(`ANNOUNCED  none for ${RELEASE_SOURCE_PROJECT}   (${ignoredForeign} release announcement(s) for another project ignored)`);
+    // ANYTHING" - and this file already names that failure shape further down (near
+    // `--doctor`'s AVAILABLE block): "the failure mode of an announcement channel is silence,
+    // and silence rendered as a stale positive." A channel carrying ONLY foreign-project or
+    // ONLY unparseable-version releases is not the same fact as an empty channel; say which is
+    // true rather than let the reader guess.
+    //
+    // ⛔⛔ A SECOND ADVERSARIAL-REVIEW PASS FOUND THIS BLOCK ITSELF STILL HAD A SILENT DROP:
+    // an unparseable SAME-project release counted nowhere, so a channel whose only
+    // claude-skills announcement carried a typo'd version rendered identically to a genuinely
+    // empty one - a regression relative to the PRE-#247 code, which at least (wrongly)
+    // displayed something. ignoredUnparseable closes that gap the same way ignoredForeign
+    // closes the project-mismatch one.
+    const parts = [];
+    if (ignoredForeign > 0) parts.push(`${ignoredForeign} for another project`);
+    if (ignoredUnparseable > 0) parts.push(`${ignoredUnparseable} with an unparseable version`);
+    console.log(`ANNOUNCED  none for ${RELEASE_SOURCE_PROJECT}   (${parts.join(', ')} ignored)`);
   }
 
   const live = new Map();
