@@ -494,10 +494,22 @@ function resolutionTrace(varName = tokenVar(), root = gitRoot(), exists = exists
 }
 
 /** Who does this token actually belong to? One call, and it is the only source of truth. */
-async function whoAmI(token) {
+/**
+ * #250 (sibling of slack-watch.mjs's #249 fix): this fetch() had no bound - a connection
+ * accepted but never answered hangs forever, past the catch below, which only fires on a
+ * THROWN rejection, never on a promise that simply never settles. AbortSignal.timeout()
+ * converts that into a thrown TimeoutError after this many ms, landing in the same catch.
+ */
+const FETCH_TIMEOUT_MS = 30_000;
+
+async function whoAmI(token, { fetchImpl = fetch, timeoutMs = FETCH_TIMEOUT_MS } = {}) {
   try {
     const j = await (
-      await fetch('https://slack.com/api/auth.test', { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
+      await fetchImpl('https://slack.com/api/auth.test', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(timeoutMs),
+      })
     ).json();
     return j.ok
       ? { ok: true, team: j.team, team_id: j.team_id, url: j.url, bot_id: j.bot_id, user_id: j.user_id }
@@ -1152,7 +1164,7 @@ function checkManifests() {
   return out;
 }
 
-function selfTest() {
+async function selfTest() {
   // ⛔⛔ COUNT EVERY ASSERTION ACTUALLY EMITTED. Summing the case arrays was the obvious
   // implementation and it UNDERCOUNTED BY HALF, because several checks print pass/FAIL
   // outside any array - and a floor built on a number that does not see them is the very
@@ -1163,7 +1175,7 @@ function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 90; // raise when adding cases - a constant, reviewed on change (+1 for --re, #201; +7 resolutionTrace, #222; +3 missingTokenMessage zsh/bash-profile wording, #241; +1 settle flag, +6 tsCmp, +6 meta, +5 collisionVerdict, +5 resolveSettleSeconds, +7 collisionCandidates, #242) - re-verified against real --self-test output after merging #241 and #242
+  const CASE_FLOOR = 92; // raise when adding cases - a constant, reviewed on change (+1 for --re, #201; +7 resolutionTrace, #222; +3 missingTokenMessage zsh/bash-profile wording, #241; +1 settle flag, +6 tsCmp, +6 meta, +5 collisionVerdict, +5 resolveSettleSeconds, +7 collisionCandidates, #242; +2 whoAmI fetch timeout, #250) - re-verified against real --self-test output after merging #241 and #242
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -1362,6 +1374,41 @@ function selfTest() {
   for (const [name, got, want] of rs) console.log(`  ${got === want ? 'pass' : 'FAIL'}  resolveSettleSeconds: ${name}`);
   const rsFailed = rs.filter(([, got, want]) => got !== want).length;
 
+  /**
+   * whoAmI() (#250, sibling of slack-watch.mjs's #249): a fetchImpl that never settles ON ITS
+   * OWN - only in reaction to the abort signal it is given, matching real fetch()'s contract
+   * under AbortSignal.timeout() - must still make whoAmI() return, not hang, once the injected
+   * (short, not the real 30s default) timeoutMs elapses.
+   *
+   * ⛔ NOT RE-RUN AGAINST THE PRE-FIX CODE AS A LIVE NEGATIVE CONTROL - the old fetch() call
+   * never passed a `signal` at all, so this exact fixture would hang the fixture itself rather
+   * than the suite failing cleanly. Verified by reading the pre-fix code (no `signal` key)
+   * instead of executing it - see slack-watch.mjs's identical fixture (fetch timeout (#249)),
+   * ported here rather than retyped from memory.
+   *
+   * The keepAlive timer is required: AbortSignal.timeout()'s own internal timer is unref'd, so
+   * with nothing else pending (this stub creates no socket or timer of its own) the event loop
+   * can drain before it ever fires - measured live in slack-watch.mjs's own fixture, same fix
+   * ported here rather than rediscovered.
+   */
+  const hangingFetch = (url, opts) =>
+    new Promise((resolve, reject) => {
+      const keepAlive = setTimeout(() => {}, 60_000);
+      opts?.signal?.addEventListener('abort', () => {
+        clearTimeout(keepAlive);
+        const err = new Error('The operation was aborted due to timeout');
+        err.name = 'TimeoutError';
+        reject(err);
+      });
+    });
+  const whoAmITimeoutResult = await whoAmI('self-test-fake-token-never-sent', { fetchImpl: hangingFetch, timeoutMs: 20 });
+  const wa = [
+    ['a fetchImpl that never settles on its own still resolves once the injected timeout fires', whoAmITimeoutResult.ok, false],
+    ['the timeout surfaces as ok:false with a message, not a rejection out of whoAmI() itself', typeof whoAmITimeoutResult.error, 'string'],
+  ];
+  for (const [name, got, want] of wa) console.log(`  ${got === want ? 'pass' : 'FAIL'}  whoAmI fetch timeout (#250): ${name}`);
+  const waFailed = wa.filter(([, got, want]) => got !== want).length;
+
   const mdFailed = md.filter(([, got, want]) => got !== want).length;
   const tbl = toSlackMrkdwn('| a | b |\n| - | - |').changes.tableRows;
   console.log(`  ${tbl === 2 ? 'pass' : 'FAIL'}  mrkdwn: table rows counted (${tbl}), warned not converted`);
@@ -1377,7 +1424,7 @@ function selfTest() {
   // it guards, which would move with them and assert nothing. Raise it when adding cases.
   const tooFew = ran < CASE_FLOOR;
   if (tooFew) console.log(`\n⛔ ONLY ${ran} CASES RAN, floor is ${CASE_FLOOR} - a block stopped running.`);
-  const bad = missing.length + manFailed + mdFailed + platFailed + rtFailed + tcFailed + mtFailed + cvFailed + ccFailed + rsFailed + (tbl === 2 ? 0 : 1) + (tooFew ? 1 : 0);
+  const bad = missing.length + manFailed + mdFailed + platFailed + rtFailed + tcFailed + mtFailed + cvFailed + ccFailed + rsFailed + waFailed + (tbl === 2 ? 0 : 1) + (tooFew ? 1 : 0);
   console.log(
     bad
       ? `\n${bad} FAILURE(S)${missing.length ? ` - flags missing from usage: ${missing.join(', ')}` : ''}`
@@ -1386,7 +1433,7 @@ function selfTest() {
   process.exit(bad ? 1 : 0);
 }
 
-if (a['self-test']) selfTest();
+if (a['self-test']) await selfTest();
 
 /**
  * ⚠ SHORT-CIRCUITS BEFORE THE --channel/--text GATE, LIKE --self-test ABOVE IT. This is an
