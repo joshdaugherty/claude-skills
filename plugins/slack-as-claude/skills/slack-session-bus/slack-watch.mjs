@@ -592,7 +592,7 @@ async function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 200; // raise when adding cases - a constant, reviewed on change (+4 rearmBlocks, +5 collisionVerdict, #213; -3 rearmBlocks, +1 collisionVerdict, +5 stillCollided, +6 confirmedCollisionBlocks, #216; +4 rearmBlocks, +1 collisionVerdict for the 'overlap' state, review fix, #216; +1 --exclude-type in the automatic flag-in-usage loop, #220; +7 resolutionTrace, #222; +7 isNodeProcessLine, #229; +6 --consistency gate (spawnSync, real CLI), #234/#237 review; +3 slackPost, +3 recentMessages, +4 beat WARM, +3 beat COLD network-failure, +4 diagSuffix, #245 + review; +9 cmpVer, +5 newestAnnouncedRelease, #247; +5 cmpVer lenient-parse, +1 source-grep invariant, +4 newestAnnouncedRelease latch/case-insensitivity, #247 review; +3 ignoredUnparseable counter, #247 review third pass; +8 clampRateLimitWaitMs (7 unit + 1 end-to-end), +4 fetch-timeout, +4 armHeartbeat, +2 beat reentrancy guard, #249) - verified against the real --self-test count, not computed by eye
+  const CASE_FLOOR = 201; // raise when adding cases - a constant, reviewed on change (+4 rearmBlocks, +5 collisionVerdict, #213; -3 rearmBlocks, +1 collisionVerdict, +5 stillCollided, +6 confirmedCollisionBlocks, #216; +4 rearmBlocks, +1 collisionVerdict for the 'overlap' state, review fix, #216; +1 --exclude-type in the automatic flag-in-usage loop, #220; +7 resolutionTrace, #222; +7 isNodeProcessLine, #229; +6 --consistency gate (spawnSync, real CLI), #234/#237 review; +3 slackPost, +3 recentMessages, +4 beat WARM, +3 beat COLD network-failure, +4 diagSuffix, #245 + review; +9 cmpVer, +5 newestAnnouncedRelease, #247; +5 cmpVer lenient-parse, +1 source-grep invariant, +4 newestAnnouncedRelease latch/case-insensitivity, #247 review; +3 ignoredUnparseable counter, #247 review third pass; +8 clampRateLimitWaitMs (7 unit + 1 end-to-end), +4 fetch-timeout, +4 armHeartbeat, +2 beat reentrancy guard, #249; +1 armHeartbeat recurring-tick catch, #249 review) - verified against the real --self-test count, not computed by eye
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -1290,15 +1290,23 @@ async function selfTest() {
    * inside the real beat(), exercised separately by the fetch-timeout cases above). It IS
    * awaited for the rejecting-beatFn call below, matching how the real call site now awaits it.
    *
-   * MEASURED, NOT ASSUMED, including which way a regression fails: reverting armHeartbeat() to
-   * the old `await beatFn(...).catch(...); scheduleFn(...)` shape and re-running this suite
-   * (bounded by an external `timeout 12`, in case the guess was wrong) did NOT hang it - it
-   * failed cleanly, exit 1, "2 ARMHEARTBEAT CASE(S) WRONG", because these first-two assertions
-   * run synchronously right after armHeartbeat() returns, before the old code's internal await
-   * could matter to a caller that does not itself await the whole function - which is also true
-   * of the real call site's own first two lines (armHeartbeat() itself is not awaited there;
-   * only the `firstBeat` it returns is, afterward). A caller that awaited the WHOLE function
-   * (unlike anything here, fixture or production) would still hang on the old shape.
+   * MEASURED, NOT ASSUMED, including which way a regression fails - and corrected once already
+   * (#249 review) after the first version of this claim went stale under its own nose: an
+   * earlier draft said reverting armHeartbeat() to the old `await beatFn(...).catch(...);
+   * scheduleFn(...)` shape "fails cleanly, exit 1, 2 ARMHEARTBEAT CASE(S) WRONG" - true only
+   * against an earlier version of THIS fixture, which assigned the bare return value
+   * (`const ahHandle = armHeartbeat(...)`). Once the fixture below was changed to destructure
+   * `{ handle: ahHandle }` (matching the real call site, after armHeartbeat() started returning
+   * `{ handle, firstBeat }`), that claim was never re-run against the new shape - review caught
+   * it, and it does NOT hold any more: destructuring a property off the old code's bare Promise
+   * return yields `undefined`, and the suite now CRASHES instead (a TypeError, from whichever
+   * assertion dereferences `undefined` first - exit 1 either way, but a crash, not the counter
+   * machinery's own clean FAIL). Re-verified against the CURRENT fixture below, not reused from
+   * memory: still exit 1, still without ever hanging - which is the property this case actually
+   * needs (a regression here is caught SOMEHOW, loudly, not silently and not by hanging the
+   * suite) - but "fails cleanly via the counter" was the wrong specific claim, and is retracted
+   * here rather than left standing uncorrected. A caller that awaited the WHOLE function (unlike
+   * anything here, fixture or production) would still hang on the old shape regardless.
    */
   let ahScheduleCalledWith = null;
   let ahBeatCalled = false;
@@ -1313,10 +1321,14 @@ async function selfTest() {
     },
   });
   let ahCaughtErr = null;
+  let ahScheduledCallback = null;
   const { firstBeat: ahFirstBeat } = armHeartbeat('self-test-label', 5, {
     beatFn: () => Promise.reject(new Error('boom')),
-    scheduleFn: () => ({ unref: () => {} }),
-    onFirstBeatError: (err) => {
+    scheduleFn: (fn) => {
+      ahScheduledCallback = fn;
+      return { unref: () => {} };
+    },
+    onBeatError: (err) => {
       ahCaughtErr = err;
     },
   });
@@ -1326,11 +1338,19 @@ async function selfTest() {
   // call site now awaits `firstBeat` for exactly this reason; this line proves doing so cannot
   // throw even when beatFn itself rejects, matching what that await now relies on in production.
   await ahFirstBeat;
+  const ahCaughtErrFromFirst = ahCaughtErr;
+  // #249 review: the RECURRING tick gets the identical .catch(), not just the first call -
+  // simulated here by invoking the callback scheduleFn was handed, the same way a real
+  // setInterval would on a later tick. Before this fix, only the first call was caught; a
+  // rejection from a later tick would have been an unhandled rejection crashing the process.
+  ahCaughtErr = null;
+  await ahScheduledCallback();
   const ahCases = [
     ['scheduleFn is called before this function returns, even though beatFn never resolves', ahScheduleCalledWith, 5000],
     ['beatFn is also invoked immediately - the first beat, not only the recurring schedule', ahBeatCalled, true],
     ["the returned handle is unref-able, matching the real setInterval() contract at the call site", typeof ahHandle.unref, 'function'],
-    ['a rejecting first beatFn call reaches onFirstBeatError instead of becoming an unhandled rejection', ahCaughtErr?.message, 'boom'],
+    ['a rejecting first beatFn call reaches onBeatError instead of becoming an unhandled rejection', ahCaughtErrFromFirst?.message, 'boom'],
+    ['a rejecting RECURRING tick reaches onBeatError too, not only the first call', ahCaughtErr?.message, 'boom'],
   ];
   for (const [name, got, want] of ahCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  armHeartbeat (#249): ${name}`);
   const ahBad = ahCases.filter(([, got, want]) => got !== want).length;
@@ -2200,8 +2220,17 @@ function memberStatus(memberIds, userId) {
 /** Who does this token actually belong to? One call, and it is the only source of truth. */
 async function whoAmI(token) {
   try {
+    // #249 review: this fetch() had no bound, sharing the exact unguarded-hang shape
+    // FETCH_TIMEOUT_MS was added to fix elsewhere in this file. checkWorkspace() calls this
+    // unconditionally at startup, BEFORE poll() ever runs - a hang here would mean the
+    // heartbeat keeps beating (armHeartbeat() already runs first and is independent of this)
+    // while ZERO messages are ever received, forever: the mirror image of #249's own report.
     const j = await (
-      await fetch('https://slack.com/api/auth.test', { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
+      await fetch('https://slack.com/api/auth.test', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      })
     ).json();
     return j.ok
       ? { ok: true, team: j.team, team_id: j.team_id, url: j.url, bot_id: j.bot_id, user_id: j.user_id }
@@ -2749,27 +2778,41 @@ async function beatOnce(label, every, { fetchImpl, authToken, timeoutMs }) {
  * never rejects, for the CALL SITE to await afterward. Awaiting it there is now safe in a way it
  * was not before this file had FETCH_TIMEOUT_MS: the wait is bounded (beat() cannot hang, and
  * cannot throw), and by the time that await begins the interval is already independently
- * scheduled - so even the full timeout elapsing here delays presence, once, by seconds, rather
- * than disabling it for the life of the process the way the ORIGINAL #249 defect did. The two
- * fixes compose: bounding beat() (FETCH_TIMEOUT_MS) is what makes re-awaiting the first call
- * safe again; arming the interval first is what stops that await from being load-bearing for
- * every later beat the way it used to be.
+ * scheduled - so even the worst case here delays presence once, not for the life of the
+ * process the way the ORIGINAL #249 defect did. "Bounded" is not "brief", corrected after
+ * review measured it against the actual code rather than the intended shape: beatOnce()'s
+ * cold-start path can chain up to three FETCH_TIMEOUT_MS-bounded legs sequentially (the
+ * recentMessages() lookup, an optional announceRearm() on a detected collision, the final
+ * presence slackPost()) - worst case near 3 * FETCH_TIMEOUT_MS (~90s), not "a few seconds".
+ * Still self-healing and never duplicating (beatInFlight only skips overlapping ticks, it
+ * never queues one), just slower in the worst case than that first draft of this comment
+ * claimed. The two fixes compose: bounding beat() (FETCH_TIMEOUT_MS) is what makes
+ * re-awaiting the first call safe again; arming the interval first is what stops that await
+ * from being load-bearing for every later beat the way it used to be.
  *
  * Extracted into its own function - rather than inlined at the call site, the first version of
  * this fix - specifically so "scheduleFn runs before beatFn's first call can possibly have
  * settled" is a property a fixture can assert directly (ahCases, below in selfTest()) with a
  * beatFn that never resolves, instead of only being inferable from reading the source.
  *
- * `beatFn`/`scheduleFn`/`onFirstBeatError` are injectable for exactly that fixture; real
+ * `beatFn`/`scheduleFn`/`onBeatError` are injectable for exactly that fixture; real
  * callers get `beat`/`setInterval`/a console.error line.
  */
-function armHeartbeat(label, every, { beatFn = beat, scheduleFn = setInterval, onFirstBeatError = (err) => console.error(`[watch] first heartbeat threw: ${err?.message || err}`) } = {}) {
-  const handle = scheduleFn(() => beatFn(label, every), every * 1000);
+function armHeartbeat(label, every, { beatFn = beat, scheduleFn = setInterval, onBeatError = (err) => console.error(`[watch] heartbeat threw: ${err?.message || err}`) } = {}) {
+  // #249 review: RECURRING ticks get the same .catch() as the first call, not just the first.
+  // beatFn() (the real beat()) does not throw in normal operation - its own network calls are
+  // already caught internally (#245) and bounded (FETCH_TIMEOUT_MS) - but this is the setInterval
+  // callback's return value, which nothing else here awaits or catches; a rejection reaching it
+  // would be an unhandled rejection crashing the whole process by default. The pre-#249 code had
+  // this identical gap on every recurring tick (only the first call was awaited, and only at the
+  // top level where a throw would at least be visible); rewriting this exact call site was the
+  // moment to close it rather than carry it forward under a new name.
+  const handle = scheduleFn(() => beatFn(label, every).catch(onBeatError), every * 1000);
   handle.unref?.();
   // The caller decides whether to await this - see the docblock above for why doing so is now
   // safe (bounded) rather than the load-bearing block it used to be. Caught here regardless, so
   // a caller that does NOT await it is still never exposed to an unhandled rejection.
-  const firstBeat = beatFn(label, every).catch(onFirstBeatError);
+  const firstBeat = beatFn(label, every).catch(onBeatError);
   return { handle, firstBeat };
 }
 
@@ -2988,7 +3031,16 @@ async function poll() {
   try {
     // ⛔ The Response is kept, not discarded by .then(r => r.json()). Slack sends Retry-After
     // on 429 and the old form threw it away with the object that carried it.
-    const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    //
+    // #249 review: this fetch() had no bound, sharing the exact unguarded-hang shape
+    // FETCH_TIMEOUT_MS was added to fix on the presence path - undisclosed here as deliberate,
+    // and not defensible as one: a hang here means the heartbeat keeps beating normally
+    // (armHeartbeat()'s interval is independent of poll()) while messages stop arriving,
+    // forever - the mirror image of what #249 reported, and the exact failure shape
+    // slack-session-bus/SKILL.md names as its worst historical hazard (a watcher that beats
+    // fine while the session behind it receives nothing). The existing catch below already
+    // treats any thrown fetch failure as transient and safe to retry next cycle.
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
     if (r.status === 429) {
       // #249: routed through clampRateLimitWaitMs() - see that function's own comment.
       const headerSecs = Number(r.headers.get('retry-after'));
