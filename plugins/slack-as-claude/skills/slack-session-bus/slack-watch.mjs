@@ -592,7 +592,7 @@ async function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 181; // raise when adding cases - a constant, reviewed on change (+4 rearmBlocks, +5 collisionVerdict, #213; -3 rearmBlocks, +1 collisionVerdict, +5 stillCollided, +6 confirmedCollisionBlocks, #216; +4 rearmBlocks, +1 collisionVerdict for the 'overlap' state, review fix, #216; +1 --exclude-type in the automatic flag-in-usage loop, #220; +7 resolutionTrace, #222; +7 isNodeProcessLine, #229; +6 --consistency gate (spawnSync, real CLI), #234/#237 review; +3 slackPost, +3 recentMessages, +4 beat WARM, +3 beat COLD network-failure, +4 diagSuffix, #245 + review; +9 cmpVer, +5 newestAnnouncedRelease, #247; +5 cmpVer lenient-parse, +1 source-grep invariant, +4 newestAnnouncedRelease latch/case-insensitivity, #247 review; +3 ignoredUnparseable counter, #247 review third pass) - verified against the real --self-test count, not computed by eye
+  const CASE_FLOOR = 200; // raise when adding cases - a constant, reviewed on change (+4 rearmBlocks, +5 collisionVerdict, #213; -3 rearmBlocks, +1 collisionVerdict, +5 stillCollided, +6 confirmedCollisionBlocks, #216; +4 rearmBlocks, +1 collisionVerdict for the 'overlap' state, review fix, #216; +1 --exclude-type in the automatic flag-in-usage loop, #220; +7 resolutionTrace, #222; +7 isNodeProcessLine, #229; +6 --consistency gate (spawnSync, real CLI), #234/#237 review; +3 slackPost, +3 recentMessages, +4 beat WARM, +3 beat COLD network-failure, +4 diagSuffix, #245 + review; +9 cmpVer, +5 newestAnnouncedRelease, #247; +5 cmpVer lenient-parse, +1 source-grep invariant, +4 newestAnnouncedRelease latch/case-insensitivity, #247 review; +3 ignoredUnparseable counter, #247 review third pass; +8 clampRateLimitWaitMs (7 unit + 1 end-to-end), +4 fetch-timeout, +4 armHeartbeat, +2 beat reentrancy guard, #249) - verified against the real --self-test count, not computed by eye
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -1188,6 +1188,195 @@ async function selfTest() {
   consecutiveBeatFailures = savedConsecutiveBeatFailures;
   rateLimitedUntil = savedRateLimitedUntil;
 
+  /**
+   * clampRateLimitWaitMs() (#249, the better-fitting candidate) - see that function's own
+   * comment, above beatInFlight, for the full account of why an unbounded retry-after-derived
+   * wait can silently disable every future beat while polling continues normally.
+   *
+   * The last case is a SIBLING SWEEP, not a unit case: a source-grep confirming all three
+   * known 429-handling sites (recentMessages(), beat(), poll()) route through this one
+   * function rather than any of them inlining its own `* 1000` computation the way all three
+   * used to - this file's own most commonly repeated defect shape, applied here to the bug
+   * itself rather than to its fix. `ownSource` is the same self-read the cmpVer invariant
+   * above already uses; reused, not re-read.
+   */
+  const rateLimitSitesInlined = ownSource.match(/rateLimitedUntil = Math\.max\(rateLimitedUntil, Date\.now\(\) \+ (?!clampRateLimitWaitMs\()/g) ?? [];
+  const crCases = [
+    ['a normal small retry-after (5s) passes through unclamped', clampRateLimitWaitMs(5), 5000],
+    ['NaN (no header at all) falls back to the 60s default', clampRateLimitWaitMs(NaN), 60_000],
+    ['zero falls back to the 60s default, not a zero-length wait', clampRateLimitWaitMs(0), 60_000],
+    ['a negative value falls back to the 60s default, not a negative wait', clampRateLimitWaitMs(-5), 60_000],
+    ['null (what slackPost() hands beat() when a 429 body carried no header) falls back to 60s', clampRateLimitWaitMs(null), 60_000],
+    ['an absurd finite value - shaped like an epoch-seconds header rather than a delta - is clamped to the cap, not honoured verbatim', clampRateLimitWaitMs(1_789_499_954), MAX_RATE_LIMIT_WAIT_MS],
+    ['a value exactly at the cap boundary is not altered', clampRateLimitWaitMs(MAX_RATE_LIMIT_WAIT_MS / 1000), MAX_RATE_LIMIT_WAIT_MS],
+    [`no 429-handling site inlines its own retry-after computation instead of calling clampRateLimitWaitMs() (${rateLimitSitesInlined.length} found)`, rateLimitSitesInlined.length, 0],
+  ];
+  for (const [name, got, want] of crCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  clampRateLimitWaitMs (#249): ${name}`);
+  const crBad = crCases.filter(([, got, want]) => got !== want).length;
+
+  /**
+   * End-to-end: the same absurd header, through the REAL beat() -> slackPost() call chain, not
+   * just the isolated helper - proving the clamp actually reaches rateLimitedUntil in practice,
+   * not only in a unit test of the function that computes it.
+   */
+  const savedPresenceTsCr = presenceTs;
+  const savedRateLimitedUntilCr = rateLimitedUntil;
+  presenceTs = 'FAKE.000000';
+  rateLimitedUntil = 0;
+  const hugeRetryAfterFetch = async () => ({
+    status: 429,
+    headers: { get: (name) => (name === 'retry-after' ? '99999999999' : null) },
+    json: async () => ({ ok: false, error: 'ratelimited' }),
+  });
+  await beat('self-test-label', 60, { fetchImpl: hugeRetryAfterFetch, authToken: SELF_TEST_TOKEN });
+  const rateLimitedUntilAfterHugeHeader = rateLimitedUntil;
+  presenceTs = savedPresenceTsCr;
+  rateLimitedUntil = savedRateLimitedUntilCr;
+  const crEndToEndCases = [
+    ['a 99999999999s retry-after, fed through beat() end-to-end, leaves rateLimitedUntil within the cap - not ~3168 years away', rateLimitedUntilAfterHugeHeader - Date.now() <= MAX_RATE_LIMIT_WAIT_MS, true],
+  ];
+  for (const [name, got, want] of crEndToEndCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  clampRateLimitWaitMs end-to-end (#249): ${name}`);
+  const crEndToEndBad = crEndToEndCases.filter(([, got, want]) => got !== want).length;
+
+  /**
+   * #249: a fetchImpl that never settles ON ITS OWN - it only resolves/rejects in reaction to
+   * the abort signal it is given, the same contract a real fetch() has under
+   * AbortSignal.timeout() - must still make slackPost()/recentMessages() return, not hang,
+   * once `timeoutMs` elapses. `timeoutMs` is set short here (not the real 30s
+   * FETCH_TIMEOUT_MS default) so this case runs in milliseconds, not seconds.
+   *
+   * ⛔ NOT RE-RUN AGAINST THE PRE-FIX CODE AS A LIVE NEGATIVE CONTROL - doing that would hang
+   * the fixture itself (the pre-fix fetchImpl() call was never given a `signal` at all, so an
+   * abort listener on it has nothing to fire), which is a worse failure mode for a test suite
+   * than reasoning from the diff. Verified instead by reading the pre-fix code (no `signal` key
+   * in either fetchImpl() call) rather than executing it - the "unreachable negative control"
+   * carve-out, used deliberately rather than by omission.
+   *
+   * ⛔⛔ MEASURED, NOT ASSUMED: the first version of this fixture had no `keepAlive` timer
+   * below and hung the entire suite - Node printed "Detected unsettled top-level await"
+   * instead of ever reaching this case. AbortSignal.timeout()'s own internal timer is unref'd,
+   * so with nothing else pending (this stub creates no socket, no timer of its own - just a
+   * bare Promise waiting on an event) the event loop drained before that timer ever got a
+   * chance to fire. Harmless in real use - a real fetch() in flight is itself an event-loop-
+   * visible handle, and this file's own callers (beat()'s setInterval, poll()'s setTimeout)
+   * keep the loop alive regardless - but this fixture has neither, so it needs its own.
+   */
+  const hangingFetch = (url, opts) =>
+    new Promise((resolve, reject) => {
+      const keepAlive = setTimeout(() => {}, 60_000);
+      opts?.signal?.addEventListener('abort', () => {
+        clearTimeout(keepAlive);
+        const err = new Error('The operation was aborted due to timeout');
+        err.name = 'TimeoutError';
+        reject(err);
+      });
+    });
+  const ftPostResult = await slackPost('chat.postMessage', {}, { fetchImpl: hangingFetch, authToken: SELF_TEST_TOKEN, timeoutMs: 20 });
+  const ftHistoryResult = await recentMessages(1, { fetchImpl: hangingFetch, authToken: SELF_TEST_TOKEN, timeoutMs: 20 });
+  const ftCases = [
+    ['slackPost: a fetchImpl that never settles on its own still resolves once the injected timeout fires', ftPostResult.ok, false],
+    ['slackPost: the timeout resolves to network_error, the same shape a thrown rejection already used', ftPostResult.error, 'network_error'],
+    ['recentMessages: the same never-settling fetchImpl still resolves once the injected timeout fires', ftHistoryResult.ok, false],
+    ['recentMessages: messages is [] on a timeout, not undefined - every caller iterates it unconditionally', Array.isArray(ftHistoryResult.messages) && ftHistoryResult.messages.length === 0, true],
+  ];
+  for (const [name, got, want] of ftCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  fetch timeout (#249): ${name}`);
+  const ftBad = ftCases.filter(([, got, want]) => got !== want).length;
+
+  /**
+   * armHeartbeat() (#249): the property under test is that scheduleFn runs before beatFn's
+   * first call can possibly have settled - proven with a beatFn that never resolves at all.
+   * `firstBeat` is never awaited for THAT call here (it would hang this suite - nothing in
+   * armHeartbeat() itself bounds a non-resolving beatFn; the real bound, FETCH_TIMEOUT_MS, is
+   * inside the real beat(), exercised separately by the fetch-timeout cases above). It IS
+   * awaited for the rejecting-beatFn call below, matching how the real call site now awaits it.
+   *
+   * MEASURED, NOT ASSUMED, including which way a regression fails: reverting armHeartbeat() to
+   * the old `await beatFn(...).catch(...); scheduleFn(...)` shape and re-running this suite
+   * (bounded by an external `timeout 12`, in case the guess was wrong) did NOT hang it - it
+   * failed cleanly, exit 1, "2 ARMHEARTBEAT CASE(S) WRONG", because these first-two assertions
+   * run synchronously right after armHeartbeat() returns, before the old code's internal await
+   * could matter to a caller that does not itself await the whole function - which is also true
+   * of the real call site's own first two lines (armHeartbeat() itself is not awaited there;
+   * only the `firstBeat` it returns is, afterward). A caller that awaited the WHOLE function
+   * (unlike anything here, fixture or production) would still hang on the old shape.
+   */
+  let ahScheduleCalledWith = null;
+  let ahBeatCalled = false;
+  const { handle: ahHandle } = armHeartbeat('self-test-label', 5, {
+    beatFn: () => {
+      ahBeatCalled = true;
+      return new Promise(() => {}); // never resolves - the old code would block HERE, forever
+    },
+    scheduleFn: (fn, ms) => {
+      ahScheduleCalledWith = ms;
+      return { unref: () => {} };
+    },
+  });
+  let ahCaughtErr = null;
+  const { firstBeat: ahFirstBeat } = armHeartbeat('self-test-label', 5, {
+    beatFn: () => Promise.reject(new Error('boom')),
+    scheduleFn: () => ({ unref: () => {} }),
+    onFirstBeatError: (err) => {
+      ahCaughtErr = err;
+    },
+  });
+  // #249 LIVE-MEASURED REGRESSION, FIXED: a first version left this fully fire-and-forget, and
+  // `--heartbeat N --once` against #bus silently never published its presence message - poll()
+  // reached process.exit() before the un-awaited first beat()'s own fetch had even landed. The
+  // call site now awaits `firstBeat` for exactly this reason; this line proves doing so cannot
+  // throw even when beatFn itself rejects, matching what that await now relies on in production.
+  await ahFirstBeat;
+  const ahCases = [
+    ['scheduleFn is called before this function returns, even though beatFn never resolves', ahScheduleCalledWith, 5000],
+    ['beatFn is also invoked immediately - the first beat, not only the recurring schedule', ahBeatCalled, true],
+    ["the returned handle is unref-able, matching the real setInterval() contract at the call site", typeof ahHandle.unref, 'function'],
+    ['a rejecting first beatFn call reaches onFirstBeatError instead of becoming an unhandled rejection', ahCaughtErr?.message, 'boom'],
+  ];
+  for (const [name, got, want] of ahCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  armHeartbeat (#249): ${name}`);
+  const ahBad = ahCases.filter(([, got, want]) => got !== want).length;
+
+  /**
+   * beat()'s reentrancy guard (#249): with the interval no longer waiting on the first call to
+   * settle, two beat() invocations can legitimately overlap in real operation (a slow-but-not-
+   * yet-timed-out call still in flight when the next scheduled tick fires). Proven with a
+   * fetchImpl that only settles once explicitly released, so a second beat() call started
+   * while the first is still pending can be observed returning WITHOUT making its own
+   * concurrent network call - bounded by a race against a short timer rather than a bare
+   * `await`, so a regression here fails the case instead of hanging the suite.
+   */
+  const savedPresenceTsRi = presenceTs;
+  const savedConsecutiveBeatFailuresRi = consecutiveBeatFailures;
+  const savedRateLimitedUntilRi = rateLimitedUntil;
+  presenceTs = 'FAKE.000000';
+  consecutiveBeatFailures = 0;
+  rateLimitedUntil = 0;
+  let riFetchCalls = 0;
+  let releaseFirst;
+  const gate = new Promise((resolve) => {
+    releaseFirst = resolve;
+  });
+  const controlledFetch = async () => {
+    riFetchCalls++;
+    await gate;
+    return { status: 200, headers: { get: () => null }, json: async () => ({ ok: true, ts: '123.456' }) };
+  };
+  const firstBeat = beat('self-test-label', 60, { fetchImpl: controlledFetch, authToken: SELF_TEST_TOKEN });
+  const secondBeat = beat('self-test-label', 60, { fetchImpl: controlledFetch, authToken: SELF_TEST_TOKEN });
+  const secondSettledInTime = await Promise.race([secondBeat.then(() => true), new Promise((resolve) => setTimeout(() => resolve(false), 200))]);
+  const callsAfterSecondAttempt = riFetchCalls;
+  releaseFirst();
+  await firstBeat;
+  if (!secondSettledInTime) await secondBeat; // drain it now that the gate is open either way
+  presenceTs = savedPresenceTsRi;
+  consecutiveBeatFailures = savedConsecutiveBeatFailuresRi;
+  rateLimitedUntil = savedRateLimitedUntilRi;
+  const riCases = [
+    ['a second beat() call made while the first is still in flight returns without waiting for it', secondSettledInTime, true],
+    ['...and does not itself call fetch a second time - it is skipped, not queued', callsAfterSecondAttempt, 1],
+  ];
+  for (const [name, got, want] of riCases) console.log(`  ${got === want ? 'pass' : 'FAIL'}  beat reentrancy guard (#249): ${name}`);
+  const riBad = riCases.filter(([, got, want]) => got !== want).length;
+
   // ⚠ EVERY counter must appear in BOTH the summary and the exit code. regBad was computed
   // and left out of both for one edit - seven cases that printed pass/FAIL and could not
   // fail the suite. A test that cannot fail is the defect this file documents two functions
@@ -1204,12 +1393,12 @@ async function selfTest() {
   const tooFew = ran < CASE_FLOOR;
   if (tooFew) console.log(`\n⛔ ONLY ${ran} CASES RAN, floor is ${CASE_FLOOR} - a block stopped running.`);
   console.log(
-    missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || cvBad || scBad || ccBad || rtBad || plBad || gcBad || cvVerBadTotal || narBad || dsBad || ntBad || rmBad || btWarmBad || btColdBad || tooFew
+    missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || cvBad || scBad || ccBad || rtBad || plBad || gcBad || cvVerBadTotal || narBad || dsBad || ntBad || rmBad || btWarmBad || btColdBad || crBad || crEndToEndBad || ftBad || ahBad || riBad || tooFew
       ? `\n${tooFew ? `ONLY ${ran} CASES RAN, FLOOR IS ${CASE_FLOOR} - A BLOCK STOPPED RUNNING. ` : ''}${missing.length} FLAG(S) MISSING FROM USAGE${missing.length ? `: ${missing.join(', ')}` : ''}` +
-        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}${xuBad ? `, ${xuBad} X-UPDATE CASE(S) WRONG` : ''}${sjBad ? `, ${sjBad} SAFEJSON CASE(S) WRONG` : ''}${vbBad ? `, ${vbBad} VERIFYBOTID CASE(S) WRONG` : ''}${msBad ? `, ${msBad} MEMBERSTATUS CASE(S) WRONG` : ''}${pbBad ? `, ${pbBad} PRESENCEBLOCKS CASE(S) WRONG` : ''}${rbBad ? `, ${rbBad} REARMBLOCKS CASE(S) WRONG` : ''}${pvBad ? `, ${pvBad} PONGVERDICT CASE(S) WRONG` : ''}${cvBad ? `, ${cvBad} COLLISIONVERDICT CASE(S) WRONG` : ''}${scBad ? `, ${scBad} STILLCOLLIDED CASE(S) WRONG` : ''}${ccBad ? `, ${ccBad} CONFIRMEDCOLLISIONBLOCKS CASE(S) WRONG` : ''}${rtBad ? `, ${rtBad} RESOLUTIONTRACE CASE(S) WRONG` : ''}${plBad ? `, ${plBad} ISNODEPROCESSLINE CASE(S) WRONG` : ''}${gcBad ? `, ${gcBad} CONSISTENCY-GATE CASE(S) WRONG` : ''}${cvVerBadTotal ? `, ${cvVerBadTotal} CMPVER CASE(S) WRONG` : ''}${narBad ? `, ${narBad} NEWESTANNOUNCEDRELEASE CASE(S) WRONG` : ''}${dsBad ? `, ${dsBad} DIAGSUFFIX CASE(S) WRONG` : ''}${ntBad ? `, ${ntBad} SLACKPOST NETWORK-FAILURE CASE(S) WRONG` : ''}${rmBad ? `, ${rmBad} RECENTMESSAGES NETWORK-FAILURE CASE(S) WRONG` : ''}${btWarmBad ? `, ${btWarmBad} BEAT (WARM) NETWORK-FAILURE CASE(S) WRONG` : ''}${btColdBad ? `, ${btColdBad} BEAT (COLD) NETWORK-FAILURE CASE(S) WRONG` : ''}`
+        `${bad ? `, ${bad} COLLISION CASE(S) WRONG` : ''}${regBad ? `, ${regBad} REGISTRATION CASE(S) WRONG` : ''}${dupBad ? `, ${dupBad} CASE-DUP CASE(S) WRONG` : ''}${pathBad ? `, ${pathBad} PATH CASE(S) WRONG` : ''}${xuBad ? `, ${xuBad} X-UPDATE CASE(S) WRONG` : ''}${sjBad ? `, ${sjBad} SAFEJSON CASE(S) WRONG` : ''}${vbBad ? `, ${vbBad} VERIFYBOTID CASE(S) WRONG` : ''}${msBad ? `, ${msBad} MEMBERSTATUS CASE(S) WRONG` : ''}${pbBad ? `, ${pbBad} PRESENCEBLOCKS CASE(S) WRONG` : ''}${rbBad ? `, ${rbBad} REARMBLOCKS CASE(S) WRONG` : ''}${pvBad ? `, ${pvBad} PONGVERDICT CASE(S) WRONG` : ''}${cvBad ? `, ${cvBad} COLLISIONVERDICT CASE(S) WRONG` : ''}${scBad ? `, ${scBad} STILLCOLLIDED CASE(S) WRONG` : ''}${ccBad ? `, ${ccBad} CONFIRMEDCOLLISIONBLOCKS CASE(S) WRONG` : ''}${rtBad ? `, ${rtBad} RESOLUTIONTRACE CASE(S) WRONG` : ''}${plBad ? `, ${plBad} ISNODEPROCESSLINE CASE(S) WRONG` : ''}${gcBad ? `, ${gcBad} CONSISTENCY-GATE CASE(S) WRONG` : ''}${cvVerBadTotal ? `, ${cvVerBadTotal} CMPVER CASE(S) WRONG` : ''}${narBad ? `, ${narBad} NEWESTANNOUNCEDRELEASE CASE(S) WRONG` : ''}${dsBad ? `, ${dsBad} DIAGSUFFIX CASE(S) WRONG` : ''}${ntBad ? `, ${ntBad} SLACKPOST NETWORK-FAILURE CASE(S) WRONG` : ''}${rmBad ? `, ${rmBad} RECENTMESSAGES NETWORK-FAILURE CASE(S) WRONG` : ''}${btWarmBad ? `, ${btWarmBad} BEAT (WARM) NETWORK-FAILURE CASE(S) WRONG` : ''}${btColdBad ? `, ${btColdBad} BEAT (COLD) NETWORK-FAILURE CASE(S) WRONG` : ''}${crBad ? `, ${crBad} CLAMPRATELIMITWAITMS CASE(S) WRONG` : ''}${crEndToEndBad ? `, ${crEndToEndBad} CLAMPRATELIMITWAITMS END-TO-END CASE(S) WRONG` : ''}${ftBad ? `, ${ftBad} FETCH-TIMEOUT CASE(S) WRONG` : ''}${ahBad ? `, ${ahBad} ARMHEARTBEAT CASE(S) WRONG` : ''}${riBad ? `, ${riBad} BEAT-REENTRANCY CASE(S) WRONG` : ''}`
       : `\n${ran} cases, all pass`,
   );
-  process.exit(missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || cvBad || scBad || ccBad || rtBad || plBad || gcBad || cvVerBadTotal || narBad || dsBad || ntBad || rmBad || btWarmBad || btColdBad || tooFew ? 1 : 0);
+  process.exit(missing.length || bad || regBad || dupBad || pathBad || xuBad || sjBad || vbBad || msBad || pbBad || rbBad || pvBad || cvBad || scBad || ccBad || rtBad || plBad || gcBad || cvVerBadTotal || narBad || dsBad || ntBad || rmBad || btWarmBad || btColdBad || crBad || crEndToEndBad || ftBad || ahBad || riBad || tooFew ? 1 : 0);
 }
 
 /**
@@ -1247,6 +1436,63 @@ let presenceTs = null;
 let consecutiveBeatFailures = 0;
 const MESSAGE_GONE_ERRORS = ['message_not_found'];
 const MAX_HISTORY_PAGES = 25;
+/**
+ * #249: a fetch() that connects but never receives ANY response - accepted by the OS, never
+ * answered, no TCP RST, no DNS failure - never rejects on its own, so it never reaches the
+ * `catch` blocks #245 already put around every fetchImpl() call in this file. Those catches
+ * only fire on a THROWN rejection; a promise that simply never settles sails past them.
+ * AbortSignal.timeout() converts that unbounded hang into a thrown AbortError after this many
+ * ms, which lands in the exact same #245 catch and comes out the same {ok:false,
+ * error:'network_error', ...} shape a caller already has to handle. See armHeartbeat(), below
+ * beat(), for why an unbounded hang specifically in the FIRST heartbeat call was able to
+ * disable presence publishing for the life of the process with no crash.
+ */
+const FETCH_TIMEOUT_MS = 30_000;
+// #249: guards beat() against two concurrent attempts running at once - the recurring
+// setInterval tick and a still-in-flight earlier call (slow, not yet timed out) racing the
+// same presenceTs/consecutiveBeatFailures state. Only a real hazard now that armHeartbeat()
+// (below beat()) no longer waits for the first beat() to settle before arming the interval.
+let beatInFlight = false;
+/**
+ * ⛔⛔ #249, THE BETTER-FITTING CANDIDATE: THREE SITES TURN `retry-after` INTO A WAIT WITH NO
+ * UPPER BOUND, AND ONLY ONE OF THEM (beat()) IS EVER READ AS A GATE.
+ *
+ * recentMessages(), beat() and poll() each compute `(headerSecs > 0 ? headerSecs : 60) * 1000`
+ * from a 429's `retry-after` header and fold it into `rateLimitedUntil` via
+ * `Math.max(rateLimitedUntil, Date.now() + waitMs)` - and every one of the three trusted
+ * `Number.isFinite(headerSecs)` as sufficient, with nothing capping HOW large a finite value
+ * could be. A single unusually large header value - a malformed proxy response, or any value
+ * shaped like an absolute epoch-seconds timestamp rather than a relative delta - would push
+ * `rateLimitedUntil` arbitrarily far into the future, with no code anywhere that ever pulls it
+ * back down.
+ *
+ * ⚠⚠ AND `rateLimitedUntil` HAS EXACTLY ONE READ SITE THAT GATES ON IT: `beat()`'s own
+ * `if (Date.now() < rateLimitedUntil) return;`. poll() WRITES to the same variable (so a 429
+ * seen while polling also stands the heartbeat down - #143) but never READS it for its own
+ * pacing - it paces itself from the separate `rateLimitWaitMs`, which resets to 0 after a
+ * single wait cycle (see the bottom of the file). So a `rateLimitedUntil` stuck far in the
+ * future silently suppresses EVERY beat while leaving poll() completely unaffected: no crash,
+ * no first beat ever, normal message delivery throughout - every symptom #249 reported.
+ *
+ * The issue itself named `rateLimitedUntil` as a lead and set it aside: "a standoff long
+ * enough to suppress every beat should have been visible in polling too, and was not." That
+ * reasoning assumed the two backoffs are coupled tightly enough for a stuck deadline to show up
+ * on both sides - measured here to be false: they share only the WRITE target, and poll()'s own
+ * pacing has never read `rateLimitedUntil` at all. The absence of visible backoff in polling is
+ * not evidence against this candidate; it is a predicted consequence of it.
+ *
+ * NOT CONFIRMED AS THE EXACT CAUSE OF THE THREE REPORTED INSTANCES - no header value from
+ * those processes was captured, and none is recoverable now. Recorded as a real, sourced gap
+ * with no upper bound where the issue's own report already named the exact failure mode
+ * ("alive, never published, delivers normally") this gap predicts. Fixed regardless of that
+ * uncertainty: an unbounded wait computed from a value this file does not control is worth
+ * bounding on its own terms, the same reasoning FETCH_TIMEOUT_MS above already rests on.
+ */
+const MAX_RATE_LIMIT_WAIT_MS = 10 * 60 * 1000; // generous over any real Slack retry-after value, nowhere near a multi-day (or longer) stall
+function clampRateLimitWaitMs(rawHeaderSeconds) {
+  const ms = (Number.isFinite(rawHeaderSeconds) && rawHeaderSeconds > 0 ? rawHeaderSeconds : 60) * 1000;
+  return Math.min(ms, MAX_RATE_LIMIT_WAIT_MS);
+}
 
 if (a['self-test']) await selfTest();
 
@@ -1592,13 +1838,15 @@ function diagSuffix(res) {
  * fixture-testable (a rejecting stub) without touching the network - see the ntCases self-test
  * group below.
  */
-async function slackPost(method, body, { fetchImpl = fetch, authToken = token } = {}) {
+async function slackPost(method, body, { fetchImpl = fetch, authToken = token, timeoutMs = FETCH_TIMEOUT_MS } = {}) {
   let r;
   try {
     r = await fetchImpl(`https://slack.com/api/${method}`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json; charset=utf-8' },
       body: JSON.stringify(body),
+      // #249: bounds a fetch that never settles at all - see FETCH_TIMEOUT_MS's own comment.
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
     // ⛔ err?. THROUGHOUT, NOT err. - a `throw null` or `throw undefined` (never seen from a
@@ -1648,7 +1896,7 @@ async function slackPost(method, body, { fetchImpl = fetch, authToken = token } 
  * have hit the identical TDZ this fix already found and fixed five times over.
  */
 
-async function recentMessages(limit = 200, { full = true, stopWhen = null, fetchImpl = fetch, authToken = token } = {}) {
+async function recentMessages(limit = 200, { full = true, stopWhen = null, fetchImpl = fetch, authToken = token, timeoutMs = FETCH_TIMEOUT_MS } = {}) {
   const url = new URL(HISTORY);
   url.searchParams.set('channel', a.channel);
   url.searchParams.set('limit', String(limit));
@@ -1703,7 +1951,10 @@ async function recentMessages(limit = 200, { full = true, stopWhen = null, fetch
      */
     let r;
     try {
-      r = await fetchImpl(url, { headers: { Authorization: `Bearer ${authToken}` } });
+      // #249: same unbounded-hang exposure slackPost() had, on the same fetchImpl() shape -
+      // see FETCH_TIMEOUT_MS's comment. beat()'s cold-start branch reaches this call BEFORE
+      // slackPost() ever runs, so this site needs the identical bound, not just that one.
+      r = await fetchImpl(url, { headers: { Authorization: `Bearer ${authToken}` }, signal: AbortSignal.timeout(timeoutMs) });
     } catch (err) {
       return {
         ok: false,
@@ -1716,9 +1967,10 @@ async function recentMessages(limit = 200, { full = true, stopWhen = null, fetch
     // Shares the poll bucket's backoff clock with poll() and beat() - a 429 seen here must
     // also stand the heartbeat down, or it keeps hitting the same limit on its own timer. (#143)
     if (r.status === 429) {
+      // #249: routed through clampRateLimitWaitMs() - see that function's own comment for why
+      // an unbounded value here can silently disable every future beat while polling continues.
       const headerSecs = Number(r.headers.get('retry-after'));
-      const waitMs = (Number.isFinite(headerSecs) && headerSecs > 0 ? headerSecs : 60) * 1000;
-      rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + waitMs);
+      rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + clampRateLimitWaitMs(headerSecs));
     }
     const res = await safeJson(r);
     // ⚠ A FAILURE MID-PAGINATION DISCARDS THE PAGES ALREADY READ, DELIBERATELY. A positive
@@ -2338,13 +2590,13 @@ function rearmBlocks(label, age, every, verdict) {
  * still caps how much of it actually lands, independent of whether this file's own backoff
  * bookkeeping covers the call. Disclosed here rather than left implicit. (found by review, #196)
  */
-async function announceRearm(label, p, count, { fetchImpl = fetch, authToken = token } = {}) {
+async function announceRearm(label, p, count, { fetchImpl = fetch, authToken = token, timeoutMs = FETCH_TIMEOUT_MS } = {}) {
   const age = p.beat ? Math.max(0, Math.floor(Date.now() / 1000 - p.beat)) : null;
   const verdict = age != null ? collisionVerdict(count, age, p.every) : 'clean';
   const res = await slackPost(
     'chat.postMessage',
     { channel: a.channel, reply_broadcast: true, ...rearmBlocks(label, age, p.every, verdict) },
-    { fetchImpl, authToken },
+    { fetchImpl, authToken, timeoutMs },
   );
   if (!res.ok) console.error(`[watch] could not announce re-arm continuity: ${res.error}${diagSuffix(res)}`);
 }
@@ -2355,12 +2607,27 @@ async function announceRearm(label, p, count, { fetchImpl = fetch, authToken = t
 // Extend only after measuring a new one; see the comment at this constant's one use, in
 // beat() below. (#177)
 
-async function beat(label, every, { fetchImpl = fetch, authToken = token } = {}) {
+async function beat(label, every, { fetchImpl = fetch, authToken = token, timeoutMs = FETCH_TIMEOUT_MS } = {}) {
   // ⛔ SHARES THE POLL BUCKET'S BACKOFF. This runs on its own setInterval, independent of
   // the poll loop's wait - without this check it keeps issuing chat.update/chat.postMessage
   // through a stand-off poll() just announced, deepening the exact limit that message
   // says is being honoured. (#143)
   if (Date.now() < rateLimitedUntil) return;
+  // #249: armHeartbeat() no longer waits for one beat() to settle before the next is
+  // scheduled - a call slow enough to still be in flight when the following tick fires must
+  // not run concurrently with it and race the shared presenceTs/consecutiveBeatFailures
+  // state below. Skipping (not queuing) is the same "at worst presence stays briefly behind,
+  // never duplicated" tradeoff this function already accepts elsewhere in here.
+  if (beatInFlight) return;
+  beatInFlight = true;
+  try {
+    await beatOnce(label, every, { fetchImpl, authToken, timeoutMs });
+  } finally {
+    beatInFlight = false;
+  }
+}
+
+async function beatOnce(label, every, { fetchImpl, authToken, timeoutMs }) {
   // Reuse this session's existing presence message if there is one, so a restart does
   // not litter the channel with orphans that a roster would then report as dead.
   if (!presenceTs) {
@@ -2374,7 +2641,7 @@ async function beat(label, every, { fetchImpl = fetch, authToken = token } = {})
     // message anywhere in history. The instant a page contains it, later pages have
     // nothing left to contribute; draining all MAX_HISTORY_PAGES of them regardless would
     // make every watcher's startup pay the full cost of a busy channel for no benefit. (#177)
-    const look = await recentMessages(200, { stopWhen: (msgs) => msgs.some((m) => presenceOf(m)?.session === label), fetchImpl, authToken });
+    const look = await recentMessages(200, { stopWhen: (msgs) => msgs.some((m) => presenceOf(m)?.session === label), fetchImpl, authToken, timeoutMs });
     if (!look.ok) console.error(`[watch] could not look up an existing presence message (${look.error}${diagSuffix(look)}); posting a NEW one, which may leave an orphan.`);
     for (const m of look.messages) {
       const p = presenceOf(m);
@@ -2389,7 +2656,7 @@ async function beat(label, every, { fetchImpl = fetch, authToken = token } = {})
         // anything even when this same count had. (#216)
         const count = localProcessesWithLabel(label);
         warnIfColliding(p, label, count);
-        await announceRearm(label, p, count, { fetchImpl, authToken });
+        await announceRearm(label, p, count, { fetchImpl, authToken, timeoutMs });
         if (stillCollided(count)) scheduleCollisionRecheck(label);
         break;
       }
@@ -2397,8 +2664,8 @@ async function beat(label, every, { fetchImpl = fetch, authToken = token } = {})
   }
   const body = presenceBlocks(label, every, consecutiveBeatFailures);
   const res = presenceTs
-    ? await slackPost('chat.update', { channel: a.channel, ts: presenceTs, ...body }, { fetchImpl, authToken })
-    : await slackPost('chat.postMessage', { channel: a.channel, ...body }, { fetchImpl, authToken });
+    ? await slackPost('chat.update', { channel: a.channel, ts: presenceTs, ...body }, { fetchImpl, authToken, timeoutMs })
+    : await slackPost('chat.postMessage', { channel: a.channel, ...body }, { fetchImpl, authToken, timeoutMs });
   if (res.ok) {
     presenceTs = res.ts;
     // ⚠⚠ DECAYS BY ONE PER SUCCESS - DOES NOT SNAP TO ZERO. Measured live: a hard reset
@@ -2414,8 +2681,8 @@ async function beat(label, every, { fetchImpl = fetch, authToken = token } = {})
     consecutiveBeatFailures++;
     console.error(`[watch] heartbeat failed: ${res.error}${diagSuffix(res)}`);
     if (res.error === 'ratelimited') {
-      const waitMs = (res.retryAfter || 60) * 1000;
-      rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + waitMs);
+      // #249: routed through clampRateLimitWaitMs() - see that function's own comment.
+      rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + clampRateLimitWaitMs(res.retryAfter));
     } else if (MESSAGE_GONE_ERRORS.includes(res.error)) {
       // ⛔⛔ ONCE SET, presenceTs NEVER WENT BACK TO null. If the target message became
       // unupdatable - deleted, or otherwise unreachable - every later tick retried the
@@ -2450,6 +2717,60 @@ async function beat(label, every, { fetchImpl = fetch, authToken = token } = {})
       presenceTs = null;
     }
   }
+}
+
+/**
+ * ⛔⛔ #249: THE RECURRING TIMER USED TO BE GATED BEHIND THE FIRST beat() COMPLETING.
+ *
+ * The call site (below the flag-parsing block, near the bottom of the file) used to read
+ * `await beat(...); setInterval(() => beat(...), ...)` - the interval was only ever
+ * registered AFTER the first beat() settled. FETCH_TIMEOUT_MS (above) now bounds every
+ * individual network call beat() makes, but "bounded" is not "instant": a first call that
+ * takes the full timeout to fail, on a channel/workspace where every one of beat()'s several
+ * possible network calls hits the same wall, could still leave the interval unregistered for
+ * that long - and if it EVER threw synchronously instead of resolving (an injected fetchImpl,
+ * a future refactor upstream of the try/catch this function already has), the old shape had
+ * nothing scheduled to replace it: no crash, no first beat, no interval, ever, for the life of
+ * the process, exactly the symptom #249 reported.
+ *
+ * ⛔⛔ THE FIRST VERSION OF THIS FIX MADE THE FIRST beat() FULLY FIRE-AND-FORGET, AND A LIVE
+ * CHECK CAUGHT WHAT THAT BROKE: `--heartbeat N --once` no longer reliably PUBLISHED anything.
+ * `armHeartbeat()` returned before the first beat()'s own network call had even been dispatched;
+ * `poll()` (which IS awaited at the call site) can finish and reach `process.exit()` before that
+ * un-awaited promise ever settles, and `process.exit()` does not wait for pending work to drain -
+ * it kills the process mid-flight. Measured live against #bus: `--heartbeat 30 --session
+ * self-test-249-live --once` printed "publishing presence..." and exited 0, but neither
+ * `--presence` nor `--raw --since 60s` afterward showed any trace of it - the heartbeat this
+ * repo's own `slack-session-bus/SKILL.md` calls the thing a peer trusts to mean "alive" had
+ * silently never been sent, for a combination of flags nothing here rejects as invalid.
+ *
+ * The fix keeps the interval armed FIRST (still unconditional on the first call settling - that
+ * is what #249 itself is about) but returns the first call's own promise, ALREADY wrapped so it
+ * never rejects, for the CALL SITE to await afterward. Awaiting it there is now safe in a way it
+ * was not before this file had FETCH_TIMEOUT_MS: the wait is bounded (beat() cannot hang, and
+ * cannot throw), and by the time that await begins the interval is already independently
+ * scheduled - so even the full timeout elapsing here delays presence, once, by seconds, rather
+ * than disabling it for the life of the process the way the ORIGINAL #249 defect did. The two
+ * fixes compose: bounding beat() (FETCH_TIMEOUT_MS) is what makes re-awaiting the first call
+ * safe again; arming the interval first is what stops that await from being load-bearing for
+ * every later beat the way it used to be.
+ *
+ * Extracted into its own function - rather than inlined at the call site, the first version of
+ * this fix - specifically so "scheduleFn runs before beatFn's first call can possibly have
+ * settled" is a property a fixture can assert directly (ahCases, below in selfTest()) with a
+ * beatFn that never resolves, instead of only being inferable from reading the source.
+ *
+ * `beatFn`/`scheduleFn`/`onFirstBeatError` are injectable for exactly that fixture; real
+ * callers get `beat`/`setInterval`/a console.error line.
+ */
+function armHeartbeat(label, every, { beatFn = beat, scheduleFn = setInterval, onFirstBeatError = (err) => console.error(`[watch] first heartbeat threw: ${err?.message || err}`) } = {}) {
+  const handle = scheduleFn(() => beatFn(label, every), every * 1000);
+  handle.unref?.();
+  // The caller decides whether to await this - see the docblock above for why doing so is now
+  // safe (bounded) rather than the load-bearing block it used to be. Caught here regardless, so
+  // a caller that does NOT await it is still never exposed to an unhandled rejection.
+  const firstBeat = beatFn(label, every).catch(onFirstBeatError);
+  return { handle, firstBeat };
 }
 
 /**
@@ -2669,10 +2990,14 @@ async function poll() {
     // on 429 and the old form threw it away with the object that carried it.
     const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
     if (r.status === 429) {
+      // #249: routed through clampRateLimitWaitMs() - see that function's own comment.
       const headerSecs = Number(r.headers.get('retry-after'));
       rateLimitHadHeader = Number.isFinite(headerSecs) && headerSecs > 0;
-      rateLimitWaitMs = (rateLimitHadHeader ? headerSecs : 60) * 1000;
-      rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + rateLimitWaitMs);
+      // Computed via clampRateLimitWaitMs() twice, deliberately, rather than reusing one
+      // result in both places - a trivial pure function, and it keeps this assignment textually
+      // identical to the other two 429-handling sites for the sibling-sweep self-test below.
+      rateLimitWaitMs = clampRateLimitWaitMs(headerSecs);
+      rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + clampRateLimitWaitMs(headerSecs));
     }
     // ⚠ Routed through safeJson() so a non-JSON body reads as `non_json_response` here
     // too - the same grep-able marker as the other four sites, rather than this one path
@@ -5349,9 +5674,6 @@ if (heartbeatSec > 0) {
         '        look for it. Restart with --session <label> if this lane should be addressable.',
     );
   }
-  await beat(selfLabel, heartbeatSec);
-  console.error(`[watch] publishing presence as "${selfLabel}" every ${heartbeatSec}s (read it with --presence)`);
-
   // NOTE: there is deliberately NO exit handler here. SIGTERM is not a POSIX signal on
   // Windows - the process dies without a JS-visible event, so a handler never runs, and
   // a Monitor's TaskStop kills the same way. Shipping a safeguard that silently never
@@ -5359,7 +5681,20 @@ if (heartbeatSec > 0) {
   // the explicit --retire command, and rely on age-out for sessions that crash.
   // Deliberately on its own timer rather than tied to the poll interval: how often you
   // check for messages and how often you prove you are alive are different questions.
-  setInterval(() => beat(selfLabel, heartbeatSec), heartbeatSec * 1000).unref?.();
+  //
+  // ⛔⛔ armHeartbeat() ARMS THE INTERVAL BEFORE THE FIRST beat() IS AWAITED - NOT AFTER.
+  // #249: the old code here was `await beat(...); setInterval(...)`, so an unbounded-hung
+  // (or, before FETCH_TIMEOUT_MS above, even just slow) first call left NOTHING scheduled
+  // to ever beat again. See armHeartbeat()'s own docblock, above beatOnce(), for the full
+  // account - including why `await firstBeat` below is safe now and was NOT what caused
+  // the original defect: the interval is already armed by the time this line runs, and
+  // FETCH_TIMEOUT_MS means the wait it performs is bounded, not the unbounded one #249
+  // reported. Awaiting it here (rather than leaving it fire-and-forget, tried first and
+  // measured live to silently drop the presence post under `--heartbeat --once`) is what
+  // keeps a short-lived invocation from exiting before its own first heartbeat is sent.
+  const { firstBeat } = armHeartbeat(selfLabel, heartbeatSec);
+  console.error(`[watch] publishing presence as "${selfLabel}" every ${heartbeatSec}s (read it with --presence)`);
+  await firstBeat;
 }
 
 /**
