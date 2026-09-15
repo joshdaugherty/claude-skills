@@ -1018,7 +1018,7 @@ const MAX_HISTORY_PAGES = 25;
  * EMPTY channel and must not collapse into it, same discipline as the sibling scripts' own
  * channelHistory(); retryAfter is only meaningful when error is 'ratelimited'.
  */
-async function channelHistory(historyToken, { oldest } = {}) {
+async function channelHistory(historyToken, { oldest, fetchImpl = fetch, timeoutMs = FETCH_TIMEOUT_MS } = {}) {
   const messages = [];
   let cur = null;
   let pages = 0;
@@ -1034,7 +1034,10 @@ async function channelHistory(historyToken, { oldest } = {}) {
     let r;
     let j;
     try {
-      r = await fetch(u, { headers: { Authorization: `Bearer ${historyToken}` } });
+      // #252: bounds a fetch that never settles at all - see FETCH_TIMEOUT_MS's own comment,
+      // above whoAmI(). The existing try/catch already caught a THROWN failure; it could
+      // never catch a hang, which is not an exception at all.
+      r = await fetchImpl(u, { headers: { Authorization: `Bearer ${historyToken}` }, signal: AbortSignal.timeout(timeoutMs) });
       j = await r.json();
     } catch (err) {
       return { ok: false, error: err.message, messages: [], truncated: false };
@@ -1175,7 +1178,7 @@ async function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 92; // raise when adding cases - a constant, reviewed on change (+1 for --re, #201; +7 resolutionTrace, #222; +3 missingTokenMessage zsh/bash-profile wording, #241; +1 settle flag, +6 tsCmp, +6 meta, +5 collisionVerdict, +5 resolveSettleSeconds, +7 collisionCandidates, #242; +2 whoAmI fetch timeout, #250) - re-verified against real --self-test output after merging #241 and #242
+  const CASE_FLOOR = 94; // raise when adding cases - a constant, reviewed on change (+1 for --re, #201; +7 resolutionTrace, #222; +3 missingTokenMessage zsh/bash-profile wording, #241; +1 settle flag, +6 tsCmp, +6 meta, +5 collisionVerdict, +5 resolveSettleSeconds, +7 collisionCandidates, #242; +2 whoAmI fetch timeout, #250; +2 channelHistory fetch timeout, #252) - re-verified against real --self-test output after merging #241 and #242
   const flags = Object.keys(OPTIONS).filter((f) => f !== 'help');
   const missing = flags.filter((f) => !USAGE.includes(`--${f}`));
   for (const f of flags) console.log(`  ${USAGE.includes(`--${f}`) ? 'pass' : 'FAIL'}  --${f}`);
@@ -1409,6 +1412,20 @@ async function selfTest() {
   for (const [name, got, want] of wa) console.log(`  ${got === want ? 'pass' : 'FAIL'}  whoAmI fetch timeout (#250): ${name}`);
   const waFailed = wa.filter(([, got, want]) => got !== want).length;
 
+  /**
+   * channelHistory() (#252, found reviewing #250): the existing try/catch already caught a
+   * THROWN network failure; it could never bound a hang, which is not an exception at all -
+   * the same hangingFetch fixture as whoAmI() above proves this site now returns rather than
+   * hanging once timeoutMs elapses.
+   */
+  const chTimeoutResult = await channelHistory('self-test-fake-token-never-sent', { fetchImpl: hangingFetch, timeoutMs: 20 });
+  const ch = [
+    ['a fetchImpl that never settles on its own still resolves once the injected timeout fires', chTimeoutResult.ok, false],
+    ['messages is [] on a timeout, not undefined - every caller iterates it unconditionally', Array.isArray(chTimeoutResult.messages) && chTimeoutResult.messages.length === 0, true],
+  ];
+  for (const [name, got, want] of ch) console.log(`  ${got === want ? 'pass' : 'FAIL'}  channelHistory fetch timeout (#252): ${name}`);
+  const chFailed = ch.filter(([, got, want]) => got !== want).length;
+
   const mdFailed = md.filter(([, got, want]) => got !== want).length;
   const tbl = toSlackMrkdwn('| a | b |\n| - | - |').changes.tableRows;
   console.log(`  ${tbl === 2 ? 'pass' : 'FAIL'}  mrkdwn: table rows counted (${tbl}), warned not converted`);
@@ -1424,7 +1441,7 @@ async function selfTest() {
   // it guards, which would move with them and assert nothing. Raise it when adding cases.
   const tooFew = ran < CASE_FLOOR;
   if (tooFew) console.log(`\n⛔ ONLY ${ran} CASES RAN, floor is ${CASE_FLOOR} - a block stopped running.`);
-  const bad = missing.length + manFailed + mdFailed + platFailed + rtFailed + tcFailed + mtFailed + cvFailed + ccFailed + rsFailed + waFailed + (tbl === 2 ? 0 : 1) + (tooFew ? 1 : 0);
+  const bad = missing.length + manFailed + mdFailed + platFailed + rtFailed + tcFailed + mtFailed + cvFailed + ccFailed + rsFailed + waFailed + chFailed + (tbl === 2 ? 0 : 1) + (tooFew ? 1 : 0);
   console.log(
     bad
       ? `\n${bad} FAILURE(S)${missing.length ? ` - flags missing from usage: ${missing.join(', ')}` : ''}`
@@ -2068,6 +2085,10 @@ try {
       'Content-Type': 'application/json; charset=utf-8',
     },
     body: JSON.stringify(payload),
+    // #252: bounds a fetch that never settles at all - see FETCH_TIMEOUT_MS's own comment,
+    // above whoAmI(). This is top-level module code, unreachable from selfTest(), so no
+    // fetchImpl/TDZ concern applies the way it does for channelHistory()/api()/apiPost().
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
   // Kept so a 429 can report what Slack asked for - the sibling scripts do this and this
   // one, the highest-volume write path on the bus, did not. (#119)
