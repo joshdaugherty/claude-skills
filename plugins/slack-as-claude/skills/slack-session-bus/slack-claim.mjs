@@ -264,10 +264,22 @@ function resolutionTrace(varName = tokenVar(), root = gitRoot(), exists = exists
 }
 
 /** Who does this token actually belong to? One call, and it is the only source of truth. */
-async function whoAmI(token) {
+/**
+ * #250 (sibling of slack-watch.mjs's #249 fix): this fetch() had no bound - a connection
+ * accepted but never answered hangs forever, past the catch below, which only fires on a
+ * THROWN rejection, never on a promise that simply never settles. AbortSignal.timeout()
+ * converts that into a thrown TimeoutError after this many ms, landing in the same catch.
+ */
+const FETCH_TIMEOUT_MS = 30_000;
+
+async function whoAmI(token, { fetchImpl = fetch, timeoutMs = FETCH_TIMEOUT_MS } = {}) {
   try {
     const j = await (
-      await fetch('https://slack.com/api/auth.test', { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
+      await fetchImpl('https://slack.com/api/auth.test', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(timeoutMs),
+      })
     ).json();
     return j.ok
       ? { ok: true, team: j.team, team_id: j.team_id, url: j.url, bot_id: j.bot_id, user_id: j.user_id }
@@ -469,7 +481,7 @@ function rankClaims(claims, { exclude = null } = {}) {
 // runs is indistinguishable from a broken one. This feeds rankClaims() the input
 // the transport cannot produce, so the branch is exercised on demand instead of
 // being carried untested forever or dropped and silently becoming arbitrary.
-function selfTest() {
+async function selfTest() {
   // ⛔⛔ COUNT EVERY ASSERTION ACTUALLY EMITTED. Summing the case arrays was the obvious
   // implementation and it UNDERCOUNTED BY HALF, because several checks print pass/FAIL
   // outside any array - and a floor built on a number that does not see them is the very
@@ -480,7 +492,7 @@ function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 37; // raise when adding cases - a constant, reviewed on change (+5 for unreadContributions, #202; +7 resolutionTrace, #222)
+  const CASE_FLOOR = 39; // raise when adding cases - a constant, reviewed on change (+5 for unreadContributions, #202; +7 resolutionTrace, #222; +2 whoAmI fetch timeout, #250)
   let failed = 0;
   const check = (name, got, want) => {
     const ok = JSON.stringify(got) === JSON.stringify(want);
@@ -581,6 +593,29 @@ function selfTest() {
     check(`guard "${g.name}" exits ${g.code}, no stack trace`, r.status === g.code && !/ReferenceError|TypeError|is not defined/.test(out), true);
   }
 
+  /**
+   * whoAmI() (#250, sibling of slack-watch.mjs's #249): a fetchImpl that never settles ON ITS
+   * OWN - only in reaction to the abort signal it is given, matching real fetch()'s contract
+   * under AbortSignal.timeout() - must still make whoAmI() return, not hang, once the injected
+   * (short, not the real 30s default) timeoutMs elapses. Ported from slack-watch.mjs's and
+   * slack-post.mjs's identical fixture, including the keepAlive timer: AbortSignal.timeout()'s
+   * own internal timer is unref'd, so with nothing else pending the event loop can drain
+   * before it ever fires - measured live in slack-watch.mjs's original fixture.
+   */
+  const hangingFetch = (url, opts) =>
+    new Promise((resolve, reject) => {
+      const keepAlive = setTimeout(() => {}, 60_000);
+      opts?.signal?.addEventListener('abort', () => {
+        clearTimeout(keepAlive);
+        const err = new Error('The operation was aborted due to timeout');
+        err.name = 'TimeoutError';
+        reject(err);
+      });
+    });
+  const whoAmITimeoutResult = await whoAmI('self-test-fake-token-never-sent', { fetchImpl: hangingFetch, timeoutMs: 20 });
+  check('whoAmI: a fetchImpl that never settles on its own still resolves once the injected timeout fires', whoAmITimeoutResult.ok, false);
+  check('whoAmI: the timeout surfaces as ok:false with a message, not a rejection out of whoAmI() itself', typeof whoAmITimeoutResult.error, 'string');
+
   // ⛔⛔ THE SUMMARY WAS THE BARE STRING `all pass`, WITH NO COUNT. A broken extraction
   // regex, a renamed section or an early return leaves every counter at zero and prints
   // exactly that - so A WHOLE BLOCK CEASING TO RUN IS INDISTINGUISHABLE FROM A GREEN SUITE.
@@ -671,7 +706,7 @@ const USAGE =
       '  QUOTE THE --task TIMESTAMP. A Slack ts has 16 significant digits; a shell that\n' +
   '  parses the bare token as a float rounds it, and Slack silently ignores it.';
 
-if (a['self-test']) selfTest();
+if (a['self-test']) await selfTest();
 
 // ⚠ ARGUMENT VALIDATION BEFORE ANY I/O. This lived inside the --done branch, BELOW the
 // workspace check, so a plain misuse made a network round trip and then died with a
