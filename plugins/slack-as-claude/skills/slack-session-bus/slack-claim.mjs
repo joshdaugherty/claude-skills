@@ -492,7 +492,7 @@ async function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 39; // raise when adding cases - a constant, reviewed on change (+5 for unreadContributions, #202; +7 resolutionTrace, #222; +2 whoAmI fetch timeout, #250)
+  const CASE_FLOOR = 47; // raise when adding cases - a constant, reviewed on change (+5 for unreadContributions, #202; +7 resolutionTrace, #222; +2 whoAmI fetch timeout, #250; +6 api()/apiPost() network-failure + fetch timeout, #252; +2 asserting .error alongside .detail, #252 review)
   let failed = 0;
   const check = (name, got, want) => {
     const ok = JSON.stringify(got) === JSON.stringify(want);
@@ -615,6 +615,37 @@ async function selfTest() {
   const whoAmITimeoutResult = await whoAmI('self-test-fake-token-never-sent', { fetchImpl: hangingFetch, timeoutMs: 20 });
   check('whoAmI: a fetchImpl that never settles on its own still resolves once the injected timeout fires', whoAmITimeoutResult.ok, false);
   check('whoAmI: the timeout surfaces as ok:false with a message, not a rejection out of whoAmI() itself', typeof whoAmITimeoutResult.error, 'string');
+
+  /**
+   * api()/apiPost() (#252): unlike whoAmI() above (which already had a try/catch, only missing
+   * a timeout), these two had NEITHER - a thrown network failure was an uncaught exception,
+   * crashing the whole process, not merely hanging or returning ok:false. Both shapes are
+   * exercised here: a THROWN rejection (rejectingFetch - the new try/catch's own reason for
+   * existing) and a never-settling one (hangingFetch, reused from the whoAmI cases above - the
+   * new AbortSignal.timeout()'s reason for existing). authHeaders is passed explicitly on every
+   * call - never the `= auth`/`= jsonAuth` default - for the same TDZ reason SELF_TEST_TOKEN
+   * exists two lines below: neither `auth` nor `jsonAuth` is initialized yet at this point in
+   * the file, and a self-test fixture has no business touching the real header value regardless.
+   */
+  const rejectingFetch = async () => {
+    throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ETIMEDOUT' } });
+  };
+  const FAKE_AUTH = { Authorization: 'Bearer self-test-fake-token-never-sent' };
+  const apiThrownResult = await api(REPLIES, { channel: 'C0', ts: '1.1', limit: '1' }, { fetchImpl: rejectingFetch, authHeaders: FAKE_AUTH });
+  const apiTimeoutResult = await api(REPLIES, { channel: 'C0', ts: '1.1', limit: '1' }, { fetchImpl: hangingFetch, authHeaders: FAKE_AUTH, timeoutMs: 20 });
+  const apiPostThrownResult = await apiPost(POST, { channel: 'C0', text: 'x' }, { fetchImpl: rejectingFetch, authHeaders: FAKE_AUTH });
+  const apiPostTimeoutResult = await apiPost(POST, { channel: 'C0', text: 'x' }, { fetchImpl: hangingFetch, authHeaders: FAKE_AUTH, timeoutMs: 20 });
+  check('api(): a thrown fetch resolves to ok:false, not an uncaught exception', apiThrownResult.ok, false);
+  // #252 review: the case title claimed .error was checked and only .detail actually was -
+  // proven a real gap, not pedantry (mutating the label to a wrong string still passed this
+  // suite). Both asserted now, matching slack-watch.mjs's own sjCases/rmCases convention.
+  check('api(): the thrown-rejection error is network_error, distinguishable from a real Slack error', apiThrownResult.error, 'network_error');
+  check('api(): the thrown-rejection cause code is preserved, for a log line that says WHICH failure', apiThrownResult.detail, 'ETIMEDOUT');
+  check('api(): a fetchImpl that never settles on its own still resolves once the injected timeout fires', apiTimeoutResult.ok, false);
+  check('apiPost(): a thrown fetch resolves to ok:false, not an uncaught exception', apiPostThrownResult.ok, false);
+  check('apiPost(): the thrown-rejection error is network_error, distinguishable from a real Slack error', apiPostThrownResult.error, 'network_error');
+  check('apiPost(): the thrown-rejection cause code is preserved, for a log line that says WHICH failure', apiPostThrownResult.detail, 'ETIMEDOUT');
+  check('apiPost(): a fetchImpl that never settles on its own still resolves once the injected timeout fires', apiPostTimeoutResult.ok, false);
 
   // ⛔⛔ THE SUMMARY WAS THE BARE STRING `all pass`, WITH NO COUNT. A broken extraction
   // regex, a renamed section or an early return leaves every counter at zero and prints
@@ -777,18 +808,67 @@ const jsonAuth = { ...auth, 'Content-Type': 'application/json; charset=utf-8' };
  * ⚠ UNOBSERVED. Nobody on this project has ever seen a 429 from this app. Both halves are
  * reasoned from the API contract, not from a watched failure, and are recorded as such. (#105)
  */
-async function api(url, params) {
+/**
+ * #252 (found reviewing #250, itself a follow-up to #249): NEITHER fetch() below had a
+ * try/catch OR a timeout.
+ *
+ * ⚠ MEASURED, NOT ASSUMED, WHAT A THROWN FAILURE ACTUALLY DID BEFORE THIS FIX - this file's
+ * own top-level `process.on('uncaughtException', ...)` (near the top of the file) already
+ * caught a thrown rejection here and converted it to a safe `exit 2, "something broke"`, never
+ * the verdict codes 0/1. So the real, measured gap was narrower than "crashes the process":
+ * every one of this function's 7 call sites has its OWN tailored handling for a failed read or
+ * write (rate-limit-aware messaging, "the write already succeeded, do not retry" for a failed
+ * confirmation read, "an unread thread and an unresolved one look identical - UNKNOWN MUST NOT
+ * RENDER AS OPEN" for a failed pre-write read) - a thrown exception bypassed ALL of that and
+ * fell through to the generic top-level handler's raw stack-trace dump instead, losing the
+ * specific guidance without losing safety altogether.
+ *
+ * ⛔⛔ A HANG IS DIFFERENT, AND STAYS THE FULL SEVERITY OF THE ORIGINAL CONCERN - confirmed by
+ * running the negative control both ways: stripping just try/catch (a THROWN rejection) still
+ * exits 2 via the top-level handler; stripping just the timeout `signal` (a fetchImpl that
+ * never settles at all, try/catch left in place) hangs outright, `timeout 8 node ... --self-
+ * test` killed at exit 124. Neither `uncaughtException` nor `unhandledRejection` can fire for a
+ * promise that never settles - there is nothing to catch. AbortSignal.timeout() is what closes
+ * THIS half, the one the process-level handler was never able to cover regardless.
+ *
+ * Both fixed the same way regardless: every one of this function's 7 call sites already checks
+ * `res.ok` - Slack's own API responses always carry `ok`/`error`, so callers were already
+ * written to expect an application-level failure shape. Routing a NETWORK-level failure through
+ * the identical `{ok:false, error:'network_error', detail:...}` shape (matching slack-
+ * watch.mjs's slackPost()/recentMessages(), #245) needed no caller-side changes at all - every
+ * `if (!res.ok)` branch already prints `res.error` as a free-form string, and now gets back its
+ * own specific guidance for a network failure exactly as it already had for a Slack-level one.
+ *
+ * `authHeaders = auth`/`jsonAuth` are DEFAULT parameters, not direct closure reads, for the
+ * same reason slack-watch.mjs's `authToken = token` is: `auth`/`jsonAuth` are declared further
+ * down this file (next to the --channel/token validation they belong to), and a default is
+ * only evaluated when the caller omits it - self-test always passes an explicit fixture, so it
+ * never touches those declarations and never risks the TDZ-in-a-hoisted-scope class this repo
+ * has hit repeatedly (#179/#196/#216/#245/#247/#249) when a const declared AFTER the
+ * `if (a['self-test'])` call site becomes reachable from a fixture that runs before it.
+ */
+async function api(url, params, { fetchImpl = fetch, authHeaders = auth, timeoutMs = FETCH_TIMEOUT_MS } = {}) {
   const u = new URL(url);
   for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
-  const r = await fetch(u, { headers: auth });
+  let r;
+  try {
+    r = await fetchImpl(u, { headers: authHeaders, signal: AbortSignal.timeout(timeoutMs) });
+  } catch (err) {
+    return { ok: false, error: 'network_error', detail: err?.cause?.code || err?.cause?.message || err?.message };
+  }
   const j = await r.json();
   // Kept so the caller can print what Slack asked for. It does NOT retry on it.
   if (r.status === 429) j.retryAfter = Number(r.headers.get('retry-after')) || null;
   return j;
 }
 
-async function apiPost(url, body) {
-  const r = await fetch(url, { method: 'POST', headers: jsonAuth, body: JSON.stringify(body) });
+async function apiPost(url, body, { fetchImpl = fetch, authHeaders = jsonAuth, timeoutMs = FETCH_TIMEOUT_MS } = {}) {
+  let r;
+  try {
+    r = await fetchImpl(url, { method: 'POST', headers: authHeaders, body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) });
+  } catch (err) {
+    return { ok: false, error: 'network_error', detail: err?.cause?.code || err?.cause?.message || err?.message };
+  }
   const j = await r.json();
   if (r.status === 429) j.retryAfter = Number(r.headers.get('retry-after')) || null;
   return j;
