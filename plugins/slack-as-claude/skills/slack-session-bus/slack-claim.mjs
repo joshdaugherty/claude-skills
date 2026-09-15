@@ -492,7 +492,7 @@ async function selfTest() {
     if (/^ {2}(pass|FAIL)/.test(String(z[0] ?? ''))) ran += 1;
     emit(...z);
   };
-  const CASE_FLOOR = 45; // raise when adding cases - a constant, reviewed on change (+5 for unreadContributions, #202; +7 resolutionTrace, #222; +2 whoAmI fetch timeout, #250; +6 api()/apiPost() network-failure + fetch timeout, #252)
+  const CASE_FLOOR = 47; // raise when adding cases - a constant, reviewed on change (+5 for unreadContributions, #202; +7 resolutionTrace, #222; +2 whoAmI fetch timeout, #250; +6 api()/apiPost() network-failure + fetch timeout, #252; +2 asserting .error alongside .detail, #252 review)
   let failed = 0;
   const check = (name, got, want) => {
     const ok = JSON.stringify(got) === JSON.stringify(want);
@@ -636,10 +636,15 @@ async function selfTest() {
   const apiPostThrownResult = await apiPost(POST, { channel: 'C0', text: 'x' }, { fetchImpl: rejectingFetch, authHeaders: FAKE_AUTH });
   const apiPostTimeoutResult = await apiPost(POST, { channel: 'C0', text: 'x' }, { fetchImpl: hangingFetch, authHeaders: FAKE_AUTH, timeoutMs: 20 });
   check('api(): a thrown fetch resolves to ok:false, not an uncaught exception', apiThrownResult.ok, false);
-  check('api(): the thrown-rejection error is network_error, with the cause code preserved', apiThrownResult.detail, 'ETIMEDOUT');
+  // #252 review: the case title claimed .error was checked and only .detail actually was -
+  // proven a real gap, not pedantry (mutating the label to a wrong string still passed this
+  // suite). Both asserted now, matching slack-watch.mjs's own sjCases/rmCases convention.
+  check('api(): the thrown-rejection error is network_error, distinguishable from a real Slack error', apiThrownResult.error, 'network_error');
+  check('api(): the thrown-rejection cause code is preserved, for a log line that says WHICH failure', apiThrownResult.detail, 'ETIMEDOUT');
   check('api(): a fetchImpl that never settles on its own still resolves once the injected timeout fires', apiTimeoutResult.ok, false);
   check('apiPost(): a thrown fetch resolves to ok:false, not an uncaught exception', apiPostThrownResult.ok, false);
-  check('apiPost(): the thrown-rejection error is network_error, with the cause code preserved', apiPostThrownResult.detail, 'ETIMEDOUT');
+  check('apiPost(): the thrown-rejection error is network_error, distinguishable from a real Slack error', apiPostThrownResult.error, 'network_error');
+  check('apiPost(): the thrown-rejection cause code is preserved, for a log line that says WHICH failure', apiPostThrownResult.detail, 'ETIMEDOUT');
   check('apiPost(): a fetchImpl that never settles on its own still resolves once the injected timeout fires', apiPostTimeoutResult.ok, false);
 
   // ⛔⛔ THE SUMMARY WAS THE BARE STRING `all pass`, WITH NO COUNT. A broken extraction
