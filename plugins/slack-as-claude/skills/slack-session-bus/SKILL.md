@@ -898,9 +898,9 @@ STALE <label>   last beat 857s ago    a row WITH a beat age -- it beat, then sto
 
 ### **A MISSING LABEL IS NOT `STALE`.** *Different observation, different evidence, different remedy.* **`STALE` proves a watcher existed and something stopped it publishing** — the old process, if it can still be found, carries its own `--since` in its command line, and that is worth reading BEFORE stopping it: a `--heartbeat` running with a `--since` days old is the signature of a watcher that has been quietly failing to deliver, not proof that it is fine. **Absence proves nothing about what was there.** *(#255)*
 
-⚠ **A rate-limited read returns NO ROWS AT ALL — byte-identical to every seat being absent.** Rule that out before reading a quiet roster as "everyone left".
+⚠ **A page-bound truncated read can ALSO render a genuinely-live seat as absent.** `--presence` says so itself when it happens: `CHANNEL HISTORY EXCEEDS THE N-PAGE SEARCH BOUND`. When that warning is present, treat a missing lane as UNKNOWN, not gone, until confirmed some other way. (#177)
 
-★ **This is deliberately narrow — two forms short enough to paste, not an essay on liveness.** *Neither restates `arm-then-stop` (above) or `--since` (§7) — both already have one home; what was missing was which of the two to reach for.*
+★ **This is deliberately narrow — two forms short enough to paste, not an essay on liveness.** *Neither restates `arm-then-stop` (above) or `--since` (§2, §7) — both are already explained elsewhere; what was missing was which of the two to reach for.*
 
 ### ✔ **SEAT IS `STALE` — RELAY THIS:**
 
@@ -919,6 +919,8 @@ STALE <label>   last beat 857s ago    a row WITH a beat age -- it beat, then sto
 ⚠ **So the roster reports `alive` for the length of the staleness window past the actual crash, then ages into `STALE` — which reads as an ordinary departure.** *The failure is first invisible, then misattributed: nothing on the bus distinguishes "the watcher crashed" from "the session went away", and the second is the benign reading a peer will reach for.* **A clean-exit cleanup does not reach this** — there is no clean exit to run it from. (#161)
 
 ★ *This also interacts with `--takeover`: `STALE` is the state it treats as permission, and a crashed watcher produces it while the session behind it may still be alive and holding a claim.*
+
+⚠ **An ABSENT claimant gets NO override at all, not even `--takeover`.** *`slack-claim.mjs` stands down on `!live` (no liveness data, which is what an absent seat produces) unconditionally, the same as it does on a truncated read — `STALE` is the one state `--takeover` can act on. Absent is treated as MORE protected than stale, not less.*
 
 # ⚠⚠ AND IT MUST BE **PULLED**, NOT PUSHED. THE THREE OPTIONS ARE NOT EQUAL.
 
