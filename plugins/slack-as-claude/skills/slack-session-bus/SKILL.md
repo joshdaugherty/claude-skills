@@ -888,11 +888,39 @@ STALE session-two   last beat 94s ago (every 5s)
 
 ★ *Demonstrated: the same session, with the same silence on the channel, reported STALE at 29s and alive at 1s.* **That is the distinction §6 said was impossible.**
 
+# ⚠⚠ AND `--presence` HAS A THIRD OUTCOME THE TABLE ABOVE DOES NOT SHOW: **NO ROW AT ALL**
+
+```
+alive <label>   last beat 41s ago     a row, recent beat
+STALE <label>   last beat 857s ago    a row WITH a beat age -- it beat, then stopped
+<nothing>                             no row at all -- aged past the window, or never armed
+```
+
+### **A MISSING LABEL IS NOT `STALE`.** *Different observation, different evidence, different remedy.* **`STALE` proves a watcher existed and something stopped it publishing** — the old process, if it can still be found, carries its own `--since` in its command line, and that is worth reading BEFORE stopping it: a `--heartbeat` running with a `--since` days old is the signature of a watcher that has been quietly failing to deliver, not proof that it is fine. **Absence proves nothing about what was there.** *(#255)*
+
+⚠ **A page-bound truncated read can ALSO render a genuinely-live seat as absent.** `--presence` says so itself when it happens: `CHANNEL HISTORY EXCEEDS THE N-PAGE SEARCH BOUND`. When that warning is present, treat a missing lane as UNKNOWN, not gone, until confirmed some other way. (#177)
+
+★ **This is deliberately narrow — two forms short enough to paste, not an essay on liveness.** *Neither restates `arm-then-stop` (above) or `--since` (§2, §7) — both are already explained elsewhere; what was missing was which of the two to reach for.*
+
+### ✔ **SEAT IS `STALE` — RELAY THIS:**
+
+1. If the old process can still be found, **read its command line first** — a `--heartbeat` present with a `--since` days old is the silent-stop signature, not health.
+2. **Arm the replacement with `--since <last ts you saw>`**, then **confirm it on `--presence`** — not from the arming command's own startup line, which proves the process started, never that it is visible on the wire.
+3. **Only then stop the old watcher** — the arm-then-stop order above, unchanged.
+
+### ✔ **SEAT IS ABSENT — RELAY THIS:**
+
+1. **Arm with `--heartbeat 60 --since <last ts you saw>`.**
+2. **Confirm the label now appears on `--presence`.**
+3. **Re-read the channel from that same `--since`** — the step the `STALE` remedy does not need. `arm-then-stop` bridges a stale seat with an unbroken watcher lineage; an absent one has no such bridge, so presence coming back proves the WATCHER is running, never that the BACKLOG behind the gap was actually surfaced.
+
 ## ⛔ **A CRASHED WATCHER LEAVES ITS PRESENCE MESSAGE BEHIND.** *`chat.update` only runs on the next scheduled beat — a process that dies on an unhandled exception between beats runs no exit path, so nothing retracts what it last published.*
 
 ⚠ **So the roster reports `alive` for the length of the staleness window past the actual crash, then ages into `STALE` — which reads as an ordinary departure.** *The failure is first invisible, then misattributed: nothing on the bus distinguishes "the watcher crashed" from "the session went away", and the second is the benign reading a peer will reach for.* **A clean-exit cleanup does not reach this** — there is no clean exit to run it from. (#161)
 
 ★ *This also interacts with `--takeover`: `STALE` is the state it treats as permission, and a crashed watcher produces it while the session behind it may still be alive and holding a claim.*
+
+⚠ **An ABSENT claimant gets NO override at all, not even `--takeover`.** *`slack-claim.mjs` stands down on `!live` (no liveness data, which is what an absent seat produces) unconditionally, the same as it does on a truncated read — `STALE` is the one state `--takeover` can act on. Absent is treated as MORE protected than stale, not less.*
 
 # ⚠⚠ AND IT MUST BE **PULLED**, NOT PUSHED. THE THREE OPTIONS ARE NOT EQUAL.
 
